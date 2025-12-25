@@ -36,10 +36,15 @@ Thumbs.db
 
 # Project specific
 *.txt
-*.md
+# *.md
 !README.md
 !requirements.txt
 config.json
 *_output.txt
 *_output.md
 
+# test
+test/
+
+# .xxx
+**/.**/

@@ -6,7 +6,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Generator
 
 # Add current directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent))
@@ -91,6 +91,58 @@ Timestamp: {timestamp}
 
 """
     return metadata
+
+
+def stream_response(
+    stream_generator: Generator[str, None, None],
+    output_to_console: bool = True
+) -> str:
+    """
+    Process streaming response and optionally print to console.
+    
+    Args:
+        stream_generator: Generator yielding text chunks
+        output_to_console: If True, print chunks to console in real-time
+        
+    Returns:
+        Complete response text
+    """
+    full_response = ""
+    for chunk in stream_generator:
+        full_response += chunk
+        if output_to_console:
+            sys.stdout.write(chunk)
+            sys.stdout.flush()
+    
+    if output_to_console:
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+    
+    return full_response
+
+
+def clear_streamed_output(response_text: str = ""):
+    """
+    Clear streamed output using ANSI escape codes.
+    Only works in TTY terminals.
+    
+    Args:
+        response_text: The response text that was streamed (to count lines)
+    """
+    if sys.stdout.isatty():
+        # Count number of lines in the response (including wrapped lines)
+        # For simplicity, count newlines and add 1 for the last line
+        lines = response_text.count('\n')
+        
+        # Move cursor up by number of lines and clear each line
+        # First, move to beginning of current line
+        sys.stdout.write("\r\033[K")
+        
+        # Move up and clear each line
+        for _ in range(lines):
+            sys.stdout.write("\033[A\033[K")
+        
+        sys.stdout.flush()
 
 
 def generate_output_path_for_text(custom_path: Optional[str] = None) -> str:
@@ -381,16 +433,35 @@ def main():
         prompt = prompt_template.format(content=input_content)
         logger.debug(f"Prompt length: {len(prompt)} characters")
 
-        # Call API
+        # Determine output destination
+        # If input is direct text (not a file) and no output file specified, output to console
+        output_to_file = input_is_file or args.output
+        output_to_console = not output_to_file
+
+        # Call API with streaming
         logger.info("Calling LLM API...")
         start_time = time.time()
-        response = provider.call(prompt, temperature=temperature, model=args.model)
+        
+        # Get stream generator
+        stream_generator = provider.call(
+            prompt, 
+            temperature=temperature, 
+            model=args.model,
+            stream=True
+        )
+        
+        # Process streaming response
+        if output_to_console:
+            # Output to console - stream and keep output visible
+            response = stream_response(stream_generator, output_to_console=True)
+        else:
+            # Output to file - stream to console first, then clear
+            response = stream_response(stream_generator, output_to_console=True)
+        
         latency = time.time() - start_time
         logger.info(f"Received response ({len(response)} characters) in {latency:.2f}s")
 
-        # Determine output destination
-        # If input is direct text (not a file) and no output file specified, output to console
-        if not input_is_file and not args.output:
+        if output_to_console:
             # Output to console
             if args.include_metadata:
                 metadata = format_metadata(
@@ -403,7 +474,6 @@ def main():
                 )
                 if not args.quiet:
                     print(metadata)
-            print(response)
         else:
             # Output to file
             if input_is_file:
@@ -428,6 +498,9 @@ def main():
             # Write output file
             write_output_file(output_path, output_content, force=args.force)
             logger.info(f"Output written to: {output_path}")
+
+            # Clear streamed output from console
+            clear_streamed_output(response)
 
             if not args.quiet:
                 print(f"✓ Success! Output saved to: {output_path}")

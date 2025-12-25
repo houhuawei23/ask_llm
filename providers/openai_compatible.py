@@ -1,6 +1,6 @@
 """OpenAI Compatible API provider implementation."""
 
-from typing import Optional
+from typing import Optional, Generator
 from openai import OpenAI
 from .base import BaseProvider
 
@@ -21,8 +21,9 @@ class OpenAICompatibleProvider(BaseProvider):
         messages: Optional[list] = None,
         temperature: Optional[float] = None,
         model: Optional[str] = None,
+        stream: bool = False,
         **kwargs
-    ) -> str:
+    ):
         """
         Call OpenAI-compatible API.
         
@@ -31,10 +32,12 @@ class OpenAICompatibleProvider(BaseProvider):
             messages: List of message dicts with 'role' and 'content' keys
             temperature: Temperature parameter
             model: Model name
+            stream: If True, returns a generator for streaming responses
             **kwargs: Additional parameters (top_p, max_tokens, etc.)
             
         Returns:
-            The response text from the API
+            If stream=False: The response text from the API
+            If stream=True: A generator that yields chunks of text
         """
         client = OpenAI(
             api_key=self.config['api_key'],
@@ -60,6 +63,7 @@ class OpenAICompatibleProvider(BaseProvider):
             'model': model_name,
             'messages': api_messages,
             'temperature': temp,
+            'stream': stream,
         }
         
         # Add optional parameters
@@ -71,8 +75,38 @@ class OpenAICompatibleProvider(BaseProvider):
             params['max_tokens'] = kwargs['max_tokens']
         
         try:
-            response = client.chat.completions.create(**params)
-            return response.choices[0].message.content.strip()
+            if stream:
+                return self._stream_response(client, params, provider_name)
+            else:
+                response = client.chat.completions.create(**params)
+                return response.choices[0].message.content.strip()
         except Exception as e:
             raise RuntimeError(f"{provider_name} API call failed: {str(e)}") from e
+    
+    def _stream_response(
+        self,
+        client: OpenAI,
+        params: dict,
+        provider_name: str
+    ) -> Generator[str, None, None]:
+        """
+        Stream response from OpenAI-compatible API.
+        
+        Args:
+            client: OpenAI client instance
+            params: API parameters
+            provider_name: Provider name for error messages
+            
+        Yields:
+            Chunks of text from the streaming response
+        """
+        try:
+            stream = client.chat.completions.create(**params)
+            for chunk in stream:
+                if chunk.choices and len(chunk.choices) > 0:
+                    delta = chunk.choices[0].delta
+                    if delta and delta.content:
+                        yield delta.content
+        except Exception as e:
+            raise RuntimeError(f"{provider_name} API stream failed: {str(e)}") from e
 

@@ -458,18 +458,28 @@ def chat_mode(
                     {"role": msg["role"], "content": msg["content"]} for msg in messages
                 ]
 
-                # Call API
+                # Call API with streaming
                 print("Assistant: ", end="", flush=True)
                 start_time = time.time()
 
-                response = current_provider.call(
-                    messages=api_messages, temperature=temperature, model=current_model
+                # Get stream generator
+                stream_generator = current_provider.call(
+                    messages=api_messages, 
+                    temperature=temperature, 
+                    model=current_model,
+                    stream=True
                 )
+
+                # Process streaming response and collect full text
+                response = ""
+                for chunk in stream_generator:
+                    response += chunk
+                    sys.stdout.write(chunk)
+                    sys.stdout.flush()
 
                 latency = time.time() - start_time
 
-                print(response)
-                print(f"  (Latency: {latency:.2f}s)\n")
+                print(f"\n  (Latency: {latency:.2f}s)\n")
 
                 # Add assistant response to history
                 messages.append({"role": "assistant", "content": response})
