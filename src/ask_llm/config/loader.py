@@ -90,10 +90,14 @@ class ConfigLoader:
             default_provider = list(data["providers"].keys())[0]
             logger.warning(f"No default_provider specified, using: {default_provider}")
         
+        default_model = data.get("default_model")
+        
         providers = {}
         for name, config_data in data["providers"].items():
             # Add provider name to config data
             config_data = {**config_data, "api_provider": name}
+            # Remove api_model if present (for backward compatibility)
+            config_data.pop("api_model", None)
             try:
                 providers[name] = ProviderConfig.model_validate(config_data)
             except Exception as e:
@@ -102,6 +106,7 @@ class ConfigLoader:
         
         return AppConfig(
             default_provider=default_provider,
+            default_model=default_model,
             providers=providers
         )
     
@@ -110,12 +115,12 @@ class ConfigLoader:
         """Create an example configuration file."""
         example = {
             "default_provider": "deepseek",
+            "default_model": "deepseek-chat",
             "providers": {
                 "deepseek": {
                     "api_provider": "deepseek",
                     "api_key": "your-api-key-here",
                     "api_base": "https://api.deepseek.com/v1",
-                    "api_model": "deepseek-chat",
                     "models": ["deepseek-chat", "deepseek-reasoner"],
                     "api_temperature": 0.7,
                     "api_top_p": 0.95
@@ -124,7 +129,6 @@ class ConfigLoader:
                     "api_provider": "qwen",
                     "api_key": "your-api-key-here",
                     "api_base": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-                    "api_model": "qwen-turbo",
                     "models": ["qwen-turbo", "qwen-plus", "qwen-max"],
                     "api_temperature": 0.7,
                     "api_top_p": 0.8

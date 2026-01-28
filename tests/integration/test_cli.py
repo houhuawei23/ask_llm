@@ -64,12 +64,12 @@ class TestCLIWithConfig:
         """Create a mock config file."""
         config = {
             "default_provider": "test",
+            "default_model": "test-model",
             "providers": {
                 "test": {
                     "api_provider": "test",
                     "api_key": "test-key-12345",
                     "api_base": "https://api.test.com/v1",
-                    "api_model": "test-model",
                     "models": ["test-model"],
                     "api_temperature": 0.5,
                 }
@@ -124,12 +124,12 @@ from ask_llm.core.models import ProviderConfig, AppConfig
 # Create a test config
 config_data = {
     "default_provider": "demo",
+    "default_model": "demo-model",
     "providers": {
         "demo": {
             "api_provider": "demo",
             "api_key": "demo-key-12345",
             "api_base": "https://api.demo.com/v1",
-            "api_model": "demo-model",
             "models": ["demo-model"],
             "api_temperature": 0.5,
         }

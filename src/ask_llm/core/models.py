@@ -86,7 +86,6 @@ class ProviderConfig(BaseModel):
     api_provider: str = Field(..., description="Provider identifier")
     api_key: str = Field(..., description="API key for authentication")
     api_base: str = Field(..., description="API base URL")
-    api_model: str = Field(..., description="Default model name")
     models: List[str] = Field(default_factory=list, description="Available models")
     api_temperature: float = Field(default=0.7, ge=0.0, le=2.0, description="Sampling temperature")
     api_top_p: Optional[float] = Field(default=None, ge=0.0, le=1.0, description="Nucleus sampling parameter")
@@ -114,6 +113,7 @@ class AppConfig(BaseModel):
     """Application configuration."""
     
     default_provider: str = Field(..., description="Default provider name")
+    default_model: Optional[str] = Field(default=None, description="Default model name")
     providers: Dict[str, ProviderConfig] = Field(..., description="Provider configurations")
     
     @field_validator("providers")

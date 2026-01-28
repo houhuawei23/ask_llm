@@ -1,11 +1,11 @@
 {
   "default_provider": "deepseek",
+  "default_model": "deepseek-chat",
   "providers": {
     "deepseek": {
       "api_provider": "deepseek",
       "api_key": "your-api-key-here",
       "api_base": "https://api.deepseek.com/v1",
-      "api_model": "deepseek-chat",
       "models": ["deepseek-chat", "deepseek-reasoner"],
       "api_temperature": 0.1,
       "api_top_p": 0.1
@@ -14,7 +14,6 @@
       "api_provider": "qwen",
       "api_key": "your-api-key-here",
       "api_base": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-      "api_model": "qwen-turbo",
       "models": ["qwen-turbo", "qwen-plus", "qwen-max"],
       "api_temperature": 0.7,
       "api_top_p": 0.8

@@ -174,8 +174,11 @@ def ask(
         
         provider_config = config_manager.get_provider_config()
         
+        # Get default model (use override if set, otherwise use default from config)
+        default_model = config_manager.get_model_override() or config_manager.get_default_model()
+        
         # Initialize provider
-        llm_provider = OpenAICompatibleProvider(provider_config)
+        llm_provider = OpenAICompatibleProvider(provider_config, default_model=default_model)
         processor = RequestProcessor(llm_provider)
         
         # Get input content
@@ -351,7 +354,11 @@ def chat(
         )
         
         provider_config = config_manager.get_provider_config()
-        llm_provider = OpenAICompatibleProvider(provider_config)
+        
+        # Get default model (use override if set, otherwise use default from config)
+        default_model = config_manager.get_model_override() or config_manager.get_default_model()
+        
+        llm_provider = OpenAICompatibleProvider(provider_config, default_model=default_model)
         
         # Load initial context
         initial_context = None
@@ -480,7 +487,9 @@ def config(
                 default_marker = " [green]✓ default[/green]" if name == config.default_provider else ""
                 console.print(f"[cyan]{name}[/cyan]{default_marker}")
                 console.print(f"  API Base: {pc.api_base}")
-                console.print(f"  Default Model: {pc.api_model}")
+                # Show default model: use config.default_model or first model from provider's models
+                default_model = config.default_model or (pc.models[0] if pc.models else "N/A")
+                console.print(f"  Default Model: {default_model}")
                 if pc.models:
                     console.print(f"  Available Models: {', '.join(pc.models)}")
                 console.print(f"  API Key: {'✓ Configured' if pc.api_key else '✗ Not configured'}")
@@ -503,7 +512,14 @@ def config(
                 console.print(f"\nTesting [cyan]{name}[/cyan]...", end=" ")
                 
                 try:
-                    llm_provider = OpenAICompatibleProvider(pc)
+                    # Get default model for this provider
+                    test_default_model = config.default_model or (pc.models[0] if pc.models else None)
+                    if not test_default_model:
+                        console.print(f"[red]✗[/red]")
+                        console.print(f"  Error: No default model available")
+                        continue
+                    
+                    llm_provider = OpenAICompatibleProvider(pc, default_model=test_default_model)
                     success, message, latency = llm_provider.test_connection()
                     
                     if success:

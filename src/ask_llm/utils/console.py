@@ -65,7 +65,8 @@ class Console:
         message: Any = "",
         style: Optional[str] = None,
         panel: bool = False,
-        panel_title: Optional[str] = None
+        panel_title: Optional[str] = None,
+        end: str = "\n"
     ) -> None:
         """
         Print message to console.
@@ -75,16 +76,35 @@ class Console:
             style: Rich style string
             panel: Whether to wrap in panel
             panel_title: Panel title
+            end: Ending character (default: newline)
         """
         if self._quiet:
             return
         
-        if panel:
-            self._console.print(
-                Panel(message, title=panel_title, border_style=style)
-            )
+        # If end is not newline, we need special handling since Rich's print() may not support end
+        if end != "\n":
+            # Render with Rich but write to stdout directly
+            if panel:
+                rendered = Panel(message, title=panel_title, border_style=style)
+            else:
+                rendered = Text(str(message), style=style) if style else str(message)
+            
+            # Use Rich's export_text to get plain text, then write with custom end
+            from rich.console import Console as RichConsole
+            temp_console = RichConsole(file=sys.stdout, width=self._console.width)
+            with temp_console.capture() as capture:
+                temp_console.print(rendered)
+            output = capture.get()
+            sys.stdout.write(output.rstrip("\n") + end)
+            sys.stdout.flush()
         else:
-            self._console.print(message, style=style)
+            # Normal print with newline
+            if panel:
+                self._console.print(
+                    Panel(message, title=panel_title, border_style=style)
+                )
+            else:
+                self._console.print(message, style=style)
     
     def print_success(self, message: str) -> None:
         """Print success message."""
@@ -158,11 +178,15 @@ class Console:
         """
         if self._quiet:
             return
-        self._console.print(text, end=end)
+        # For streaming, write directly to stdout to avoid Rich's formatting overhead
+        # and ensure compatibility with all Rich versions
+        sys.stdout.write(str(text) + end)
+        sys.stdout.flush()
     
     def clear_line(self) -> None:
         """Clear current line."""
-        self._console.print("\r\033[K", end="")
+        sys.stdout.write("\r\033[K")
+        sys.stdout.flush()
     
     def clear_screen(self) -> None:
         """Clear screen."""

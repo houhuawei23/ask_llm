@@ -22,7 +22,7 @@ class TestProviderConfig:
             api_provider="test",
             api_key="valid-key",
             api_base="https://api.test.com",
-            api_model="test-model",
+            models=["test-model"],
         )
         assert config.api_provider == "test"
         assert config.api_temperature == 0.7  # default
@@ -34,7 +34,7 @@ class TestProviderConfig:
                 api_provider="test",
                 api_key="your-api-key-here",
                 api_base="https://api.test.com",
-                api_model="test-model",
+                models=["test-model"],
             )
     
     def test_invalid_api_key_empty(self):
@@ -44,7 +44,7 @@ class TestProviderConfig:
                 api_provider="test",
                 api_key="",
                 api_base="https://api.test.com",
-                api_model="test-model",
+                models=["test-model"],
             )
     
     def test_invalid_api_base(self):
@@ -54,7 +54,7 @@ class TestProviderConfig:
                 api_provider="test",
                 api_key="valid-key",
                 api_base="not-a-url",
-                api_model="test-model",
+                models=["test-model"],
             )
     
     def test_temperature_range(self):
@@ -64,14 +64,14 @@ class TestProviderConfig:
             api_provider="test",
             api_key="key",
             api_base="https://api.test.com",
-            api_model="model",
+            models=["model"],
             api_temperature=0.0,
         )
         ProviderConfig(
             api_provider="test",
             api_key="key",
             api_base="https://api.test.com",
-            api_model="model",
+            models=["model"],
             api_temperature=2.0,
         )
         
@@ -81,7 +81,7 @@ class TestProviderConfig:
                 api_provider="test",
                 api_key="key",
                 api_base="https://api.test.com",
-                api_model="model",
+                models=["model"],
                 api_temperature=-0.1,
             )
         with pytest.raises(ValidationError):
@@ -89,7 +89,7 @@ class TestProviderConfig:
                 api_provider="test",
                 api_key="key",
                 api_base="https://api.test.com",
-                api_model="model",
+                models=["model"],
                 api_temperature=2.1,
             )
 

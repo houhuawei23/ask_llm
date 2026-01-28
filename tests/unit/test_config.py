@@ -75,18 +75,19 @@ class TestConfigManager:
         # Create config with multiple providers
         config = AppConfig(
             default_provider="provider1",
+            default_model="model1",
             providers={
                 "provider1": ProviderConfig(
                     api_provider="provider1",
                     api_key="key1",
                     api_base="https://api1.com",
-                    api_model="model1",
+                    models=["model1"],
                 ),
                 "provider2": ProviderConfig(
                     api_provider="provider2",
                     api_key="key2",
                     api_base="https://api2.com",
-                    api_model="model2",
+                    models=["model2"],
                 ),
             }
         )
@@ -116,8 +117,8 @@ class TestConfigManager:
         manager = ConfigManager(app_config)
         manager.apply_overrides(model="new-model", temperature=0.9)
         
+        assert manager.get_model_override() == "new-model"
         config = manager.get_provider_config()
-        assert config.api_model == "new-model"
         assert config.api_temperature == 0.9
     
     def test_clear_overrides(self, app_config):
@@ -126,8 +127,8 @@ class TestConfigManager:
         manager.apply_overrides(model="new-model")
         manager.clear_overrides()
         
-        config = manager.get_provider_config()
-        assert config.api_model == "test-model"  # back to original
+        assert manager.get_model_override() is None
+        assert manager.get_default_model() == "test-model"  # back to original
     
     def test_get_available_providers(self, app_config):
         """Test getting available providers."""

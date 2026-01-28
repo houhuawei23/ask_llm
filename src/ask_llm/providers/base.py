@@ -9,14 +9,18 @@ from ask_llm.core.models import ProviderConfig
 class BaseProvider(ABC):
     """Abstract base class for LLM API providers."""
     
-    def __init__(self, config: ProviderConfig):
+    def __init__(self, config: ProviderConfig, default_model: Optional[str] = None):
         """
         Initialize the provider with configuration.
         
         Args:
             config: Provider configuration
+            default_model: Default model name (if None, uses first model from models list)
         """
         self.config = config
+        self._default_model = default_model or (config.models[0] if config.models else None)
+        if not self._default_model:
+            raise ValueError(f"No default model specified and provider '{config.api_provider}' has no models")
         self.validate_config()
     
     @abstractmethod
@@ -81,7 +85,7 @@ class BaseProvider(ABC):
         Returns:
             Model name
         """
-        return override if override is not None else self.config.api_model
+        return override if override is not None else self._default_model
     
     @property
     def name(self) -> str:
@@ -91,9 +95,9 @@ class BaseProvider(ABC):
     @property
     def default_model(self) -> str:
         """Get default model name."""
-        return self.config.api_model
+        return self._default_model
     
     @property
     def available_models(self) -> List[str]:
         """Get list of available models."""
-        return self.config.models or [self.config.api_model]
+        return self.config.models if self.config.models else [self._default_model]

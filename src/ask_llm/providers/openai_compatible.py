@@ -16,14 +16,15 @@ class OpenAICompatibleProvider(BaseProvider):
     Supports DeepSeek, Qwen, and other OpenAI-compatible endpoints.
     """
     
-    def __init__(self, config: ProviderConfig):
+    def __init__(self, config: ProviderConfig, default_model: Optional[str] = None):
         """
         Initialize the provider.
         
         Args:
             config: Provider configuration
+            default_model: Default model name (if None, uses first model from models list)
         """
-        super().__init__(config)
+        super().__init__(config, default_model=default_model)
         self._client: Optional[OpenAI] = None
     
     def validate_config(self) -> None:
@@ -33,7 +34,7 @@ class OpenAICompatibleProvider(BaseProvider):
         Raises:
             ValueError: If required fields are missing
         """
-        required = ["api_key", "api_base", "api_model"]
+        required = ["api_key", "api_base"]
         missing = []
         
         for field in required:
@@ -44,6 +45,11 @@ class OpenAICompatibleProvider(BaseProvider):
         if missing:
             raise ValueError(
                 f"Missing required configuration fields: {', '.join(missing)}"
+            )
+        
+        if not self.config.models:
+            raise ValueError(
+                f"Provider '{self.config.api_provider}' must have at least one model in 'models' list"
             )
     
     @property

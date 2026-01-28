@@ -21,12 +21,12 @@ def sample_config_dict():
     """Sample configuration dictionary."""
     return {
         "default_provider": "test_provider",
+        "default_model": "test-model",
         "providers": {
             "test_provider": {
                 "api_provider": "test_provider",
                 "api_key": "test-api-key-123",
                 "api_base": "https://api.test.com/v1",
-                "api_model": "test-model",
                 "models": ["test-model", "test-model-2"],
                 "api_temperature": 0.5,
                 "api_top_p": 0.9,
@@ -35,7 +35,7 @@ def sample_config_dict():
                 "api_provider": "another_provider",
                 "api_key": "another-api-key",
                 "api_base": "https://api.another.com/v1",
-                "api_model": "another-model",
+                "models": ["another-model"],
                 "api_temperature": 0.7,
             }
         }
@@ -58,7 +58,6 @@ def provider_config():
         api_provider="test",
         api_key="test-key",
         api_base="https://api.test.com/v1",
-        api_model="test-model",
         models=["test-model"],
         api_temperature=0.5,
     )
@@ -69,6 +68,7 @@ def app_config(provider_config):
     """Sample app config."""
     return AppConfig(
         default_provider="test",
+        default_model="test-model",
         providers={"test": provider_config}
     )
 

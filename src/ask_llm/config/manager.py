@@ -90,7 +90,7 @@ class ConfigManager:
             **kwargs: Additional overrides
         """
         if model is not None:
-            self._overrides["api_model"] = model
+            self._overrides["_model_override"] = model
             logger.debug(f"Override: model = {model}")
         
         if temperature is not None:
@@ -109,6 +109,38 @@ class ConfigManager:
             if value is not None:
                 self._overrides[key] = value
                 logger.debug(f"Override: {key} = {value}")
+    
+    def get_model_override(self) -> Optional[str]:
+        """
+        Get model override if set.
+        
+        Returns:
+            Model name override or None
+        """
+        return self._overrides.get("_model_override")
+    
+    def get_default_model(self, provider_name: Optional[str] = None) -> str:
+        """
+        Get default model for a provider.
+        
+        Args:
+            provider_name: Provider name (uses current if None)
+            
+        Returns:
+            Default model name
+        """
+        # First check if there's a global default_model
+        if self._base_config.default_model:
+            return self._base_config.default_model
+        
+        # Otherwise use first model from provider's models list
+        config = self.get_provider_config(provider_name)
+        if config.models:
+            return config.models[0]
+        
+        raise ValueError(
+            f"No default model available for provider '{provider_name or self._current_provider}'"
+        )
     
     def clear_overrides(self) -> None:
         """Clear all overrides."""
@@ -130,4 +162,8 @@ class ConfigManager:
             List of model names
         """
         config = self.get_provider_config(provider_name)
-        return config.models or [config.api_model]
+        if config.models:
+            return config.models
+        # Fallback to default_model if no models list
+        default_model = self.get_default_model(provider_name)
+        return [default_model]
