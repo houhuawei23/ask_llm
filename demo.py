@@ -15,10 +15,10 @@ def test_configuration():
     print("=" * 50)
     print("Test 1: Configuration Loading")
     print("=" * 50)
-    
+
     from ask_llm.config.loader import ConfigLoader
     from ask_llm.core.models import ProviderConfig, AppConfig
-    
+
     # Create a test config
     config_data = {
         "default_provider": "demo",
@@ -33,11 +33,11 @@ def test_configuration():
             }
         }
     }
-    
+
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
         json.dump(config_data, f)
         config_path = f.name
-    
+
     try:
         config = ConfigLoader.load(config_path)
         print(f"✓ Loaded config: {config.default_provider}")
@@ -52,9 +52,9 @@ def test_token_counter():
     print("=" * 50)
     print("Test 2: Token Counter")
     print("=" * 50)
-    
+
     from ask_llm.utils.token_counter import TokenCounter
-    
+
     text = "Hello, this is a test message for token counting."
     stats = TokenCounter.estimate_tokens(text)
     print(f"✓ Text: {text}")
@@ -68,19 +68,19 @@ def test_file_handler():
     print("=" * 50)
     print("Test 3: File Handler")
     print("=" * 50)
-    
+
     from ask_llm.utils.file_handler import FileHandler
-    
+
     with tempfile.TemporaryDirectory() as tmpdir:
         # Write test
         test_file = Path(tmpdir) / "test.txt"
         FileHandler.write(test_file, "Test content for file handler")
         print(f"✓ Wrote to {test_file}")
-        
+
         # Read test
         content = FileHandler.read(test_file)
         print(f"✓ Read content: {content}")
-        
+
         # Output path generation
         output = FileHandler.generate_output_path(test_file)
         print(f"✓ Generated output path: {output}")
@@ -91,14 +91,14 @@ def test_chat_history():
     print("=" * 50)
     print("Test 4: Chat History")
     print("=" * 50)
-    
+
     from ask_llm.core.models import ChatHistory, MessageRole
-    
+
     history = ChatHistory(provider="demo", model="demo-model")
     history.add_message(MessageRole.SYSTEM, "You are a helpful assistant.")
     history.add_message(MessageRole.USER, "Hello!")
     history.add_message(MessageRole.ASSISTANT, "Hi there!")
-    
+
     print(f"✓ Created history with {len(history.messages)} messages")
     messages = history.get_messages()
     print(f"✓ Exported {len(messages)} messages for API")
@@ -110,15 +110,15 @@ def test_console():
     print("=" * 50)
     print("Test 5: Console Output")
     print("=" * 50)
-    
+
     from ask_llm.utils.console import console
-    
+
     console.setup(quiet=False, debug=False)
     console.print_success("Success message test")
     console.print_info("Info message test")
     console.print_warning("Warning message test")
     console.print("Regular message test")
-    
+
     # Test table
     console.print_table(
         headers=["Provider", "Model", "Status"],
@@ -131,9 +131,9 @@ def test_models():
     print("=" * 50)
     print("Test 6: Data Models")
     print("=" * 50)
-    
+
     from ask_llm.core.models import ProviderConfig, RequestMetadata
-    
+
     # ProviderConfig
     config = ProviderConfig(
         api_provider="test",
@@ -143,7 +143,7 @@ def test_models():
         api_temperature=0.5,
     )
     print(f"✓ ProviderConfig: {config.api_provider} -> {config.api_model}")
-    
+
     # RequestMetadata
     metadata = RequestMetadata(
         provider="test",
@@ -161,10 +161,10 @@ def test_config_manager():
     print("=" * 50)
     print("Test 7: Config Manager")
     print("=" * 50)
-    
+
     from ask_llm.config.manager import ConfigManager
     from ask_llm.core.models import AppConfig, ProviderConfig
-    
+
     config = AppConfig(
         default_provider="provider1",
         providers={
@@ -176,10 +176,10 @@ def test_config_manager():
             ),
         }
     )
-    
+
     manager = ConfigManager(config)
     print(f"✓ Current provider: {manager.current_provider_name}")
-    
+
     manager.apply_overrides(model="new-model", temperature=0.9)
     provider_config = manager.get_provider_config()
     print(f"✓ After override: {provider_config.api_model}, temp={provider_config.api_temperature}")
@@ -189,7 +189,7 @@ def main():
     print("\n" + "=" * 50)
     print("Ask LLM Demo - Testing Core Functionality")
     print("=" * 50 + "\n")
-    
+
     try:
         test_configuration()
         test_token_counter()
@@ -198,13 +198,13 @@ def main():
         test_console()
         test_models()
         test_config_manager()
-        
+
         print()
         print("=" * 50)
         print("✓ All demo tests completed successfully!")
         print("=" * 50)
         print()
-        
+
     except Exception as e:
         print()
         print("=" * 50)
@@ -213,7 +213,7 @@ def main():
         import traceback
         traceback.print_exc()
         return 1
-    
+
     return 0
 
 if __name__ == "__main__":

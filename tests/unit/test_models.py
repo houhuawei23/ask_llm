@@ -15,7 +15,7 @@ from ask_llm.core.models import (
 
 class TestProviderConfig:
     """Test ProviderConfig model."""
-    
+
     def test_valid_config(self):
         """Test creating valid config."""
         config = ProviderConfig(
@@ -26,7 +26,7 @@ class TestProviderConfig:
         )
         assert config.api_provider == "test"
         assert config.api_temperature == 0.7  # default
-    
+
     def test_invalid_api_key_placeholder(self):
         """Test validation rejects placeholder API key."""
         with pytest.raises(ValidationError):
@@ -36,7 +36,7 @@ class TestProviderConfig:
                 api_base="https://api.test.com",
                 models=["test-model"],
             )
-    
+
     def test_invalid_api_key_empty(self):
         """Test validation rejects empty API key."""
         with pytest.raises(ValidationError):
@@ -46,7 +46,7 @@ class TestProviderConfig:
                 api_base="https://api.test.com",
                 models=["test-model"],
             )
-    
+
     def test_invalid_api_base(self):
         """Test validation rejects invalid API base URL."""
         with pytest.raises(ValidationError):
@@ -56,7 +56,7 @@ class TestProviderConfig:
                 api_base="not-a-url",
                 models=["test-model"],
             )
-    
+
     def test_temperature_range(self):
         """Test temperature must be in valid range."""
         # Valid values
@@ -74,7 +74,7 @@ class TestProviderConfig:
             models=["model"],
             api_temperature=2.0,
         )
-        
+
         # Invalid values
         with pytest.raises(ValidationError):
             ProviderConfig(
@@ -96,27 +96,27 @@ class TestProviderConfig:
 
 class TestAppConfig:
     """Test AppConfig model."""
-    
+
     def test_valid_config(self, app_config):
         """Test valid app config."""
         assert app_config.default_provider == "test"
         assert "test" in app_config.providers
-    
+
     def test_empty_providers(self):
         """Test validation rejects empty providers."""
         with pytest.raises(ValidationError):
             AppConfig(default_provider="test", providers={})
-    
+
     def test_get_provider_config(self, app_config):
         """Test getting provider config."""
         config = app_config.get_provider_config("test")
         assert config.api_provider == "test"
-    
+
     def test_get_provider_config_default(self, app_config):
         """Test getting default provider config."""
         config = app_config.get_provider_config()
         assert config.api_provider == "test"
-    
+
     def test_get_provider_config_missing(self, app_config):
         """Test getting non-existent provider raises error."""
         with pytest.raises(ValueError):
@@ -125,7 +125,7 @@ class TestAppConfig:
 
 class TestChatMessage:
     """Test ChatMessage model."""
-    
+
     def test_create_message(self):
         """Test creating a message."""
         msg = ChatMessage(role=MessageRole.USER, content="Hello")
@@ -136,36 +136,36 @@ class TestChatMessage:
 
 class TestChatHistory:
     """Test ChatHistory model."""
-    
+
     def test_create_history(self):
         """Test creating history."""
         history = ChatHistory()
         assert len(history.messages) == 0
-    
+
     def test_add_message(self, sample_chat_history):
         """Test adding messages."""
         initial_count = len(sample_chat_history.messages)
         sample_chat_history.add_message(MessageRole.USER, "New message")
         assert len(sample_chat_history.messages) == initial_count + 1
-    
+
     def test_get_messages(self, sample_chat_history):
         """Test getting messages as dicts."""
         messages = sample_chat_history.get_messages()
         assert len(messages) == 3
         assert messages[0]["role"] == "system"
         assert messages[0]["content"] == "You are helpful"
-    
+
     def test_get_messages_no_system(self, sample_chat_history):
         """Test getting messages without system."""
         messages = sample_chat_history.get_messages(include_system=False)
         assert len(messages) == 2
         assert all(m["role"] != "system" for m in messages)
-    
+
     def test_clear(self, sample_chat_history):
         """Test clearing history."""
         sample_chat_history.clear()
         assert len(sample_chat_history.messages) == 0
-    
+
     def test_clear_keep_system(self, sample_chat_history):
         """Test clearing history while keeping system prompt."""
         sample_chat_history.clear(keep_system=True)
@@ -175,7 +175,7 @@ class TestChatHistory:
 
 class TestRequestMetadata:
     """Test RequestMetadata model."""
-    
+
     def test_create_metadata(self):
         """Test creating metadata."""
         metadata = RequestMetadata(
@@ -186,7 +186,7 @@ class TestRequestMetadata:
         )
         assert metadata.provider == "test"
         assert metadata.latency == 1.23
-    
+
     def test_format_metadata(self):
         """Test metadata formatting."""
         metadata = RequestMetadata(

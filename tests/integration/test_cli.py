@@ -18,24 +18,24 @@ runner = CliRunner()
 
 class TestCLICommands:
     """Test CLI commands."""
-    
+
     def test_version(self):
         """Test --version flag."""
         result = runner.invoke(app, ["--version"])
         assert result.exit_code == 0
         assert "version" in result.output.lower()
-    
+
     def test_help(self):
         """Test --help flag."""
         result = runner.invoke(app, ["--help"])
         assert result.exit_code == 0
         assert "Ask LLM" in result.output
-    
+
     def test_ask_no_input(self):
         """Test ask command without input fails."""
         result = runner.invoke(app, ["ask"])
         assert result.exit_code != 0
-    
+
     def test_config_show_no_config(self):
         """Test config show without config fails."""
         result = runner.invoke(app, ["config", "show", "--config", "/nonexistent/providers.yml"])
@@ -44,7 +44,7 @@ class TestCLICommands:
 
 class TestCLIWithConfig:
     """Test CLI commands with a config file."""
-    
+
     @pytest.fixture
     def mock_config(self, temp_dir):
         """Create a mock config file."""
@@ -67,11 +67,11 @@ class TestCLIWithConfig:
         with open(config_path, "w") as f:
             yaml.dump(config, f)
         return config_path
-    
+
     def test_config_show(self, mock_config):
         """Test config show command."""
         result = runner.invoke(app, ["config", "show", "--config", str(mock_config)])
-        
+
         assert result.exit_code == 0
         assert "test" in result.output
         assert "https://api.test.com/v1" in result.output
@@ -79,15 +79,15 @@ class TestCLIWithConfig:
 
 class TestDemoScript:
     """Test/demo script for manual verification."""
-    
+
     def test_demo_readme(self, temp_dir):
         """
         Create a demo script that exercises main functionality.
-        
+
         This test creates a demo script that can be run manually.
         """
         demo_script = temp_dir / "demo.py"
-        
+
         script_content = '''
 #!/usr/bin/env python3
 \"\"\"
@@ -163,11 +163,11 @@ with tempfile.TemporaryDirectory() as tmpdir:
     test_file = Path(tmpdir) / "test.txt"
     FileHandler.write(test_file, "Test content for file handler")
     print(f"✓ Wrote to {test_file}")
-    
+
     # Read test
     content = FileHandler.read(test_file)
     print(f"✓ Read content: {content}")
-    
+
     # Output path generation
     output = FileHandler.generate_output_path(test_file)
     print(f"✓ Generated output path: {output}")
@@ -208,11 +208,11 @@ print("=" * 50)
 print("All demo tests completed successfully!")
 print("=" * 50)
 '''
-        
+
         demo_script.write_text(script_content)
-        
+
         # Verify the script was created
         assert demo_script.exists()
-        
+
         print(f"Demo script created at: {demo_script}")
         print("Run it with: python demo.py")

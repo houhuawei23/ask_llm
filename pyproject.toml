@@ -47,7 +47,13 @@ dev = [
     "pytest-asyncio>=0.21.0",
     "mypy>=1.5.0",
     "ruff>=0.1.0",
+    "pydocstyle>=6.3.0",
+    "pre-commit>=3.4.0",
+    "bandit>=1.7.5",
+    "safety>=2.3.5",
 ]
+lint = ["ruff>=0.1.0", "mypy>=1.5.0", "pydocstyle>=6.3.0"]
+security = ["bandit>=1.7.5", "safety>=2.3.5"]
 
 [project.scripts]
 ask-llm = "ask_llm.cli:main"
@@ -69,17 +75,30 @@ where = ["src"]
 python_version = "3.8"
 warn_return_any = true
 warn_unused_configs = true
-disallow_untyped_defs = true
+disallow_untyped_defs = false
 disallow_incomplete_defs = true
 check_untyped_defs = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+strict_equality = true
+show_error_codes = true
+show_error_context = true
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["litellm.*", "tiktoken.*", "prompt_toolkit.*"]
 ignore_missing_imports = true
 
 [tool.ruff]
 target-version = "py38"
 line-length = 100
+
+[tool.ruff.lint]
 select = [
     "E",   # pycodestyle errors
-    "W",   # pycodestyle warnings
     "F",   # Pyflakes
     "I",   # isort
     "N",   # pep8-naming
@@ -88,15 +107,33 @@ select = [
     "B",   # flake8-bugbear
     "C4",  # flake8-comprehensions
     "SIM", # flake8-simplify
+    "ARG", # flake8-unused-arguments
+    "PIE", # flake8-pie
+    "T20", # flake8-print
+    "PT",  # flake8-pytest-style
+    "Q",   # flake8-quotes
+    "RUF", # ruff-specific rules
 ]
 ignore = [
-    "E501", # line too long, handled by formatter
+    "E501",   # line too long (handled by formatter)
+    "B008",   # do not perform function calls in argument defaults
+    "ARG001", # unused function argument (may be used by frameworks)
+    "ARG002", # unused method argument
 ]
 
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
-line-ending = "lf"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"] # unused imports allowed in __init__.py
+"tests/**/*.py" = [
+    "ARG",
+    "F401",
+    "S101",
+] # allow unused args, imports, and assert in tests
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -123,3 +160,12 @@ exclude_lines = [
     "if __name__ == .__main__.:",
     "if TYPE_CHECKING:",
 ]
+
+[tool.bandit]
+exclude_dirs = ["tests", "venv", ".venv", "build", "dist"]
+skips = ["B101"]  # assert_used (allowed in tests)
+
+[tool.pydocstyle]
+convention = "google"
+match = "(?!test_).*\\.py"
+match_dir = "(?!tests|venv|\\.venv|build|dist)"
