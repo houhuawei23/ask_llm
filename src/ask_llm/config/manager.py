@@ -1,6 +1,6 @@
 """Configuration management and CLI overrides."""
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
@@ -147,11 +147,11 @@ class ConfigManager:
         self._overrides.clear()
         logger.debug("Cleared all configuration overrides")
     
-    def get_available_providers(self) -> list[str]:
+    def get_available_providers(self) -> List[str]:
         """Get list of available provider names."""
         return list(self._base_config.providers.keys())
     
-    def get_available_models(self, provider_name: Optional[str] = None) -> list[str]:
+    def get_available_models(self, provider_name: Optional[str] = None) -> List[str]:
         """
         Get list of available models for a provider.
         

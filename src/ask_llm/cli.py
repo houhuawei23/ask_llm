@@ -4,9 +4,8 @@ Ask LLM - Main CLI entry point using Typer.
 A flexible command-line tool for calling multiple LLM APIs.
 """
 
-import sys
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Optional
 
 import typer
 from typing_extensions import Annotated
@@ -14,12 +13,21 @@ from typing_extensions import Annotated
 from ask_llm import __version__
 from ask_llm.config.loader import ConfigLoader
 from ask_llm.config.manager import ConfigManager
-from ask_llm.providers.openai_compatible import OpenAICompatibleProvider
 from ask_llm.core.processor import RequestProcessor
 from ask_llm.core.chat import ChatSession
 from ask_llm.utils.file_handler import FileHandler
 from ask_llm.utils.console import console
 from ask_llm.utils.token_counter import TokenCounter
+
+# Import from llm_engine
+try:
+    from llm_engine import create_provider_adapter
+except ImportError:
+    console.print_error(
+        "llm_engine is required but not installed. "
+        "Please install it with: pip install llm-engine"
+    )
+    raise
 
 # Create Typer app
 app = typer.Typer(
@@ -177,8 +185,8 @@ def ask(
         # Get default model (use override if set, otherwise use default from config)
         default_model = config_manager.get_model_override() or config_manager.get_default_model()
         
-        # Initialize provider
-        llm_provider = OpenAICompatibleProvider(provider_config, default_model=default_model)
+        # Initialize provider using llm_engine factory
+        llm_provider = create_provider_adapter(provider_config, default_model=default_model)
         processor = RequestProcessor(llm_provider)
         
         # Get input content
@@ -358,7 +366,8 @@ def chat(
         # Get default model (use override if set, otherwise use default from config)
         default_model = config_manager.get_model_override() or config_manager.get_default_model()
         
-        llm_provider = OpenAICompatibleProvider(provider_config, default_model=default_model)
+        # Initialize provider using llm_engine factory
+        llm_provider = create_provider_adapter(provider_config, default_model=default_model)
         
         # Load initial context
         initial_context = None
@@ -447,7 +456,7 @@ def chat(
 def config(
     action: Annotated[
         str,
-        typer.Argument(help="Action: show, test, init")
+        typer.Argument(help="Action: show, test")
     ] = "show",
     config_path: Annotated[
         Optional[str],
@@ -465,15 +474,8 @@ def config(
         ask-llm config show
         ask-llm config test
         ask-llm config test -p deepseek
-        ask-llm config init
     """
     try:
-        if action == "init":
-            path = config_path or "config.json"
-            ConfigLoader.create_example_config(path)
-            console.print_success(f"Example config created: {path}")
-            return
-        
         # Load existing config
         config = ConfigLoader.load(config_path)
         
@@ -487,8 +489,8 @@ def config(
                 default_marker = " [green]✓ default[/green]" if name == config.default_provider else ""
                 console.print(f"[cyan]{name}[/cyan]{default_marker}")
                 console.print(f"  API Base: {pc.api_base}")
-                # Show default model: use config.default_model or first model from provider's models
-                default_model = config.default_model or (pc.models[0] if pc.models else "N/A")
+                # Show default model: use first model from provider's models (which should be the default)
+                default_model = pc.models[0] if pc.models else "N/A"
                 console.print(f"  Default Model: {default_model}")
                 if pc.models:
                     console.print(f"  Available Models: {', '.join(pc.models)}")
@@ -519,7 +521,7 @@ def config(
                         console.print(f"  Error: No default model available")
                         continue
                     
-                    llm_provider = OpenAICompatibleProvider(pc, default_model=test_default_model)
+                    llm_provider = create_provider_adapter(pc, default_model=test_default_model)
                     success, message, latency = llm_provider.test_connection()
                     
                     if success:
@@ -537,12 +539,11 @@ def config(
         
         else:
             console.print_error(f"Unknown action: {action}")
-            console.print("Available actions: show, test, init")
+            console.print("Available actions: show, test")
             raise typer.Exit(1)
     
     except FileNotFoundError as e:
         console.print_error(str(e))
-        console.print_info("Run 'ask-llm config init' to create an example config")
         raise typer.Exit(1)
 
 
@@ -552,4 +553,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main_entry()
+    main()

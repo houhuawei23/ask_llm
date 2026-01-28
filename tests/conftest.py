@@ -1,10 +1,10 @@
 """Pytest configuration and fixtures."""
 
-import json
 import tempfile
 from pathlib import Path
 
 import pytest
+import yaml
 
 from ask_llm.core.models import AppConfig, ProviderConfig, ChatHistory, ChatMessage, MessageRole
 
@@ -45,9 +45,9 @@ def sample_config_dict():
 @pytest.fixture
 def sample_config_file(temp_dir, sample_config_dict):
     """Create sample config file."""
-    config_path = temp_dir / "config.json"
+    config_path = temp_dir / "providers.yml"
     with open(config_path, "w") as f:
-        json.dump(sample_config_dict, f)
+        yaml.dump(sample_config_dict, f)
     return config_path
 
 

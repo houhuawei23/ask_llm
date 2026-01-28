@@ -1,19 +1,17 @@
 """Request processing logic."""
 
 import time
-from pathlib import Path
 from typing import Generator, Optional
 
 from loguru import logger
 
 from ask_llm.core.models import (
-    ChatMessage,
     ChatHistory,
     RequestMetadata,
     ProcessingResult,
     MessageRole,
 )
-from ask_llm.providers.base import BaseProvider
+from ask_llm.core.protocols import LLMProviderProtocol
 from ask_llm.utils.token_counter import TokenCounter
 
 
@@ -22,7 +20,7 @@ class RequestProcessor:
     
     DEFAULT_PROMPT_TEMPLATE = "Please process the following text:\n\n{content}"
     
-    def __init__(self, provider: BaseProvider):
+    def __init__(self, provider: LLMProviderProtocol):
         """
         Initialize processor with provider.
         
@@ -30,6 +28,28 @@ class RequestProcessor:
             provider: LLM provider instance
         """
         self.provider = provider
+    
+    def _format_prompt(
+        self,
+        content: str,
+        prompt_template: Optional[str] = None
+    ) -> str:
+        """
+        Format prompt with content.
+        
+        Args:
+            content: Input content
+            prompt_template: Prompt template with {content} placeholder
+            
+        Returns:
+            Formatted prompt string
+        """
+        template = prompt_template or self.DEFAULT_PROMPT_TEMPLATE
+        
+        if "{content}" in template:
+            return template.format(content=content)
+        else:
+            return f"{template}\n\n{content}"
     
     def process(
         self,
@@ -52,14 +72,7 @@ class RequestProcessor:
         Yields:
             Response text chunks (if streaming) or full response
         """
-        template = prompt_template or self.DEFAULT_PROMPT_TEMPLATE
-        
-        # Format prompt
-        if "{content}" in template:
-            prompt = template.format(content=content)
-        else:
-            prompt = f"{template}\n\n{content}"
-        
+        prompt = self._format_prompt(content, prompt_template)
         logger.debug(f"Processing request with {len(prompt)} characters")
         
         if stream:
@@ -84,7 +97,6 @@ class RequestProcessor:
         prompt_template: Optional[str] = None,
         temperature: Optional[float] = None,
         model: Optional[str] = None,
-        stream: bool = False,
     ) -> ProcessingResult:
         """
         Process content and return result with metadata.
@@ -94,17 +106,11 @@ class RequestProcessor:
             prompt_template: Prompt template
             temperature: Sampling temperature
             model: Model name
-            stream: Whether to stream (always False for this method)
             
         Returns:
             Processing result with metadata
         """
-        template = prompt_template or self.DEFAULT_PROMPT_TEMPLATE
-        
-        if "{content}" in template:
-            prompt = template.format(content=content)
-        else:
-            prompt = f"{template}\n\n{content}"
+        prompt = self._format_prompt(content, prompt_template)
         
         # Count input tokens
         input_stats = TokenCounter.estimate_tokens(prompt, model)
@@ -126,7 +132,7 @@ class RequestProcessor:
         metadata = RequestMetadata(
             provider=self.provider.name,
             model=model or self.provider.default_model,
-            temperature=temperature or self.provider.config.api_temperature,
+            temperature=temperature if temperature is not None else self.provider.config.api_temperature,
             input_words=input_stats["word_count"],
             input_tokens=input_stats["token_count"],
             output_words=output_stats["word_count"],
@@ -167,10 +173,7 @@ class RequestProcessor:
             history.add_message(MessageRole.SYSTEM, system_prompt)
         
         if initial_context:
-            if prompt_template and "{content}" in prompt_template:
-                content = prompt_template.format(content=initial_context)
-            else:
-                content = initial_context
+            content = self._format_prompt(initial_context, prompt_template)
             history.add_message(MessageRole.USER, content)
         
         return history

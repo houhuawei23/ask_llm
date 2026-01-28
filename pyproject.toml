@@ -8,10 +8,8 @@ version = "2.0.0"
 description = "A flexible command-line tool for calling multiple LLM APIs"
 readme = "README.md"
 requires-python = ">=3.8"
-license = {text = "MIT"}
-authors = [
-    {name = "Ask LLM Developer"}
-]
+license = { text = "MIT" }
+authors = [{ name = "Ask LLM Developer" }]
 keywords = ["llm", "cli", "openai", "deepseek", "qwen", "ai"]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -37,6 +35,9 @@ dependencies = [
     "loguru>=0.7.0",
     "pydantic>=2.0.0",
     "pydantic-settings>=2.0.0",
+    "litellm>=1.0.0",
+    "pyyaml>=6.0.0",
+    "llm-api-engine>=0.1.2",    # 使用 llm-api-engine 作为 LLM 引擎
 ]
 
 [project.optional-dependencies]
@@ -53,13 +54,13 @@ ask-llm = "ask_llm.cli:main"
 askllm = "ask_llm.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/yourusername/ask_llm"
-Documentation = "https://github.com/yourusername/ask_llm#readme"
-Repository = "https://github.com/yourusername/ask_llm"
-Issues = "https://github.com/yourusername/ask_llm/issues"
+Homepage = "https://github.com/houhuawei23/ask_llm"
+Documentation = "https://github.com/houhuawei23/ask_llm#readme"
+Repository = "https://github.com/houhuawei23/ask_llm"
+Issues = "https://github.com/houhuawei23/ask_llm/issues"
 
 [tool.setuptools]
-package-dir = {"" = "src"}
+package-dir = { "" = "src" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -89,7 +90,7 @@ select = [
     "SIM", # flake8-simplify
 ]
 ignore = [
-    "E501",  # line too long, handled by formatter
+    "E501", # line too long, handled by formatter
 ]
 
 [tool.ruff.format]

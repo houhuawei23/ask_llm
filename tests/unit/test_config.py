@@ -1,9 +1,9 @@
 """Unit tests for configuration modules."""
 
-import json
 from pathlib import Path
 
 import pytest
+import yaml
 
 from ask_llm.config.loader import ConfigLoader
 from ask_llm.config.manager import ConfigManager
@@ -26,38 +26,33 @@ class TestConfigLoader:
     def test_load_nonexistent_file(self, temp_dir):
         """Test loading non-existent file raises error."""
         with pytest.raises(FileNotFoundError):
-            ConfigLoader.load(temp_dir / "nonexistent.json")
+            ConfigLoader.load(temp_dir / "nonexistent.yml")
     
-    def test_load_invalid_json(self, temp_dir):
-        """Test loading invalid JSON raises error."""
-        config_path = temp_dir / "invalid.json"
-        config_path.write_text("not valid json")
+    def test_load_invalid_yaml(self, temp_dir):
+        """Test loading invalid YAML raises error."""
+        config_path = temp_dir / "invalid.yml"
+        config_path.write_text("not valid yaml: [")
         
         with pytest.raises(ValueError):
             ConfigLoader.load(config_path)
     
     def test_load_missing_providers(self, temp_dir):
         """Test loading config without providers raises error."""
-        config_path = temp_dir / "bad_config.json"
+        config_path = temp_dir / "bad_config.yml"
         with open(config_path, "w") as f:
-            json.dump({"default_provider": "test"}, f)
+            yaml.dump({"default_provider": "test"}, f)
         
         with pytest.raises(ValueError):
             ConfigLoader.load(config_path)
     
-    def test_create_example_config(self, temp_dir):
-        """Test creating example config."""
-        config_path = temp_dir / "example.json"
-        ConfigLoader.create_example_config(config_path)
+    def test_load_unsupported_format(self, temp_dir):
+        """Test loading unsupported file format raises error."""
+        config_path = temp_dir / "config.json"
+        config_path.write_text('{"providers": {}}')
         
-        assert config_path.exists()
-        
-        with open(config_path) as f:
-            data = json.load(f)
-        
-        assert "default_provider" in data
-        assert "providers" in data
-        assert "deepseek" in data["providers"]
+        with pytest.raises(ValueError) as exc_info:
+            ConfigLoader.load(config_path)
+        assert "Unsupported config file format" in str(exc_info.value)
 
 
 class TestConfigManager:

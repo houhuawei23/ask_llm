@@ -5,12 +5,12 @@ import subprocess
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Dict, List, Optional
 
 from loguru import logger
 
 from ask_llm.core.models import ChatHistory, ChatMessage, MessageRole
-from ask_llm.providers.base import BaseProvider
+from ask_llm.core.protocols import LLMProviderProtocol
 from ask_llm.utils.token_counter import TokenCounter
 from ask_llm.utils.console import console
 
@@ -35,7 +35,7 @@ class ChatSession:
     
     def __init__(
         self,
-        provider: BaseProvider,
+        provider: LLMProviderProtocol,
         temperature: Optional[float] = None,
         model: Optional[str] = None,
         history: Optional[ChatHistory] = None,
@@ -163,7 +163,7 @@ class ChatSession:
         except Exception as e:
             console.print()
             console.print_error(f"Failed to get response: {e}")
-            # Remove user message from history
+            # Remove user message from history if it was just added
             if self.history.messages and self.history.messages[-1].role == MessageRole.USER:
                 self.history.messages.pop()
     
@@ -222,7 +222,8 @@ class ChatSession:
         console.print("[bold]Session Information:[/bold]")
         console.print(f"  Provider: {self.provider.name}")
         console.print(f"  Model: {self.model}")
-        console.print(f"  Temperature: {self.temperature or 'default'}")
+        temp_display = self.temperature if self.temperature is not None else 'default'
+        console.print(f"  Temperature: {temp_display}")
         console.print(f"  Messages: {user_msgs} user, {assistant_msgs} assistant")
         console.print(f"  Estimated Tokens: {total_tokens}")
         console.print()

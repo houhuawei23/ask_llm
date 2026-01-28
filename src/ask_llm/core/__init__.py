@@ -3,6 +3,7 @@
 from ask_llm.core.models import ProviderConfig, AppConfig, ChatMessage, ChatHistory
 from ask_llm.core.processor import RequestProcessor
 from ask_llm.core.chat import ChatSession
+from ask_llm.core.protocols import LLMProviderProtocol
 
 __all__ = [
     "ProviderConfig",
@@ -11,4 +12,5 @@ __all__ = [
     "ChatHistory",
     "RequestProcessor",
     "ChatSession",
+    "LLMProviderProtocol",
 ]

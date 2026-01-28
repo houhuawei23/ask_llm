@@ -4,10 +4,10 @@ Integration tests for CLI commands.
 These tests use the Typer CliRunner to test commands without making real API calls.
 """
 
-import json
 from pathlib import Path
 
 import pytest
+import yaml
 from typer.testing import CliRunner
 
 from ask_llm.cli import app
@@ -36,23 +36,9 @@ class TestCLICommands:
         result = runner.invoke(app, ["ask"])
         assert result.exit_code != 0
     
-    def test_config_init(self, temp_dir):
-        """Test config init command."""
-        config_path = temp_dir / "test_config.json"
-        
-        result = runner.invoke(app, ["config", "init", "--config", str(config_path)])
-        
-        assert result.exit_code == 0
-        assert config_path.exists()
-        
-        # Verify it's valid JSON
-        with open(config_path) as f:
-            data = json.load(f)
-        assert "providers" in data
-    
     def test_config_show_no_config(self):
         """Test config show without config fails."""
-        result = runner.invoke(app, ["config", "show", "--config", "/nonexistent/config.json"])
+        result = runner.invoke(app, ["config", "show", "--config", "/nonexistent/providers.yml"])
         assert result.exit_code != 0
 
 
@@ -67,17 +53,19 @@ class TestCLIWithConfig:
             "default_model": "test-model",
             "providers": {
                 "test": {
-                    "api_provider": "test",
+                    "base_url": "https://api.test.com/v1",
                     "api_key": "test-key-12345",
-                    "api_base": "https://api.test.com/v1",
-                    "models": ["test-model"],
+                    "default_model": "test-model",
+                    "models": [
+                        {"name": "test-model"}
+                    ],
                     "api_temperature": 0.5,
                 }
             }
         }
-        config_path = temp_dir / "config.json"
+        config_path = temp_dir / "providers.yml"
         with open(config_path, "w") as f:
-            json.dump(config, f)
+            yaml.dump(config, f)
         return config_path
     
     def test_config_show(self, mock_config):
@@ -110,7 +98,7 @@ Run this to verify the installation and basic functionality.
 \"\"\"
 
 import tempfile
-import json
+import yaml
 from pathlib import Path
 
 # Test 1: Configuration
@@ -136,8 +124,8 @@ config_data = {
     }
 }
 
-with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-    json.dump(config_data, f)
+with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:
+    yaml.dump(config_data, f)
     config_path = f.name
 
 try:
