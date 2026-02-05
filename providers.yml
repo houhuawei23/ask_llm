@@ -19,3 +19,18 @@ providers:
           output: 3 # ￥/百万
         functions:
           json_output: true
+      - name: "deepseek-reasoner"
+        context_length: 128000
+        max_output:
+          default: 4000
+          maximum: 8000
+        speed_tokens_per_second: 30
+        token_per_character:
+          english: 0.3
+          chinese: 0.6
+        pricing_per_million_tokens: # 人民币/元
+          input: 2 # ￥/百万，cache miss
+          input_cache_hit: 0.2 # ￥/百万
+          output: 3 # ￥/百万
+        functions:
+          json_output: true

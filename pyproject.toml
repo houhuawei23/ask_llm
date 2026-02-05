@@ -56,8 +56,8 @@ lint = ["ruff>=0.1.0", "mypy>=1.5.0", "pydocstyle>=6.3.0"]
 security = ["bandit>=1.7.5", "safety>=2.3.5"]
 
 [project.scripts]
-ask-llm = "ask_llm.cli:main"
-askllm = "ask_llm.cli:main"
+ask-llm = "ask_llm.cli:run_cli"
+askllm = "ask_llm.cli:run_cli"
 
 [project.urls]
 Homepage = "https://github.com/houhuawei23/ask_llm"

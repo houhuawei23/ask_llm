@@ -131,7 +131,7 @@ class AppConfig(BaseModel):
         provider_name = name or self.default_provider
         if provider_name not in self.providers:
             available = ", ".join(self.providers.keys())
-            raise ValueError(f"Provider '{provider_name}' not found. " f"Available: {available}")
+            raise ValueError(f"Provider '{provider_name}' not found. Available: {available}")
         return self.providers[provider_name]
 
 

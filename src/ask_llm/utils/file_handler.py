@@ -90,9 +90,7 @@ class FileHandler:
 
         # Check if file exists
         if file_path.exists() and not force:
-            raise FileExistsError(
-                f"Output file already exists: {path}. " "Use --force to overwrite."
-            )
+            raise FileExistsError(f"Output file already exists: {path}. Use --force to overwrite.")
 
         # Create parent directories
         try:

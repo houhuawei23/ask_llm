@@ -1,0 +1,9 @@
+provider-models:
+  - provider: deepseek
+    models:
+      - model: deepseek-chat
+      - model: deepseek-reasoner
+prompt: 你是一个高中数学老师，请帮我解决以下问题：
+contents:
+  - 题目：已知函数f(x) = x^2 + 2x + 1，求f(x)的导数。
+  - 题目：已知函数f(x) = x^2 + 3x + 1，求f(x)的导数。

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Optional
 
 import typer
+from loguru import logger
 from typing_extensions import Annotated
 
 from ask_llm import __version__
@@ -23,8 +24,7 @@ try:
     from llm_engine import create_provider_adapter
 except ImportError:
     console.print_error(
-        "llm_engine is required but not installed. "
-        "Please install it with: pip install llm-engine"
+        "llm_engine is required but not installed. Please install it with: pip install llm-engine"
     )
     raise
 
@@ -547,6 +547,365 @@ def config(
 
     except FileNotFoundError as e:
         console.print_error(str(e))
+        raise typer.Exit(1) from e
+
+
+@app.command()
+def batch(
+    config_file: Annotated[
+        str,
+        typer.Argument(help="Batch configuration file path (YAML format)"),
+    ],
+    output: Annotated[
+        Optional[str],
+        typer.Option(
+            "--output",
+            "-o",
+            help="Output file or directory path (default: auto-generated)",
+        ),
+    ] = None,
+    output_format: Annotated[
+        Optional[str],
+        typer.Option(
+            "--format",
+            "-f",
+            help="Output format: json, yaml, csv, or markdown (auto-detected from file extension if not specified)",
+        ),
+    ] = None,
+    threads: Annotated[
+        int,
+        typer.Option(
+            "--threads",
+            "-t",
+            help="Number of concurrent threads (default: 5)",
+            min=1,
+            max=50,
+        ),
+    ] = 5,
+    retries: Annotated[
+        int,
+        typer.Option(
+            "--retries",
+            "-r",
+            help="Maximum number of retries for failed tasks (default: 3)",
+            min=0,
+            max=10,
+        ),
+    ] = 3,
+    config_path: Annotated[
+        Optional[str],
+        typer.Option(
+            "--config",
+            "-c",
+            help="Configuration file path",
+        ),
+    ] = None,
+    separate_files: Annotated[
+        bool,
+        typer.Option(
+            "--separate-files",
+            help="Save results in separate files per model",
+        ),
+    ] = False,
+) -> None:
+    """
+    Process batch tasks from YAML configuration file.
+
+    Supports two configuration formats:
+    1. prompt-contents.yml: Same prompt with multiple contents
+    2. prompt-content-pairs.yml: Multiple (prompt, content) pairs
+
+    Examples:
+        ask-llm batch batch-examples/prompt-contents.yml
+        ask-llm batch batch-examples/prompt-content-pairs.yml -o results.json -f json
+        ask-llm batch config.yml --threads 10 --retries 5
+    """
+    try:
+        from ask_llm.core.batch import (
+            BatchStatistics,
+            BatchTask,
+            GlobalBatchProcessor,
+            ModelConfig,
+        )
+        from ask_llm.utils.batch_exporter import BatchResultExporter
+        from ask_llm.utils.batch_loader import BatchConfigLoader
+        from ask_llm.utils.interactive_config import InteractiveConfigHelper
+
+        # Load batch configuration
+        console.print_info(f"Loading batch configuration from: {config_file}")
+        batch_config = BatchConfigLoader.load(config_file)
+
+        tasks = batch_config["tasks"]
+        provider_models = batch_config.get("provider_models", [])
+
+        # Auto-detect output format from file extension if not specified
+        if output_format is None and output:
+            output_path_obj = Path(output)
+            suffix = output_path_obj.suffix.lower()
+            # Map file extensions to formats
+            extension_to_format = {
+                ".json": "json",
+                ".yaml": "yaml",
+                ".yml": "yaml",
+                ".csv": "csv",
+                ".md": "markdown",
+                ".markdown": "markdown",
+            }
+            output_format = extension_to_format.get(suffix, "json")
+            logger.debug(
+                f"Auto-detected output format '{output_format}' from file extension '{suffix}'"
+            )
+        elif output_format is None:
+            output_format = "json"  # Default format
+
+        console.print_success(f"Loaded {len(tasks)} tasks from configuration")
+
+        # If no models specified, use interactive selection
+        if not provider_models:
+            console.print_info("No models specified in configuration. Using interactive selection.")
+            config = ConfigLoader.load(config_path)
+            config_manager = ConfigManager(config)
+            helper = InteractiveConfigHelper(config_manager)
+            provider_models = helper.select_provider_and_models(allow_multiple=True)
+
+        batch_mode = batch_config.get("mode", "prompt-content-pairs")  # Store batch mode
+
+        # Load configuration once
+        config = ConfigLoader.load(config_path)
+        config_manager = ConfigManager(config)
+
+        # Step 1: Validate all models and test connections
+        console.print()
+        console.print("[bold]Validating models and testing connections...[/bold]")
+        validated_models: list[ModelConfig] = []
+        skipped_providers: list[str] = []
+
+        for model_config in provider_models:
+            model_key = f"{model_config.provider}/{model_config.model}"
+            console.print(f"  Checking {model_key}...", end=" ")
+
+            try:
+                # Check if provider exists
+                if model_config.provider not in config.providers:
+                    console.print("[red]✗[/red] Provider not found")
+                    skipped_providers.append(model_key)
+                    continue
+
+                # Get provider config
+                provider_config = config.providers[model_config.provider]
+
+                # Check API key
+                if not provider_config.api_key or provider_config.api_key.strip() in (
+                    "",
+                    "your-api-key-here",
+                    "placeholder",
+                ):
+                    console.print("[red]✗[/red] API key not configured")
+                    skipped_providers.append(model_key)
+                    continue
+
+                # Check if model is available for this provider
+                if provider_config.models and model_config.model not in provider_config.models:
+                    console.print(
+                        f"[red]✗[/red] Model not available. Available: {', '.join(provider_config.models)}"
+                    )
+                    skipped_providers.append(model_key)
+                    continue
+
+                # Set provider in config manager
+                config_manager.set_provider(model_config.provider)
+
+                # Apply model-specific overrides
+                config_manager.apply_overrides(
+                    model=model_config.model,
+                    temperature=model_config.temperature,
+                )
+
+                provider_config_with_overrides = config_manager.get_provider_config()
+                default_model = (
+                    config_manager.get_model_override() or config_manager.get_default_model()
+                )
+
+                # Test connection
+                try:
+                    test_provider = create_provider_adapter(
+                        provider_config_with_overrides, default_model=default_model
+                    )
+                    success, message, latency = test_provider.test_connection()
+
+                    if not success:
+                        console.print(f"[red]✗[/red] Connection test failed: {message}")
+                        skipped_providers.append(model_key)
+                        continue
+
+                    console.print(f"[green]✓ ({latency:.2f}s)[/green]")
+                    validated_models.append(model_config)
+
+                except Exception as e:
+                    console.print(f"[red]✗[/red] Connection test error: {e}")
+                    skipped_providers.append(model_key)
+                    continue
+
+            except Exception as e:
+                console.print(f"[red]✗[/red] Error: {e}")
+                skipped_providers.append(model_key)
+                continue
+
+        # Display summary of skipped providers
+        if skipped_providers:
+            console.print()
+            console.print_warning(f"Skipped {len(skipped_providers)} provider(s):")
+            for skipped in skipped_providers:
+                console.print(f"  - {skipped}")
+
+        # Check if we have any validated models
+        if not validated_models:
+            console.print_error("No providers were successfully validated. Cannot process tasks.")
+            raise typer.Exit(1)
+
+        # Step 2: Create global task list (each task with model_config)
+        console.print()
+        console.print(
+            f"[bold]Processing {len(validated_models)} model(s) with {len(tasks)} task(s) each...[/bold]"
+        )
+        global_tasks: list[BatchTask] = []
+        task_id_counter = 0
+
+        for model_config in validated_models:
+            for original_task in tasks:
+                # Create a new task with task_model_config attached
+                global_task = BatchTask(
+                    task_id=task_id_counter,
+                    prompt=original_task.prompt,
+                    content=original_task.content,
+                    task_model_config=model_config,
+                )
+                global_tasks.append(global_task)
+                task_id_counter += 1
+
+        # Step 3: Process all tasks concurrently using GlobalBatchProcessor
+        global_processor = GlobalBatchProcessor(
+            max_workers=threads,
+            max_retries=retries,
+        )
+
+        all_results_list = global_processor.process_global_tasks(
+            global_tasks, config_manager, show_progress=True
+        )
+
+        # Step 4: Group results by model and calculate statistics
+        all_results: dict[str, list] = {}
+        all_statistics: dict[str, BatchStatistics] = {}
+
+        # Group results by model
+        for result in all_results_list:
+            model_key = f"{result.model_settings.provider}/{result.model_settings.model}"
+            if model_key not in all_results:
+                all_results[model_key] = []
+            all_results[model_key].append(result)
+
+        # Calculate statistics for each model
+        model_statistics = global_processor.calculate_statistics(all_results_list)
+        all_statistics = model_statistics
+
+        # Display statistics for each model
+        console.print()
+        for model_key, statistics in all_statistics.items():
+            console.print(f"[bold]Statistics for {model_key}:[/bold]")
+            console.print(f"  Total Tasks: {statistics.total_tasks}")
+            console.print(f"  Successful: {statistics.successful_tasks}")
+            console.print(f"  Failed: {statistics.failed_tasks}")
+            if statistics.successful_tasks > 0:
+                success_rate = statistics.successful_tasks / statistics.total_tasks * 100
+                console.print(f"  Success Rate: {success_rate:.1f}%")
+                console.print(f"  Average Latency: {statistics.average_latency:.2f}s")
+                console.print(
+                    f"  Total Tokens: {statistics.total_input_tokens + statistics.total_output_tokens:,}"
+                )
+
+        # Display summary of skipped providers
+        if skipped_providers:
+            console.print()
+            console.print_warning(f"Skipped {len(skipped_providers)} provider(s):")
+            for skipped in skipped_providers:
+                console.print(f"  - {skipped}")
+
+        # Check if we have any results to export
+        if not all_results:
+            console.print_error(
+                "No providers were successfully processed. Cannot generate results."
+            )
+            raise typer.Exit(1)
+
+        # Export results
+        if separate_files and len(validated_models) > 1:
+            # Export to separate files per model
+            output_dir = output or "batch_results"
+            exported_files = BatchResultExporter.export_multiple_models(
+                all_results, all_statistics, output_dir, output_format, batch_mode
+            )
+            console.print()
+            console.print_success(f"Results exported to {len(exported_files)} files:")
+            for file_path in exported_files:
+                console.print(f"  - {file_path}")
+        else:
+            # Export all results to a single file
+            # Combine all results
+            combined_results = []
+            for results in all_results.values():
+                combined_results.extend(results)
+
+            # Calculate combined statistics
+            combined_stats = BatchStatistics(total_tasks=len(combined_results))
+            combined_stats.successful_tasks = sum(
+                stats.successful_tasks for stats in all_statistics.values()
+            )
+            combined_stats.failed_tasks = sum(
+                stats.failed_tasks for stats in all_statistics.values()
+            )
+            combined_stats.total_latency = sum(
+                stats.total_latency for stats in all_statistics.values()
+            )
+            if combined_stats.successful_tasks > 0:
+                combined_stats.average_latency = (
+                    combined_stats.total_latency / combined_stats.successful_tasks
+                )
+                combined_stats.total_input_tokens = sum(
+                    stats.total_input_tokens for stats in all_statistics.values()
+                )
+                combined_stats.total_output_tokens = sum(
+                    stats.total_output_tokens for stats in all_statistics.values()
+                )
+
+            # Generate output path
+            if output:
+                output_path = output
+            else:
+                config_file_path = Path(config_file)
+                output_path = str(
+                    config_file_path.parent / f"{config_file_path.stem}_results.{output_format}"
+                )
+
+            exporter = BatchResultExporter(combined_results, combined_stats, batch_mode)
+            exported_file = exporter.export(output_path, output_format)
+            console.print()
+            console.print_success(f"Results exported to: {exported_file}")
+
+    except FileNotFoundError as e:
+        console.print_error(str(e))
+        raise typer.Exit(1) from e
+    except ValueError as e:
+        console.print_error(str(e))
+        raise typer.Exit(1) from e
+    except RuntimeError as e:
+        console.print_error(f"API error: {e}")
+        raise typer.Exit(1) from e
+    except KeyboardInterrupt:
+        console.print("\nBatch processing interrupted by user")
+        raise typer.Exit(1) from None
+    except Exception as e:
+        console.print_error(f"Unexpected error: {e}")
+        logger.exception("Unexpected error in batch command")
         raise typer.Exit(1) from e
 
 

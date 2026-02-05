@@ -13,6 +13,7 @@ A modern command-line tool for calling multiple LLM APIs (DeepSeek, Qwen, etc.) 
 - 📝 **Rich Logging** - Powered by Loguru
 - 💬 **Interactive Chat** - Multi-turn conversations with command support
 - 🔌 **Multiple Providers** - Support for OpenAI-compatible APIs
+- 📦 **Batch Processing** - Process multiple tasks concurrently with multi-threading
 
 ## Quick Start
 
@@ -45,7 +46,7 @@ ask-llm config test
 
 ```bash
 # Process a file
-ask-llm input.txt
+ask-llm ask input.txt
 
 # Direct text input
 ask-llm "Translate to Chinese: Hello world"
@@ -55,6 +56,9 @@ ask-llm chat
 
 # With initial context
 ask-llm chat -i context.txt -s "You are a helpful assistant"
+
+# Batch processing
+ask-llm batch batch-examples/prompt-contents.yml -o results.json
 ```
 
 ## Commands
@@ -63,9 +67,24 @@ ask-llm chat -i context.txt -s "You are a helpful assistant"
 |---------|-------------|
 | `ask-llm ask [INPUT]` | Process input with LLM |
 | `ask-llm chat` | Start interactive chat |
+| `ask-llm batch [CONFIG]` | Process batch tasks from YAML config |
 | `ask-llm config show` | Display configuration |
 | `ask-llm config test` | Test API connections |
 | `ask-llm config init` | Create example config |
+
+### Batch Processing
+
+The `batch` command supports processing multiple tasks concurrently:
+
+```bash
+# Basic usage
+ask-llm batch batch-examples/prompt-contents.yml
+
+# With options
+ask-llm batch config.yml -o results.json -f json --threads 10 --retries 5
+```
+
+See [docs/BATCH_USAGE.md](docs/BATCH_USAGE.md) for detailed batch processing documentation.
 
 ## Project Structure
 
