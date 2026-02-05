@@ -1,0 +1,33 @@
+# Translation Configuration Example
+# Copy this file to trans_config.yml and customize as needed
+
+# Target language (e.g., zh, en, ja, ko, fr, de, es, ru)
+target_language: zh
+
+# Source language (use "auto" for auto-detection)
+source_language: auto
+
+# Translation style: formal, casual, or technical
+style: formal
+
+# Custom prompt template (optional, overrides style)
+# Use {source_lang}, {target_lang}, and {content} placeholders
+# prompt_template: ""
+
+# Prompt template file (optional, overrides prompt_template and style)
+# Supports @ prefix for project-relative paths (e.g., @prompts/tech-paper-trans.md)
+# prompt_file: ""
+
+# Concurrency settings
+threads: 20
+retries: 3
+
+# Maximum chunk size in characters
+max_chunk_size: 8000
+
+# API provider and model (optional, will use defaults from providers.yml if not set)
+# provider: deepseek
+# model: deepseek-chat
+
+# Temperature for API calls (optional, 0.0-2.0)
+# temperature: 0.7

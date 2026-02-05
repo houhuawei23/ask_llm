@@ -276,6 +276,8 @@ class BatchProcessor:
 
             rich_console = RichConsole()
 
+            # Note: Rich Progress doesn't support max_completed parameter
+            # Completed tasks will be shown, but terminal scrolling may be needed for many tasks
             progress = Progress(
                 SpinnerColumn(),
                 TextColumn("[progress.description]{task.description}"),
@@ -500,6 +502,7 @@ class GlobalBatchProcessor:
         retry_count: int = 0,
         progress: Optional[Progress] = None,
         progress_task_id: Optional[TaskID] = None,
+        input_tokens: Optional[int] = None,
     ) -> BatchResult:
         """
         Process a single task with its associated model configuration.
@@ -520,6 +523,9 @@ class GlobalBatchProcessor:
         model_config = task.task_model_config
         model_key = f"{model_config.provider}/{model_config.model}"
 
+        # Initialize display_input_tokens early for use in error handling
+        display_input_tokens = input_tokens if input_tokens is not None else 0
+
         result = BatchResult(
             task_id=task.task_id,
             prompt=task.prompt,
@@ -539,6 +545,9 @@ class GlobalBatchProcessor:
 
             # Count input tokens
             input_stats = TokenCounter.estimate_tokens(full_prompt, model_config.model)
+            input_token_count = input_stats["token_count"]
+            # Use provided input_tokens if available, otherwise use calculated value
+            display_input_tokens = input_tokens if input_tokens is not None else input_token_count
 
             # Process with streaming
             start_time = time.time()
@@ -549,7 +558,7 @@ class GlobalBatchProcessor:
             if progress and progress_task_id is not None:
                 progress.update(
                     progress_task_id,
-                    description=f"{model_key} Task {task.task_id}: Processing...",
+                    description=f"{model_key} Task {task.task_id} ({display_input_tokens} tokens): Processing...",
                 )
 
             # Stream response
@@ -570,7 +579,7 @@ class GlobalBatchProcessor:
                 if progress and progress_task_id is not None:
                     progress.update(
                         progress_task_id,
-                        description=f"{model_key} Task {task.task_id}: {output_token_count} tokens",
+                        description=f"{model_key} Task {task.task_id} ({display_input_tokens} tokens): {output_token_count} tokens",
                     )
 
             response = "".join(response_parts)
@@ -598,7 +607,7 @@ class GlobalBatchProcessor:
             if progress and progress_task_id is not None:
                 progress.update(
                     progress_task_id,
-                    description=f"{model_key} Task {task.task_id}: ✓ Complete ({output_token_count} tokens)",
+                    description=f"{model_key} Task {task.task_id} ({display_input_tokens} tokens): ✓ Complete ({output_token_count} tokens)",
                     completed=100,
                 )
 
@@ -615,7 +624,7 @@ class GlobalBatchProcessor:
             if progress and progress_task_id is not None:
                 progress.update(
                     progress_task_id,
-                    description=f"{model_key} Task {task.task_id}: ✗ Failed",
+                    description=f"{model_key} Task {task.task_id} ({display_input_tokens} tokens): ✗ Failed",
                     completed=100,
                 )
 
@@ -678,6 +687,8 @@ class GlobalBatchProcessor:
 
             rich_console = RichConsole()
 
+            # Note: Rich Progress doesn't support max_completed parameter
+            # Completed tasks will be shown, but terminal scrolling may be needed for many tasks
             progress = Progress(
                 SpinnerColumn(),
                 TextColumn("[progress.description]{task.description}"),
@@ -692,20 +703,36 @@ class GlobalBatchProcessor:
 
             # Create a progress task for each batch task
             task_to_progress_id: Dict[int, TaskID] = {}
+            task_to_input_tokens: Dict[int, int] = {}
             for task in tasks:
                 model_key = (
                     f"{task.task_model_config.provider}/{task.task_model_config.model}"
                     if task.task_model_config
                     else "unknown"
                 )
+                # Pre-calculate input tokens for display
+                # Simple estimation: combine prompt template and content
+                # Replace {content} placeholder if present, otherwise append content
+                estimated_prompt = (
+                    task.prompt.replace("{content}", task.content)
+                    if "{content}" in task.prompt
+                    else f"{task.prompt}\n\n{task.content}"
+                )
+                input_token_estimate = TokenCounter.estimate_tokens(
+                    estimated_prompt,
+                    task.task_model_config.model if task.task_model_config else "gpt-3.5-turbo",
+                )["token_count"]
+                task_to_input_tokens[task.task_id] = input_token_estimate
+
                 progress_id = progress.add_task(
-                    f"{model_key} Task {task.task_id}: Waiting...",
+                    f"{model_key} Task {task.task_id} ({input_token_estimate} tokens): Waiting...",
                     total=100,  # Use 100 as total for percentage display
                 )
                 task_to_progress_id[task.task_id] = progress_id
         else:
             progress = None
             task_to_progress_id = {}
+            task_to_input_tokens = {}
 
         try:
             with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
@@ -713,6 +740,7 @@ class GlobalBatchProcessor:
                 future_to_task = {}
                 for task in pending_tasks:
                     progress_task_id = task_to_progress_id.get(task.task_id)
+                    input_token_count = task_to_input_tokens.get(task.task_id)
                     future = executor.submit(
                         self._process_single_global_task,
                         task,
@@ -720,6 +748,7 @@ class GlobalBatchProcessor:
                         0,  # retry_count
                         progress,
                         progress_task_id,
+                        input_token_count,
                     )
                     future_to_task[future] = task
 
@@ -798,6 +827,7 @@ class GlobalBatchProcessor:
                         # Submit retry tasks
                         for task, retry_count in retry_queue:
                             progress_task_id = task_to_progress_id.get(task.task_id)
+                            input_token_count = task_to_input_tokens.get(task.task_id)
                             future = executor.submit(
                                 self._process_single_global_task,
                                 task,
@@ -805,6 +835,7 @@ class GlobalBatchProcessor:
                                 retry_count,
                                 progress,
                                 progress_task_id,
+                                input_token_count,
                             )
                             future_to_task[future] = task
 

@@ -4,8 +4,9 @@ Ask LLM - Main CLI entry point using Typer.
 A flexible command-line tool for calling multiple LLM APIs.
 """
 
+import glob
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 import typer
 from loguru import logger
@@ -14,10 +15,15 @@ from typing_extensions import Annotated
 from ask_llm import __version__
 from ask_llm.config.loader import ConfigLoader
 from ask_llm.config.manager import ConfigManager
+from ask_llm.core.batch import GlobalBatchProcessor, ModelConfig
 from ask_llm.core.chat import ChatSession
 from ask_llm.core.processor import RequestProcessor
+from ask_llm.core.text_splitter import TextSplitter
+from ask_llm.core.translator import Translator
 from ask_llm.utils.console import console
 from ask_llm.utils.file_handler import FileHandler
+from ask_llm.utils.trans_config_loader import TransConfigLoader
+from ask_llm.utils.translation_exporter import TranslationExporter
 
 # Import from llm_engine
 try:
@@ -906,6 +912,348 @@ def batch(
     except Exception as e:
         console.print_error(f"Unexpected error: {e}")
         logger.exception("Unexpected error in batch command")
+        raise typer.Exit(1) from e
+
+
+@app.command()
+def trans(
+    files: Annotated[
+        List[str],
+        typer.Argument(help="Input file(s) to translate (supports glob patterns)"),
+    ],
+    output: Annotated[
+        Optional[str],
+        typer.Option(
+            "--output",
+            "-o",
+            help="Output file or directory path (default: auto-generated)",
+        ),
+    ] = None,
+    config: Annotated[
+        Optional[str],
+        typer.Option(
+            "--config",
+            "-c",
+            help="Translation configuration file path",
+        ),
+    ] = None,
+    target_lang: Annotated[
+        str,
+        typer.Option(
+            "--target-lang",
+            "-t",
+            help="Target language code (default: zh)",
+        ),
+    ] = "zh",
+    source_lang: Annotated[
+        Optional[str],
+        typer.Option(
+            "--source-lang",
+            "-s",
+            help="Source language code (default: auto-detect)",
+        ),
+    ] = None,
+    threads: Annotated[
+        int,
+        typer.Option(
+            "--threads",
+            "-T",
+            help="Number of concurrent threads (default: 5)",
+            min=1,
+            max=50,
+        ),
+    ] = 5,
+    retries: Annotated[
+        int,
+        typer.Option(
+            "--retries",
+            "-r",
+            help="Maximum number of retries for failed tasks (default: 3)",
+            min=0,
+            max=10,
+        ),
+    ] = 3,
+    provider: Annotated[
+        Optional[str],
+        typer.Option(
+            "--provider",
+            "-a",
+            help="API provider to use",
+        ),
+    ] = None,
+    model: Annotated[
+        Optional[str],
+        typer.Option(
+            "--model",
+            "-m",
+            help="Model name to use",
+        ),
+    ] = None,
+    force: Annotated[
+        bool,
+        typer.Option(
+            "--force",
+            "-f",
+            help="Overwrite existing output file",
+        ),
+    ] = False,
+    preserve_format: Annotated[
+        bool,
+        typer.Option(
+            "--preserve-format/--no-preserve-format",
+            help="Preserve original formatting (default: True)",
+        ),
+    ] = True,
+    stream: Annotated[
+        bool,
+        typer.Option(
+            "--stream",
+            help="Stream translation progress to console",
+        ),
+    ] = False,
+    trans_config_path: Annotated[
+        Optional[str],
+        typer.Option(
+            "--trans-config",
+            help="Translation configuration file path (alternative to --config)",
+        ),
+    ] = None,
+    prompt_file: Annotated[
+        Optional[str],
+        typer.Option(
+            "--prompt",
+            "-p",
+            help="Path to prompt template file (supports @ prefix for project-relative paths, e.g., @prompts/tech-paper-trans.md)",
+        ),
+    ] = None,
+) -> None:
+    """
+    Translate text files using LLM API.
+
+    Supports both plain text (.txt) and Markdown (.md) files.
+    Uses intelligent text splitting to handle long documents.
+
+    Examples:
+        ask-llm trans document.txt
+        ask-llm trans *.md -o translated/
+        ask-llm trans file.txt -t en -s zh --threads 10
+        ask-llm trans doc.md -m gpt-4 --preserve-format
+        ask-llm trans paper.md -p @prompts/tech-paper-trans.md
+    """
+    try:
+        # Load translation configuration
+        trans_config_file = trans_config_path or config
+        trans_config = TransConfigLoader.load(trans_config_file)
+        if trans_config is None:
+            trans_config = TransConfigLoader.get_default_config()
+
+        # Override with command-line arguments
+        if target_lang != "zh":
+            trans_config.target_language = target_lang
+        if source_lang:
+            trans_config.source_language = source_lang
+        if threads != 5:
+            trans_config.threads = threads
+        if retries != 3:
+            trans_config.retries = retries
+        if provider:
+            trans_config.provider = provider
+        if model:
+            trans_config.model = model
+        if prompt_file:
+            trans_config.prompt_file = prompt_file
+
+        # Load main configuration
+        config_path = config if config and not trans_config_file else None
+        app_config = ConfigLoader.load(config_path)
+        config_manager = ConfigManager(app_config)
+
+        # Determine provider and model
+        final_provider = trans_config.provider or app_config.default_provider
+        final_model = trans_config.model or config_manager.get_default_model()
+
+        if not final_provider:
+            console.print_error(
+                "No provider specified. Use --provider or configure default provider."
+            )
+            raise typer.Exit(1)
+
+        if not final_model:
+            console.print_error("No model specified. Use --model or configure default model.")
+            raise typer.Exit(1)
+
+        # Set provider in config manager
+        config_manager.set_provider(final_provider)
+        config_manager.apply_overrides(
+            model=final_model,
+            temperature=trans_config.temperature,
+        )
+
+        # Resolve file patterns
+        resolved_files = []
+        for file_pattern in files:
+            matched_files = glob.glob(file_pattern)
+            if not matched_files:
+                # If no match, treat as literal file path
+                if Path(file_pattern).exists():
+                    resolved_files.append(file_pattern)
+                else:
+                    console.print_warning(f"File not found: {file_pattern}")
+            else:
+                resolved_files.extend(matched_files)
+
+        if not resolved_files:
+            console.print_error("No files found to translate")
+            raise typer.Exit(1)
+
+        # Remove duplicates and sort
+        resolved_files = sorted(set(resolved_files))
+
+        console.print_info(f"Found {len(resolved_files)} file(s) to translate")
+
+        # Process each file
+        for file_path in resolved_files:
+            console.print()
+            console.print(f"[bold]Processing: {file_path}[/bold]")
+
+            # Check file type
+            file_type = TextSplitter.detect_file_type(file_path)
+            if file_type not in ("markdown", "text"):
+                console.print_warning(
+                    f"Unsupported file type: {Path(file_path).suffix}. "
+                    f"Only .txt and .md files are supported. Skipping."
+                )
+                continue
+
+            # Read file content
+            try:
+                content = FileHandler.read(file_path, show_progress=not stream)
+            except Exception as e:
+                console.print_error(f"Failed to read file {file_path}: {e}")
+                continue
+
+            if not content.strip():
+                console.print_warning(f"File {file_path} is empty. Skipping.")
+                continue
+
+            # Split text into chunks
+            splitter = TextSplitter.create_splitter(
+                file_path, max_chunk_size=trans_config.max_chunk_size
+            )
+            chunks = splitter.split(content)
+
+            if not chunks:
+                console.print_warning(f"No chunks created from {file_path}. Skipping.")
+                continue
+
+            console.print_info(f"Split into {len(chunks)} chunk(s)")
+
+            # Create translator
+            translator = Translator(
+                target_language=trans_config.target_language,
+                source_language=trans_config.source_language,
+                style=trans_config.style,
+                custom_prompt_template=trans_config.prompt_template,
+                prompt_file=trans_config.prompt_file,
+            )
+
+            # Create model config
+            model_config = ModelConfig(
+                provider=final_provider,
+                model=final_model,
+                temperature=trans_config.temperature,
+            )
+
+            # Create translation tasks
+            tasks = translator.create_translation_tasks(chunks, model_config)
+
+            # Process tasks using GlobalBatchProcessor
+            processor = GlobalBatchProcessor(
+                max_workers=trans_config.threads,
+                max_retries=trans_config.retries,
+            )
+
+            console.print_info(
+                f"Translating {len(tasks)} chunk(s) with {trans_config.threads} thread(s)..."
+            )
+            results = processor.process_global_tasks(
+                tasks, config_manager, show_progress=not stream
+            )
+
+            # Check for failures
+            failed_count = sum(1 for r in results if r.status.value == "failed")
+            if failed_count > 0:
+                console.print_warning(f"{failed_count} chunk(s) failed to translate")
+
+            # Determine output path
+            if output:
+                output_path = output
+                # If output is a directory, create file-specific name
+                if Path(output).is_dir():
+                    input_file = Path(file_path)
+                    output_name = f"{input_file.stem}_translated{input_file.suffix}"
+                    output_path = str(Path(output) / output_name)
+            else:
+                # Auto-generate output path
+                input_file = Path(file_path)
+                output_path = FileHandler.generate_output_path(file_path, suffix="_translated")
+
+            # Export results
+            exporter = TranslationExporter(
+                chunks=chunks,
+                results=results,
+                preserve_format=preserve_format,
+                include_original=False,
+            )
+
+            # Detect output format from extension
+            output_format = None
+            output_ext = Path(output_path).suffix.lower()
+            if output_ext == ".json":
+                output_format = "json"
+            elif output_ext in (".md", ".markdown"):
+                output_format = "markdown"
+
+            try:
+                # Check if output file exists
+                output_file = Path(output_path)
+                if output_file.exists() and not force:
+                    raise FileExistsError(
+                        f"Output file already exists: {output_path}. Use --force to overwrite."
+                    )
+
+                exported_path = exporter.export(output_path, format_type=output_format)
+                console.print_success(f"Translation saved to: {exported_path}")
+
+                # Display statistics
+                successful = sum(1 for r in results if r.status.value == "success")
+                console.print(f"  Successful: {successful}/{len(results)}")
+                if failed_count > 0:
+                    console.print_warning(f"  Failed: {failed_count}/{len(results)}")
+
+            except FileExistsError:
+                console.print_error(
+                    f"Output file already exists: {output_path}. Use --force to overwrite."
+                )
+            except Exception as e:
+                console.print_error(f"Failed to export translation: {e}")
+                logger.exception("Export error")
+
+    except FileNotFoundError as e:
+        console.print_error(str(e))
+        raise typer.Exit(1) from e
+    except ValueError as e:
+        console.print_error(str(e))
+        raise typer.Exit(1) from e
+    except RuntimeError as e:
+        console.print_error(f"API error: {e}")
+        raise typer.Exit(1) from e
+    except KeyboardInterrupt:
+        console.print("\nTranslation interrupted by user")
+        raise typer.Exit(1) from None
+    except Exception as e:
+        console.print_error(f"Unexpected error: {e}")
+        logger.exception("Unexpected error in trans command")
         raise typer.Exit(1) from e
 
 
