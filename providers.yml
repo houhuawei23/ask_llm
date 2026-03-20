@@ -23,7 +23,7 @@ providers:
         context_length: 128000
         max_output:
           default: 4000
-          maximum: 8000
+          maximum: 64000
         speed_tokens_per_second: 30
         token_per_character:
           english: 0.3

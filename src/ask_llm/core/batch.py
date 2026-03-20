@@ -44,6 +44,7 @@ class BatchTask(BaseModel):
     task_id: int
     prompt: str
     content: str
+    output_filename: Optional[str] = None  # Optional output filename for split mode
     task_model_config: Optional[
         ModelConfig
     ] = None  # Optional for backward compatibility (renamed from model_config to avoid Pydantic reserved keyword)
@@ -55,6 +56,7 @@ class BatchResult(BaseModel):
     task_id: int
     prompt: str
     content: str
+    output_filename: Optional[str] = None  # Optional output filename for split mode
     model_settings: (
         ModelConfig  # Renamed from model_config to avoid conflict with Pydantic's reserved field
     )
@@ -129,6 +131,7 @@ class BatchProcessor:
             task_id=task.task_id,
             prompt=task.prompt,
             content=task.content,
+            output_filename=task.output_filename,
             model_settings=self.model_config,
             status=TaskStatus.PROCESSING,
             retry_count=retry_count,
@@ -159,6 +162,7 @@ class BatchProcessor:
                 prompt_template=task.prompt,
                 temperature=self.model_config.temperature,
                 model=self.model_config.model,
+                max_tokens=self.model_config.max_tokens,
                 stream=True,
             ):
                 response_parts.append(chunk)
@@ -366,6 +370,7 @@ class BatchProcessor:
                                         task_id=task.task_id,
                                         prompt=task.prompt,
                                         content=task.content,
+                                        output_filename=task.output_filename,
                                         model_settings=self.model_config,
                                         status=TaskStatus.FAILED,
                                         error=f"Unexpected error: {e!s}",
@@ -446,6 +451,7 @@ class GlobalBatchProcessor:
         max_workers: int = 5,
         max_retries: int = 3,
         retry_delay: float = 1.0,
+        verbose: bool = False,
     ):
         """
         Initialize global batch processor.
@@ -454,10 +460,12 @@ class GlobalBatchProcessor:
             max_workers: Maximum number of concurrent workers across all models
             max_retries: Maximum number of retries for failed tasks
             retry_delay: Initial delay between retries (exponential backoff)
+            verbose: Enable verbose output with detailed API call information
         """
         self.max_workers = max_workers
         self.max_retries = max_retries
         self.retry_delay = retry_delay
+        self.verbose = verbose
 
     def _create_provider_for_task(
         self,
@@ -530,6 +538,7 @@ class GlobalBatchProcessor:
             task_id=task.task_id,
             prompt=task.prompt,
             content=task.content,
+            output_filename=task.output_filename,
             model_settings=model_config,
             status=TaskStatus.PROCESSING,
             retry_count=retry_count,
@@ -549,6 +558,21 @@ class GlobalBatchProcessor:
             # Use provided input_tokens if available, otherwise use calculated value
             display_input_tokens = input_tokens if input_tokens is not None else input_token_count
 
+            # Log detailed API call information in verbose mode
+            if self.verbose:
+                api_params = [
+                    f"provider={model_config.provider}",
+                    f"model={model_config.model}",
+                ]
+                if model_config.temperature is not None:
+                    api_params.append(f"temperature={model_config.temperature}")
+                if model_config.max_tokens is not None:
+                    api_params.append(f"max_tokens={model_config.max_tokens}")
+                if model_config.top_p is not None:
+                    api_params.append(f"top_p={model_config.top_p}")
+                api_params.append(f"input_tokens={display_input_tokens}")
+                logger.info(f"[Task {task.task_id}] API Call: {', '.join(api_params)}")
+
             # Process with streaming
             start_time = time.time()
             response_parts = []
@@ -567,6 +591,7 @@ class GlobalBatchProcessor:
                 prompt_template=task.prompt,
                 temperature=model_config.temperature,
                 model=model_config.model,
+                max_tokens=model_config.max_tokens,
                 stream=True,
             ):
                 response_parts.append(chunk)
@@ -603,6 +628,15 @@ class GlobalBatchProcessor:
             result.metadata = metadata
             result.status = TaskStatus.SUCCESS
 
+            # Log detailed API call result in verbose mode
+            if self.verbose:
+                logger.info(
+                    f"[Task {task.task_id}] API Call Completed: "
+                    f"output_tokens={output_token_count}, "
+                    f"latency={latency:.2f}s, "
+                    f"status=success"
+                )
+
             # Update progress to completed
             if progress and progress_task_id is not None:
                 progress.update(
@@ -616,6 +650,15 @@ class GlobalBatchProcessor:
         except Exception as e:
             error_msg = str(e)
             logger.error(f"Task {task.task_id} ({model_key}) failed: {error_msg}")
+
+            # Log detailed error information in verbose mode
+            if self.verbose:
+                logger.error(
+                    f"[Task {task.task_id}] API Call Failed: "
+                    f"error={error_msg}, "
+                    f"provider={model_config.provider}, "
+                    f"model={model_config.model}"
+                )
 
             result.status = TaskStatus.FAILED
             result.error = error_msg
@@ -805,6 +848,7 @@ class GlobalBatchProcessor:
                                         task_id=task.task_id,
                                         prompt=task.prompt,
                                         content=task.content,
+                                        output_filename=task.output_filename,
                                         model_settings=task.task_model_config
                                         or ModelConfig(provider="unknown", model="unknown"),
                                         status=TaskStatus.FAILED,

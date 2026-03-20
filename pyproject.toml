@@ -38,6 +38,7 @@ dependencies = [
     "litellm>=1.0.0",
     "pyyaml>=6.0.0",
     "llm-api-engine>=0.1.2",    # 使用 llm-api-engine 作为 LLM 引擎
+    "nbformat>=5.0.0",          # Jupyter notebook support for trans .ipynb
 ]
 
 [project.optional-dependencies]
@@ -129,6 +130,7 @@ line-ending = "auto"
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"] # unused imports allowed in __init__.py
+"src/ask_llm/core/md_heading_formatter.py" = ["RUF001"]  # Chinese prompts use fullwidth punctuation
 "tests/**/*.py" = [
     "ARG",
     "F401",

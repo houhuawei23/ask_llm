@@ -182,3 +182,96 @@ contents:
         assert len(result["provider_models"]) == 2
         assert result["provider_models"][0].model == "test-model-1"
         assert result["provider_models"][1].model == "test-model-2"
+
+    def test_load_prompt_contents_with_output_filename(self, temp_dir):
+        """Test loading prompt-contents format with output filename (dictionary format)."""
+        config_content = """
+prompt: "You are a helpful assistant"
+contents:
+  - output: "result1.md"
+    content: "Content 1"
+  - output: "result2.md"
+    content: "Content 2"
+"""
+        config_file = temp_dir / "test_config.yml"
+        config_file.write_text(config_content)
+
+        result = BatchConfigLoader.load(str(config_file))
+
+        assert result["mode"] == "prompt-contents"
+        assert len(result["tasks"]) == 2
+        assert result["tasks"][0].output_filename == "result1.md"
+        assert result["tasks"][0].content == "Content 1"
+        assert result["tasks"][1].output_filename == "result2.md"
+        assert result["tasks"][1].content == "Content 2"
+
+    def test_load_prompt_contents_mixed_format(self, temp_dir):
+        """Test loading prompt-contents format with mixed string and dictionary formats."""
+        config_content = """
+prompt: "You are a helpful assistant"
+contents:
+  - "Content 1"
+  - output: "result2.md"
+    content: "Content 2"
+  - "Content 3"
+"""
+        config_file = temp_dir / "test_config.yml"
+        config_file.write_text(config_content)
+
+        result = BatchConfigLoader.load(str(config_file))
+
+        assert result["mode"] == "prompt-contents"
+        assert len(result["tasks"]) == 3
+        assert result["tasks"][0].output_filename is None
+        assert result["tasks"][0].content == "Content 1"
+        assert result["tasks"][1].output_filename == "result2.md"
+        assert result["tasks"][1].content == "Content 2"
+        assert result["tasks"][2].output_filename is None
+        assert result["tasks"][2].content == "Content 3"
+
+    def test_load_prompt_contents_output_filename_optional(self, temp_dir):
+        """Test that output filename is optional in dictionary format."""
+        config_content = """
+prompt: "You are a helpful assistant"
+contents:
+  - content: "Content 1"
+  - output: "result2.md"
+    content: "Content 2"
+"""
+        config_file = temp_dir / "test_config.yml"
+        config_file.write_text(config_content)
+
+        result = BatchConfigLoader.load(str(config_file))
+
+        assert result["mode"] == "prompt-contents"
+        assert len(result["tasks"]) == 2
+        assert result["tasks"][0].output_filename is None
+        assert result["tasks"][0].content == "Content 1"
+        assert result["tasks"][1].output_filename == "result2.md"
+        assert result["tasks"][1].content == "Content 2"
+
+    def test_load_prompt_contents_invalid_dict_format(self, temp_dir):
+        """Test error handling for invalid dictionary format."""
+        config_content = """
+prompt: "You are a helpful assistant"
+contents:
+  - output: "result1.md"
+"""
+        config_file = temp_dir / "test_config.yml"
+        config_file.write_text(config_content)
+
+        with pytest.raises(ValueError, match="missing required 'content' field"):
+            BatchConfigLoader.load(str(config_file))
+
+    def test_load_prompt_contents_invalid_content_type(self, temp_dir):
+        """Test error handling for invalid content item type."""
+        config_content = """
+prompt: "You are a helpful assistant"
+contents:
+  - 123
+"""
+        config_file = temp_dir / "test_config.yml"
+        config_file.write_text(config_content)
+
+        with pytest.raises(ValueError, match="must be either a string or a dictionary"):
+            BatchConfigLoader.load(str(config_file))

@@ -108,13 +108,33 @@ class BatchConfigLoader:
             # Create tasks
             tasks = []
             for idx, content_item in enumerate(contents):
-                if not isinstance(content_item, str):
-                    raise ValueError(f"Content item {idx} must be a string")
+                if isinstance(content_item, str):
+                    # Backward compatibility: string format
+                    output_filename = None
+                    content = content_item
+                elif isinstance(content_item, dict):
+                    # New format: dictionary format with output and content keys
+                    if "content" not in content_item:
+                        raise ValueError(f"Content item {idx} missing required 'content' field")
+                    content = content_item["content"]
+                    if not isinstance(content, str):
+                        raise ValueError(f"Content item {idx}: 'content' must be a string")
+                    output_filename = content_item.get("output")  # Optional field
+                    if output_filename is not None and not isinstance(output_filename, str):
+                        raise ValueError(
+                            f"Content item {idx}: 'output' must be a string if provided"
+                        )
+                else:
+                    raise ValueError(
+                        f"Content item {idx} must be either a string or a dictionary with 'content' field"
+                    )
+
                 tasks.append(
                     BatchTask(
                         task_id=idx + 1,
                         prompt=prompt,
-                        content=content_item,
+                        content=content,
+                        output_filename=output_filename,
                     )
                 )
 

@@ -422,3 +422,80 @@ class BatchResultExporter:
             exported_files.append(file_path)
 
         return exported_files
+
+    @classmethod
+    def export_split_files(
+        cls,
+        results: List[BatchResult],
+        output_dir: str,
+        batch_mode: Optional[str] = None,  # noqa: ARG003
+    ) -> List[str]:
+        """
+        Export each task result to a separate file.
+        File content contains only the LLM response.
+
+        Args:
+            results: List of batch results
+            output_dir: Output directory path
+            batch_mode: Batch mode (not used in split mode, kept for API consistency)
+
+        Returns:
+            List of exported file paths
+        """
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+
+        exported_files = []
+        filename_counter: Dict[str, int] = {}  # Track filename usage for conflict resolution
+
+        for idx, result in enumerate(results):
+            # Determine filename
+            if result.output_filename:
+                # Use configured output filename
+                filename = result.output_filename
+                # Sanitize filename: remove path separators and other dangerous characters
+                filename = filename.replace("/", "_").replace("\\", "_")
+                # Remove path traversal attempts (..)
+                filename = filename.replace("..", "_")
+                # Remove any leading/trailing dots and spaces
+                filename = filename.strip(". ")
+                if not filename:
+                    # Fallback if filename becomes empty after sanitization
+                    # Use index + 1 for user-friendly numbering (starts from 1)
+                    filename = f"task_{idx + 1}.md"
+            else:
+                # Generate default filename using index + 1 for user-friendly numbering (starts from 1)
+                filename = f"task_{idx + 1}.md"
+
+            # Ensure filename has .md extension if not specified
+            if not filename.endswith((".md", ".txt", ".markdown")):
+                filename = f"{filename}.md"
+
+            # Handle filename conflicts
+            if filename in filename_counter:
+                filename_counter[filename] += 1
+                base_name = Path(filename).stem
+                extension = Path(filename).suffix
+                filename = f"{base_name}_{filename_counter[filename]}{extension}"
+            else:
+                filename_counter[filename] = 0
+
+            # Create full file path
+            file_path = output_path / filename
+
+            # Write only the response content (if available)
+            if result.response:
+                FileHandler.write(str(file_path), result.response, force=True)
+                exported_files.append(str(file_path))
+                logger.debug(f"Exported task {result.task_id} to {file_path}")
+            else:
+                # If no response (failed task), create empty file or skip
+                # Option: create empty file to indicate task was processed
+                FileHandler.write(str(file_path), "", force=True)
+                exported_files.append(str(file_path))
+                logger.warning(
+                    f"Task {result.task_id} has no response, created empty file: {file_path}"
+                )
+
+        logger.info(f"Exported {len(exported_files)} files to {output_dir}")
+        return exported_files

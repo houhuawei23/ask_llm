@@ -6,7 +6,7 @@ A flexible command-line tool for calling multiple LLM APIs.
 
 import glob
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional
 
 import typer
 from loguru import logger
@@ -17,11 +17,17 @@ from ask_llm.config.loader import ConfigLoader
 from ask_llm.config.manager import ConfigManager
 from ask_llm.core.batch import GlobalBatchProcessor, ModelConfig
 from ask_llm.core.chat import ChatSession
+from ask_llm.core.md_heading_formatter import (
+    HeadingApplier,
+    HeadingExtractor,
+    HeadingFormatter,
+)
 from ask_llm.core.processor import RequestProcessor
 from ask_llm.core.text_splitter import TextSplitter
 from ask_llm.core.translator import Translator
 from ask_llm.utils.console import console
 from ask_llm.utils.file_handler import FileHandler
+from ask_llm.utils.notebook_translator import NotebookTranslator
 from ask_llm.utils.trans_config_loader import TransConfigLoader
 from ask_llm.utils.translation_exporter import TranslationExporter
 
@@ -613,6 +619,20 @@ def batch(
             help="Save results in separate files per model",
         ),
     ] = False,
+    split: Annotated[
+        bool,
+        typer.Option(
+            "--split",
+            help="Split results into separate files (one file per task, content only)",
+        ),
+    ] = False,
+    verbose: Annotated[
+        bool,
+        typer.Option(
+            "--verbose",
+            help="Enable verbose output with detailed API call information",
+        ),
+    ] = False,
 ) -> None:
     """
     Process batch tasks from YAML configuration file.
@@ -636,6 +656,12 @@ def batch(
         from ask_llm.utils.batch_exporter import BatchResultExporter
         from ask_llm.utils.batch_loader import BatchConfigLoader
         from ask_llm.utils.interactive_config import InteractiveConfigHelper
+
+        # Setup console with verbose mode
+        if verbose:
+            console.setup(quiet=False, debug=True)
+        else:
+            console.setup(quiet=False, debug=False)
 
         # Load batch configuration
         console.print_info(f"Loading batch configuration from: {config_file}")
@@ -725,6 +751,8 @@ def batch(
                 config_manager.apply_overrides(
                     model=model_config.model,
                     temperature=model_config.temperature,
+                    max_tokens=model_config.max_tokens,
+                    top_p=model_config.top_p,
                 )
 
                 provider_config_with_overrides = config_manager.get_provider_config()
@@ -780,10 +808,14 @@ def batch(
         for model_config in validated_models:
             for original_task in tasks:
                 # Create a new task with task_model_config attached
+                # Preserve original task_id for split mode filename generation
+                # Use a composite ID: (model_index * num_tasks + original_task_id) for unique identification
+                # But for split mode, we'll use original_task_id directly
                 global_task = BatchTask(
                     task_id=task_id_counter,
                     prompt=original_task.prompt,
                     content=original_task.content,
+                    output_filename=original_task.output_filename,  # Preserve output_filename
                     task_model_config=model_config,
                 )
                 global_tasks.append(global_task)
@@ -793,6 +825,7 @@ def batch(
         global_processor = GlobalBatchProcessor(
             max_workers=threads,
             max_retries=retries,
+            verbose=verbose,
         )
 
         all_results_list = global_processor.process_global_tasks(
@@ -842,6 +875,65 @@ def batch(
                 "No providers were successfully processed. Cannot generate results."
             )
             raise typer.Exit(1)
+
+        # Handle split mode: export each task to a separate file
+        if split:
+            # Combine all results from all models
+            combined_results = []
+            for results in all_results.values():
+                combined_results.extend(results)
+
+            # In split mode with multiple models, group results by original task
+            # and use the first result for each task
+            # Group by (prompt, content, output_filename) to identify original tasks
+            from collections import defaultdict
+
+            task_groups: dict[tuple[str, str, str | None], list] = defaultdict(list)
+            for result in combined_results:
+                task_key = (result.prompt, result.content, result.output_filename)
+                task_groups[task_key].append(result)
+
+            # Use the first result for each original task
+            # Sort by minimum task_id to maintain original order
+            # Since task_id is assigned sequentially (0, 1, 2, ...) for each model,
+            # we can recover original task index by: task_id % num_original_tasks
+            num_original_tasks = len(tasks)
+            combined_results = []
+            for task_key in sorted(
+                task_groups.keys(),
+                key=lambda k: min(r.task_id % num_original_tasks for r in task_groups[k]),
+            ):
+                # Use the first result (lowest task_id) for each original task
+                task_results = sorted(task_groups[task_key], key=lambda r: r.task_id)
+                combined_results.append(task_results[0])
+
+            # Determine output directory
+            if output:
+                output_dir = output
+                # Validate that output is a directory (not a file)
+                output_path_obj = Path(output_dir)
+                if output_path_obj.exists() and output_path_obj.is_file():
+                    console.print_error(
+                        f"Output path '{output_dir}' is a file. "
+                        "When using --split, output must be a directory."
+                    )
+                    raise typer.Exit(1)
+            else:
+                # Default output directory
+                config_file_path = Path(config_file)
+                output_dir = str(config_file_path.parent / "batch_output")
+
+            # Export split files
+            exported_files = BatchResultExporter.export_split_files(
+                combined_results, output_dir, batch_mode
+            )
+            console.print()
+            console.print_success(
+                f"Results exported to {len(exported_files)} files in: {output_dir}"
+            )
+            for file_path in exported_files:
+                console.print(f"  - {file_path}")
+            return
 
         # Export results
         if separate_files and len(validated_models) > 1:
@@ -913,6 +1005,69 @@ def batch(
         console.print_error(f"Unexpected error: {e}")
         logger.exception("Unexpected error in batch command")
         raise typer.Exit(1) from e
+
+
+def _process_notebook_translation(
+    file_path: str,
+    output: Optional[str],
+    trans_config: Any,
+    config_manager: Any,
+    final_provider: str,
+    final_model: str,
+    force: bool,
+    stream: bool,
+) -> None:
+    """Process .ipynb notebook translation (markdown cells only)."""
+    # Determine output path
+    if output:
+        output_path = output
+        if Path(output).is_dir():
+            input_file = Path(file_path)
+            output_name = f"{input_file.stem}_translated{input_file.suffix}"
+            output_path = str(Path(output) / output_name)
+    else:
+        output_path = FileHandler.generate_output_path(file_path, suffix="_translated")
+
+    output_file = Path(output_path)
+    if output_file.exists() and not force:
+        raise FileExistsError(
+            f"Output file already exists: {output_path}. Use --force to overwrite."
+        )
+
+    translator = Translator(
+        target_language=trans_config.target_language,
+        source_language=trans_config.source_language,
+        style=trans_config.style,
+        custom_prompt_template=trans_config.prompt_template,
+        prompt_file=trans_config.prompt_file,
+    )
+
+    model_config = ModelConfig(
+        provider=final_provider,
+        model=final_model,
+        temperature=trans_config.temperature,
+    )
+
+    notebook_translator = NotebookTranslator(
+        translator=translator,
+        model_config=model_config,
+        max_chunk_size=trans_config.max_chunk_size,
+    )
+
+    successful, failed = notebook_translator.translate_notebook(
+        input_path=file_path,
+        output_path=output_path,
+        config_manager=config_manager,
+        max_workers=trans_config.threads,
+        max_retries=trans_config.retries,
+        show_progress=not stream,
+    )
+
+    total = successful + failed
+    console.print_success(f"Translation saved to: {output_path}")
+    console.print(f"  Successful: {successful}/{total}")
+    if failed > 0:
+        console.print_warning(f"  Failed: {failed}/{total}")
 
 
 @app.command()
@@ -1030,12 +1185,14 @@ def trans(
     """
     Translate text files using LLM API.
 
-    Supports both plain text (.txt) and Markdown (.md) files.
+    Supports plain text (.txt), Markdown (.md), and Jupyter notebooks (.ipynb).
+    For .ipynb files: only markdown cells are translated, code cells are preserved.
     Uses intelligent text splitting to handle long documents.
 
     Examples:
         ask-llm trans document.txt
         ask-llm trans *.md -o translated/
+        ask-llm trans notebook.ipynb -o translated/
         ask-llm trans file.txt -t en -s zh --threads 10
         ask-llm trans doc.md -m gpt-4 --preserve-format
         ask-llm trans paper.md -p @prompts/tech-paper-trans.md
@@ -1116,16 +1273,36 @@ def trans(
             console.print()
             console.print(f"[bold]Processing: {file_path}[/bold]")
 
-            # Check file type
+            # Check file type (auto-detect by extension)
             file_type = TextSplitter.detect_file_type(file_path)
-            if file_type not in ("markdown", "text"):
+            if file_type not in ("markdown", "text", "notebook"):
                 console.print_warning(
                     f"Unsupported file type: {Path(file_path).suffix}. "
-                    f"Only .txt and .md files are supported. Skipping."
+                    f"Only .txt, .md, and .ipynb files are supported. Skipping."
                 )
                 continue
 
-            # Read file content
+            # Handle .ipynb notebook translation (markdown cells only, code cells preserved)
+            if file_type == "notebook":
+                try:
+                    _process_notebook_translation(
+                        file_path=file_path,
+                        output=output,
+                        trans_config=trans_config,
+                        config_manager=config_manager,
+                        final_provider=final_provider,
+                        final_model=final_model,
+                        force=force,
+                        stream=stream,
+                    )
+                except FileExistsError:
+                    console.print_error("Output file already exists. Use --force to overwrite.")
+                except Exception as e:
+                    console.print_error(f"Failed to translate notebook {file_path}: {e}")
+                    logger.exception("Notebook translation error")
+                continue
+
+            # Read file content (for .txt and .md)
             try:
                 content = FileHandler.read(file_path, show_progress=not stream)
             except Exception as e:
@@ -1254,6 +1431,294 @@ def trans(
     except Exception as e:
         console.print_error(f"Unexpected error: {e}")
         logger.exception("Unexpected error in trans command")
+        raise typer.Exit(1) from e
+
+
+@app.command()
+def format(
+    files: Annotated[
+        List[str],
+        typer.Argument(help="Input markdown file(s) to format (supports glob patterns)"),
+    ],
+    output: Annotated[
+        Optional[str],
+        typer.Option(
+            "--output",
+            "-o",
+            help="Output file or directory path (default: auto-generated)",
+        ),
+    ] = None,
+    config_path: Annotated[
+        Optional[str],
+        typer.Option(
+            "--config",
+            "-c",
+            help="Configuration file path",
+        ),
+    ] = None,
+    provider: Annotated[
+        Optional[str],
+        typer.Option(
+            "--provider",
+            "-a",
+            help="API provider to use",
+        ),
+    ] = None,
+    model: Annotated[
+        Optional[str],
+        typer.Option(
+            "--model",
+            "-m",
+            help="Model name to use",
+        ),
+    ] = None,
+    temperature: Annotated[
+        Optional[float],
+        typer.Option(
+            "--temperature",
+            "-t",
+            help="Sampling temperature (0.0-2.0)",
+            min=0.0,
+            max=2.0,
+        ),
+    ] = None,
+    force: Annotated[
+        bool,
+        typer.Option(
+            "--force",
+            "-f",
+            help="Overwrite existing output file",
+        ),
+    ] = False,
+    inplace: Annotated[
+        bool,
+        typer.Option(
+            "--inplace",
+            "-i",
+            help="Overwrite original file(s) in place instead of creating new file(s)",
+        ),
+    ] = False,
+    heading_batch_size: Annotated[
+        Optional[int],
+        typer.Option(
+            "--heading-batch-size",
+            help="Max headings per LLM API call (default 80). Reduce if output is truncated.",
+        ),
+    ] = None,
+    heading_concurrency: Annotated[
+        Optional[int],
+        typer.Option(
+            "--heading-concurrency",
+            help="Max concurrent API calls for heading batches (default 4). Set 1 to disable.",
+        ),
+    ] = None,
+    prompt_file: Annotated[
+        Optional[str],
+        typer.Option(
+            "--prompt",
+            "-p",
+            help="Path to prompt template file (supports @ prefix for project-relative paths, e.g., @prompts/md-heading-format.md)",
+        ),
+    ] = None,
+) -> None:
+    """
+    Format markdown heading hierarchy using LLM API.
+
+    Extracts all headings from markdown files, uses LLM to infer proper heading
+    levels based on numbering (1, 1.1, 1.1.1) or context, and applies the
+    formatted headings back to the original text.
+
+    Currently supports markdown (.md, .markdown) files only.
+
+    Examples:
+        ask-llm format document.md
+        ask-llm format *.md -o formatted/
+        ask-llm format doc.md --inplace
+        ask-llm format doc.md -m gpt-4 -o formatted.md
+        ask-llm format paper.md -p @prompts/md-heading-format.md
+    """
+    try:
+        # Load configuration
+        config = ConfigLoader.load(config_path)
+        config_manager = ConfigManager(config)
+
+        # Set provider and apply overrides
+        if provider:
+            config_manager.set_provider(provider)
+
+        config_manager.apply_overrides(
+            model=model,
+            temperature=temperature,
+        )
+
+        provider_config = config_manager.get_provider_config()
+
+        # Get default model
+        default_model = config_manager.get_model_override() or config_manager.get_default_model()
+
+        if not default_model:
+            console.print_error("No model specified. Use --model or configure default model.")
+            raise typer.Exit(1)
+
+        # Initialize provider
+        llm_provider = create_provider_adapter(provider_config, default_model=default_model)
+        processor = RequestProcessor(llm_provider)
+
+        # Resolve file patterns
+        resolved_files = []
+        for file_pattern in files:
+            matched_files = glob.glob(file_pattern)
+            if not matched_files:
+                # If no match, treat as literal file path
+                if Path(file_pattern).exists():
+                    resolved_files.append(file_pattern)
+                else:
+                    console.print_warning(f"File not found: {file_pattern}")
+            else:
+                resolved_files.extend(matched_files)
+
+        if not resolved_files:
+            console.print_error("No files found to format")
+            raise typer.Exit(1)
+
+        # Remove duplicates and sort
+        resolved_files = sorted(set(resolved_files))
+
+        console.print_info(f"Found {len(resolved_files)} file(s) to format")
+
+        # Process each file
+        successful_count = 0
+        failed_count = 0
+
+        for file_path in resolved_files:
+            console.print()
+            console.print(f"[bold]Processing: {file_path}[/bold]")
+
+            # Check file type
+            file_ext = Path(file_path).suffix.lower()
+            if file_ext not in (".md", ".markdown"):
+                console.print_warning(
+                    f"Unsupported file type: {file_ext}. "
+                    f"Only .md and .markdown files are supported. Skipping."
+                )
+                failed_count += 1
+                continue
+
+            # Read file content
+            try:
+                content = FileHandler.read(file_path, show_progress=False)
+            except Exception as e:
+                console.print_error(f"Failed to read file {file_path}: {e}")
+                failed_count += 1
+                continue
+
+            if not content.strip():
+                console.print_warning(f"File {file_path} is empty. Skipping.")
+                failed_count += 1
+                continue
+
+            # Extract headings
+            headings = HeadingExtractor.extract(content)
+
+            if not headings:
+                console.print_warning(f"No headings found in {file_path}. Skipping.")
+                failed_count += 1
+                continue
+
+            console.print_info(f"Found {len(headings)} heading(s)")
+
+            # Format headings using LLM
+            try:
+                # Use custom prompt file or default
+                default_prompt = prompt_file if prompt_file else "@prompts/md-heading-format.md"
+                formatter = HeadingFormatter(
+                    processor=processor,
+                    prompt_file=default_prompt,
+                    batch_size=heading_batch_size,
+                    concurrency=heading_concurrency,
+                )
+
+                formatted_headings = formatter.format_headings(headings)
+            except Exception as e:
+                console.print_error(f"Failed to format headings: {e}")
+                logger.exception("Heading formatting error")
+                failed_count += 1
+                continue
+
+            # Apply formatted headings
+            try:
+                applier = HeadingApplier()
+                formatted_content = applier.apply(content, headings, formatted_headings)
+            except Exception as e:
+                console.print_error(f"Failed to apply formatted headings: {e}")
+                logger.exception("Heading application error")
+                failed_count += 1
+                continue
+
+            # Determine output path
+            if inplace:
+                output_path = file_path
+            elif output:
+                output_path = output
+                # If output is a directory, create file-specific name
+                if Path(output).is_dir():
+                    input_file = Path(file_path)
+                    output_name = f"{input_file.stem}_formatted{input_file.suffix}"
+                    output_path = str(Path(output) / output_name)
+            else:
+                # Auto-generate output path
+                input_file = Path(file_path)
+                output_path = FileHandler.generate_output_path(file_path, suffix="_formatted")
+
+            # Write output
+            try:
+                output_file = Path(output_path)
+                # When inplace, always overwrite; otherwise check force
+                if output_file.exists() and not force and not inplace:
+                    raise FileExistsError(
+                        f"Output file already exists: {output_path}. Use --force to overwrite."
+                    )
+
+                FileHandler.write(output_path, formatted_content, force=force or inplace)
+                if inplace:
+                    console.print_success(f"Formatted in place: {output_path}")
+                else:
+                    console.print_success(f"Formatted markdown saved to: {output_path}")
+                console.print(f"  Formatted {len(headings)} heading(s)")
+                successful_count += 1
+
+            except FileExistsError:
+                console.print_error(
+                    f"Output file already exists: {output_path}. Use --force to overwrite."
+                )
+                failed_count += 1
+            except Exception as e:
+                console.print_error(f"Failed to write output file: {e}")
+                logger.exception("File write error")
+                failed_count += 1
+
+        # Summary
+        console.print()
+        if successful_count > 0:
+            console.print_success(f"Successfully formatted {successful_count} file(s)")
+        if failed_count > 0:
+            console.print_warning(f"Failed to format {failed_count} file(s)")
+
+    except FileNotFoundError as e:
+        console.print_error(str(e))
+        raise typer.Exit(1) from e
+    except ValueError as e:
+        console.print_error(str(e))
+        raise typer.Exit(1) from e
+    except RuntimeError as e:
+        console.print_error(f"API error: {e}")
+        raise typer.Exit(1) from e
+    except KeyboardInterrupt:
+        console.print("\nFormatting interrupted by user")
+        raise typer.Exit(1) from None
+    except Exception as e:
+        console.print_error(f"Unexpected error: {e}")
+        logger.exception("Unexpected error in format command")
         raise typer.Exit(1) from e
 
 

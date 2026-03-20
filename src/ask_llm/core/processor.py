@@ -53,6 +53,7 @@ class RequestProcessor:
         prompt_template: Optional[str] = None,
         temperature: Optional[float] = None,
         model: Optional[str] = None,
+        max_tokens: Optional[int] = None,
         stream: bool = False,
     ) -> Generator[str, None, None]:
         """
@@ -63,6 +64,7 @@ class RequestProcessor:
             prompt_template: Prompt template with {content} placeholder
             temperature: Sampling temperature
             model: Model name
+            max_tokens: Maximum number of tokens to generate
             stream: Whether to stream response
 
         Yields:
@@ -71,13 +73,18 @@ class RequestProcessor:
         prompt = self._format_prompt(content, prompt_template)
         logger.debug(f"Processing request with {len(prompt)} characters")
 
+        # Prepare kwargs for provider.call()
+        call_kwargs = {}
+        if max_tokens is not None:
+            call_kwargs["max_tokens"] = max_tokens
+
         if stream:
             yield from self.provider.call(
-                prompt=prompt, temperature=temperature, model=model, stream=True
+                prompt=prompt, temperature=temperature, model=model, stream=True, **call_kwargs
             )
         else:
             response = self.provider.call(
-                prompt=prompt, temperature=temperature, model=model, stream=False
+                prompt=prompt, temperature=temperature, model=model, stream=False, **call_kwargs
             )
             yield response
 

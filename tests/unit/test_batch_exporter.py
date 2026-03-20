@@ -163,3 +163,170 @@ class TestBatchResultExporter:
 
         assert len(exported_files) == 2
         assert all(Path(f).exists() for f in exported_files)
+
+    def test_export_split_files(self, temp_dir, sample_results, sample_statistics):
+        """Test exporting split files (one file per task)."""
+        # Modify sample results to have responses
+        sample_results[0].response = "Response 1"
+        sample_results[1].response = "Response 2"
+
+        exported_files = BatchResultExporter.export_split_files(
+            sample_results, str(temp_dir)
+        )
+
+        assert len(exported_files) == 2
+        assert all(Path(f).exists() for f in exported_files)
+
+        # Check file contents
+        file1 = Path(exported_files[0])
+        file2 = Path(exported_files[1])
+        assert file1.read_text() in ["Response 1", "Response 2"]
+        assert file2.read_text() in ["Response 1", "Response 2"]
+        assert file1.read_text() != file2.read_text()
+
+    def test_export_split_files_with_output_filename(self, temp_dir):
+        """Test split export with configured output filenames."""
+        model_config = ModelConfig(provider="test", model="test-model")
+        results = [
+            BatchResult(
+                task_id=1,
+                prompt="Prompt 1",
+                content="Content 1",
+                output_filename="result1.md",
+                model_settings=model_config,
+                response="Response 1",
+                status=TaskStatus.SUCCESS,
+            ),
+            BatchResult(
+                task_id=2,
+                prompt="Prompt 2",
+                content="Content 2",
+                output_filename="result2.md",
+                model_settings=model_config,
+                response="Response 2",
+                status=TaskStatus.SUCCESS,
+            ),
+        ]
+
+        exported_files = BatchResultExporter.export_split_files(results, str(temp_dir))
+
+        assert len(exported_files) == 2
+        exported_filenames = [Path(f).name for f in exported_files]
+        assert "result1.md" in exported_filenames
+        assert "result2.md" in exported_filenames
+
+        # Check file contents
+        for file_path in exported_files:
+            path = Path(file_path)
+            if path.name == "result1.md":
+                assert path.read_text() == "Response 1"
+            elif path.name == "result2.md":
+                assert path.read_text() == "Response 2"
+
+    def test_export_split_files_without_output_filename(self, temp_dir):
+        """Test split export with default filename generation."""
+        model_config = ModelConfig(provider="test", model="test-model")
+        results = [
+            BatchResult(
+                task_id=1,
+                prompt="Prompt 1",
+                content="Content 1",
+                output_filename=None,
+                model_settings=model_config,
+                response="Response 1",
+                status=TaskStatus.SUCCESS,
+            ),
+            BatchResult(
+                task_id=2,
+                prompt="Prompt 2",
+                content="Content 2",
+                output_filename=None,
+                model_settings=model_config,
+                response="Response 2",
+                status=TaskStatus.SUCCESS,
+            ),
+        ]
+
+        exported_files = BatchResultExporter.export_split_files(results, str(temp_dir))
+
+        assert len(exported_files) == 2
+        exported_filenames = [Path(f).name for f in exported_files]
+        assert "task_1.md" in exported_filenames
+        assert "task_2.md" in exported_filenames
+
+    def test_export_split_files_empty_response(self, temp_dir):
+        """Test split export with empty response (failed task)."""
+        model_config = ModelConfig(provider="test", model="test-model")
+        results = [
+            BatchResult(
+                task_id=1,
+                prompt="Prompt 1",
+                content="Content 1",
+                output_filename="result1.md",
+                model_settings=model_config,
+                response=None,
+                status=TaskStatus.FAILED,
+                error="Test error",
+            ),
+        ]
+
+        exported_files = BatchResultExporter.export_split_files(results, str(temp_dir))
+
+        assert len(exported_files) == 1
+        file_path = Path(exported_files[0])
+        assert file_path.exists()
+        assert file_path.read_text() == ""  # Empty file for failed task
+
+    def test_export_split_files_duplicate_filename(self, temp_dir):
+        """Test handling of duplicate output filenames."""
+        model_config = ModelConfig(provider="test", model="test-model")
+        results = [
+            BatchResult(
+                task_id=1,
+                prompt="Prompt 1",
+                content="Content 1",
+                output_filename="result.md",
+                model_settings=model_config,
+                response="Response 1",
+                status=TaskStatus.SUCCESS,
+            ),
+            BatchResult(
+                task_id=2,
+                prompt="Prompt 2",
+                content="Content 2",
+                output_filename="result.md",
+                model_settings=model_config,
+                response="Response 2",
+                status=TaskStatus.SUCCESS,
+            ),
+        ]
+
+        exported_files = BatchResultExporter.export_split_files(results, str(temp_dir))
+
+        assert len(exported_files) == 2
+        exported_filenames = [Path(f).name for f in exported_files]
+        assert "result.md" in exported_filenames
+        assert "result_1.md" in exported_filenames  # Second file should have suffix
+
+    def test_export_split_files_filename_sanitization(self, temp_dir):
+        """Test filename sanitization (removing dangerous characters)."""
+        model_config = ModelConfig(provider="test", model="test-model")
+        results = [
+            BatchResult(
+                task_id=1,
+                prompt="Prompt 1",
+                content="Content 1",
+                output_filename="../../result.md",  # Path traversal attempt
+                model_settings=model_config,
+                response="Response 1",
+                status=TaskStatus.SUCCESS,
+            ),
+        ]
+
+        exported_files = BatchResultExporter.export_split_files(results, str(temp_dir))
+
+        assert len(exported_files) == 1
+        file_path = Path(exported_files[0])
+        # Should sanitize path separators
+        assert ".." not in file_path.name
+        assert file_path.parent == temp_dir  # Should be in output dir, not parent

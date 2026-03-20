@@ -1,3 +1,5 @@
+**/.**
+
 # Python
 __pycache__/
 *.py[cod]
@@ -48,3 +50,6 @@ test/
 
 # .xxx
 **/.**/
+
+# Academic Extension Cache
+.vscode/academic-cache

@@ -1,0 +1,98 @@
+provider-models:
+  - provider: deepseek
+    models:
+      - model: deepseek-reasoner
+        max_tokens: 64000
+        temperature: 0.1
+        top_p: 0.1
+prompt: |
+  你是一位在人工智能、机器学习、深度学习及大语言模型领域具有深厚造诣的专家。你的核心专长在于：
+
+  1.  **精准定义**：能够以严谨、专业的学术语言，清晰界定概念、定理、模型架构与算法流程。
+  2.  **深入浅出**：善于将复杂的技术原理转化为层次分明、通俗易懂的解释，并辅以恰当的类比或实例。
+  3.  **结构化输出**：能够根据问题的性质，自主选择最合适的回答框架（如：定义-原理-应用-总结；或：问题拆解-逐步推导-结论归纳）。
+
+  **核心输出规范**
+
+  在回答中，你必须严格遵守以下格式要求：
+
+  **数学公式与符号**：
+
+  - **所有**数学公式、变量、运算符及技术符号**必须且只能**使用 LaTeX 格式呈现。
+  - **行内公式**使用单美元符号包围，例如：$y = \sigma(Wx + b)$。
+  - **独立公式块**使用双美元符号换行包围，例如：
+    $$
+    \mathcal{L}(\theta) = -\frac{1}{N} \sum_{i=1}^{N} \log P(y_i | x_i; \theta)
+    $$
+  - **严格禁止**：
+    - 使用反引号 ` 或任何其他非 LaTeX 方式包围公式。
+    - 直接使用 Unicode 或纯文本编码的数学符号（如 ∑、θ、≠ 等），这些也必须置于 `$...$` 内。
+
+  讲解知识时，要采用维基百科（wikipedia）的写作风格，包括：
+
+  - 序言：简要介绍学科背景、核心思想、主要内容与主要应用。
+  - 主要分支及其内容：每个分支的定义与主要内容概述。
+  - 发展历史与成果：早期历史、近代历史、近现代历史与成果
+  - 主要内容详述：每个主要分支的内容详述。
+    - 核心概念与定义
+    - 重要定理与公式
+    - 典型例子与应用
+  - 现代应用：现代应用与前沿研究。
+  - 相关书籍与参考文献
+  - 学习路线图与学习建议
+
+  我希望获得一份可靠、系统的参考资料，用于学术学习或教学。所以内容必须准确，结构清晰，涵盖从基础到前沿的各个方面。同时，例子和比喻能帮助消化抽象概念，增强实用性。
+
+  由于输出的内容为计算机科学与技术内容，请严格遵守计算机科学与技术领域的写作规范，引用真实准确的内容、人名、书籍、历史事件、理论、公式、定理、证明、例子、比喻等，不要胡乱编造内容，要确保内容的真实性和准确性。
+
+  要尽可能多地输出 token，讲解知识输出的内容要不少于 3 万字，详细内容介绍部分不少于 2 万字。
+
+  请严格遵守以上要求，开始回答问题或讲解知识。
+contents:
+  # LLM Agent
+  - output: LLM-Agent.md
+    content: 请为我深入、详细、系统全面地讲解介绍一下：LLM Agent
+  # - output: RFT-Reinforcement-Fine-Tuning.md
+  #   content: 请为我深入、详细、系统全面地讲解介绍一下：LLM RFT（Reinforcement Fine-Tuning）
+  # # RLHF
+  # - output: RLHF-Reinforcement-Learning-with-Human-Feedback.md
+  #   content: 请为我深入、详细、系统全面地讲解介绍一下：LLM RLHF（Reinforcement Learning with Human Feedback）
+  # # SFT
+  # - output: SFT-Supervised-Fine-Tuning.md
+  #   content: 请为我深入、详细、系统全面地讲解介绍一下：LLM SFT（Supervised Fine-Tuning）
+  # # PPO
+  # - output: PPO-Proximal-Policy-Optimization.md
+  #   content: 请为我深入、详细、系统全面地讲解介绍一下：LLM PPO（Proximal Policy Optimization）
+  # # DPO
+  # - output: DPO-Direct-Preference-Optimization.md
+  #   content: 请为我深入、详细、系统全面地讲解介绍一下：LLM DPO（Direct Preference Optimization）
+  # # PEFT
+  # - output: PEFT-Parameter-Efficient-Fine-Tuning.md
+  #   content: 请为我深入、详细、系统全面地讲解介绍一下：LLM PEFT（Parameter Efficient Fine-Tuning）
+
+  # - output: Machine-Learning.md
+  #   content: 请为我深入、详细、系统全面地讲解介绍一下：机器学习（Machine Learning）
+  # - output: Supervised-Learning.md
+  #   content: 请为我深入、详细、系统全面地讲解介绍一下：监督学习（Supervised Learning）
+  # - output: Unsupervised-Learning.md
+  #   content: 请为我深入、详细、系统全面地讲解介绍一下：无监督学习（Unsupervised Learning）
+  # - output: Semi-Supervised-Learning.md
+  #   content: 请为我深入、详细、系统全面地讲解介绍一下：半监督学习（Semi-Supervised Learning）
+  # - output: Reinforcement-Learning.md
+  #   content: 请为我深入、详细、系统全面地讲解介绍一下：强化学习（Reinforcement Learning）
+  # - output: Transfer-Learning.md
+  #   content: 请为我深入、详细、系统全面地讲解介绍一下：迁移学习（Transfer Learning）
+  # - output: Multi-Task-Learning.md
+  #   content: 请为我深入、详细、系统全面地讲解介绍一下：多任务学习（Multi-Task Learning）
+  # - output: Meta-Learning.md
+  #   content: 请为我深入、详细、系统全面地讲解介绍一下：元学习（Meta Learning）
+  # - output: Continual-Learning.md
+  #   content: 请为我深入、详细、系统全面地讲解介绍一下：持续学习（Continual Learning）
+  # - output: Multi-Modal-Learning.md
+  #   content: 请为我深入、详细、系统全面地讲解介绍一下：多模态学习（Multi-Modal Learning）
+  # - output: Self-Supervised-Learning.md
+  #   content: 请为我深入、详细、系统全面地讲解介绍一下：自监督学习（Self-Supervised Learning）
+  # - output: Adaptive-Learning.md
+  #   content: 请为我深入、详细、系统全面地讲解介绍一下：自适应学习（Adaptive Learning）
+  # - output: Active-Learning.md
+  #   content: 请为我深入、详细、系统全面地讲解介绍一下：主动学习（Active Learning）

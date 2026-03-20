@@ -233,6 +233,17 @@ Paragraph three.
         finally:
             Path(input_path).unlink()
 
+    def test_notebook_file_type_detection(self):
+        """Test notebook file type detection."""
+        with tempfile.NamedTemporaryFile(suffix=".ipynb", delete=False) as f:
+            temp_path = f.name
+
+        try:
+            file_type = TextSplitter.detect_file_type(temp_path)
+            assert file_type == "notebook"
+        finally:
+            Path(temp_path).unlink()
+
     def test_markdown_end_to_end(self):
         """Test end-to-end Markdown processing workflow."""
         markdown_content = """# Title

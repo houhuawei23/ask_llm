@@ -23,7 +23,7 @@ threads: 20
 retries: 3
 
 # Maximum chunk size in characters
-max_chunk_size: 8000
+max_chunk_size: 6000
 
 # API provider and model (optional, will use defaults from providers.yml if not set)
 # provider: deepseek

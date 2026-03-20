@@ -52,10 +52,12 @@ class TextSplitter(ABC):
             file_path: Path to file
 
         Returns:
-            File type ('markdown' or 'text')
+            File type ('markdown', 'text', or 'notebook')
         """
         path = Path(file_path)
         ext = path.suffix.lower()
+        if ext == ".ipynb":
+            return "notebook"
         if ext in (".md", ".markdown"):
             return "markdown"
         return "text"
