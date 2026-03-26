@@ -8,29 +8,18 @@ from loguru import logger
 from nbformat import NotebookNode
 
 from ask_llm.core.batch import BatchTask, GlobalBatchProcessor, ModelConfig
-from ask_llm.core.text_splitter import MarkdownSplitter
+from ask_llm.core.markdown_token_splitter import MarkdownTokenSplitter
+from ask_llm.core.text_splitter import TextChunk
 from ask_llm.core.translator import Translator
+from ask_llm.utils.chunk_balance import rebalance_translation_chunks
 
 
-def _split_markdown_cell(text: str, max_chunk_size: int) -> List[str]:
-    """
-    Split long markdown text into chunks for translation.
-
-    Args:
-        text: Markdown text to split
-        max_chunk_size: Maximum chunk size in characters
-
-    Returns:
-        List of text chunks
-    """
+def _split_markdown_cell_tokens(text: str, model: str, max_chunk_tokens: int) -> List[str]:
+    """Split long markdown cell text by token budget (structure-aware)."""
     if not text.strip():
         return []
-    if len(text) <= max_chunk_size:
-        return [text]
-
-    splitter = MarkdownSplitter(max_chunk_size=max_chunk_size)
-    chunks = splitter.split(text)
-    return [c.content for c in chunks]
+    splitter = MarkdownTokenSplitter(model, max_chunk_tokens)
+    return [c.content for c in splitter.split(text)]
 
 
 def _is_markdown_cell(cell: NotebookNode) -> bool:
@@ -49,19 +38,9 @@ class NotebookTranslator:
         self,
         translator: Translator,
         model_config: ModelConfig,
-        max_chunk_size: int = 2000,
     ):
-        """
-        Initialize notebook translator.
-
-        Args:
-            translator: Translator instance for generating prompts
-            model_config: Model configuration for API calls
-            max_chunk_size: Maximum chunk size for splitting long markdown cells
-        """
         self.translator = translator
         self.model_config = model_config
-        self.max_chunk_size = max_chunk_size
 
     def translate_notebook(
         self,
@@ -71,7 +50,11 @@ class NotebookTranslator:
         max_workers: int = 5,
         max_retries: int = 3,
         show_progress: bool = True,
-    ) -> Tuple[int, int]:
+        *,
+        balance_chunks: bool = True,
+        max_chunk_tokens: int = 2400,
+        min_chunk_merge_tokens: int = 400,
+    ) -> Tuple[int, int, int, int]:
         """
         Translate a Jupyter notebook.
 
@@ -82,9 +65,13 @@ class NotebookTranslator:
             max_workers: Number of concurrent workers
             max_retries: Maximum retry attempts
             show_progress: Whether to show progress
+            balance_chunks: Rebalance markdown sub-chunks by token estimate (per cell)
+            max_chunk_tokens: Token cap for splitting and rebalance
+            min_chunk_merge_tokens: Unused (API compat); rebalance merges greedily up to max_chunk_tokens
 
         Returns:
-            Tuple of (successful_count, failed_count)
+            Tuple of (successful_count, failed_count, total_input_tokens, total_output_tokens)
+            Token counts aggregate metadata from successful tasks only (same as batch statistics).
         """
         input_file = Path(input_path)
         if not input_file.exists():
@@ -97,7 +84,8 @@ class NotebookTranslator:
             notebook = nbformat.read(f, as_version=4)
 
         # Build translation tasks: (cell_index, chunk_content) for markdown cells
-        tasks_data: List[Tuple[int, str]] = []  # (cell_index, chunk_content)
+        tasks_data: List[Tuple[int, str]] = []
+        model = self.model_config.model
         for i, cell in enumerate(notebook.cells):
             if not _is_markdown_cell(cell):
                 continue
@@ -107,9 +95,20 @@ class NotebookTranslator:
             if not original_text.strip():
                 continue
 
-            chunks = _split_markdown_cell(original_text, self.max_chunk_size)
-            for chunk in chunks:
-                tasks_data.append((i, chunk))
+            raw_chunks = _split_markdown_cell_tokens(original_text, model, max_chunk_tokens)
+            tmp_chunks = [
+                TextChunk(content=s, chunk_id=j, start_pos=0, end_pos=len(s), metadata={})
+                for j, s in enumerate(raw_chunks)
+            ]
+            balanced = rebalance_translation_chunks(
+                tmp_chunks,
+                model,
+                max_chunk_tokens=max_chunk_tokens,
+                min_merge_tokens=min_chunk_merge_tokens,
+                enabled=balance_chunks,
+            )
+            for part in balanced:
+                tasks_data.append((i, part.content))
 
         if not tasks_data:
             logger.info("No markdown cells to translate")
@@ -117,7 +116,7 @@ class NotebookTranslator:
             output_file.parent.mkdir(parents=True, exist_ok=True)
             with open(output_path, "w", encoding="utf-8") as f:
                 nbformat.write(notebook, f)
-            return 0, 0
+            return 0, 0, 0, 0
 
         # Create BatchTasks
         tasks: List[BatchTask] = []
@@ -140,7 +139,6 @@ class NotebookTranslator:
         results = processor.process_global_tasks(tasks, config_manager, show_progress=show_progress)
 
         # Build cell_index -> list of translated chunks (in order)
-        # tasks_data[task_id] = (cell_index, chunk_content)
         result_map = {r.task_id: r for r in results}
         cell_translations: Dict[int, List[str]] = {}
         for task_id, (cell_idx, _) in enumerate(tasks_data):
@@ -148,7 +146,6 @@ class NotebookTranslator:
             if result and result.response and result.status.value == "success":
                 translated = result.response.strip()
             else:
-                # On failure, keep original
                 translated = tasks_data[task_id][1]
                 logger.warning(f"Translation failed for cell {cell_idx} chunk, keeping original")
 
@@ -187,7 +184,10 @@ class NotebookTranslator:
 
         successful = sum(1 for r in results if r.status.value == "success")
         failed = len(results) - successful
+        ok = [r for r in results if r.status.value == "success" and r.metadata]
+        total_in = sum(r.metadata.input_tokens for r in ok if r.metadata)
+        total_out = sum(r.metadata.output_tokens for r in ok if r.metadata)
         logger.info(f"Translated notebook saved to: {output_path}")
         logger.info(f"Statistics: {successful} chunks translated, {failed} failed")
 
-        return successful, failed
+        return successful, failed, total_in, total_out

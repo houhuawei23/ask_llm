@@ -24,7 +24,7 @@ class TestTranslationConfig:
         assert config.threads == 20
         assert config.max_parallel_files == 3
         assert config.retries == 3
-        assert config.max_chunk_size == 2000
+        assert config.max_chunk_tokens == 2400
 
     def test_custom_config(self):
         """Test custom configuration."""
@@ -34,14 +34,14 @@ class TestTranslationConfig:
             style="casual",
             threads=10,
             retries=5,
-            max_chunk_size=3000,
+            max_chunk_tokens=3200,
         )
         assert config.target_language == "en"
         assert config.source_language == "zh"
         assert config.style == "casual"
         assert config.threads == 10
         assert config.retries == 5
-        assert config.max_chunk_size == 3000
+        assert config.max_chunk_tokens == 3200
 
 
 class TestUnifiedConfig:
@@ -72,7 +72,7 @@ class TestUnifiedConfig:
         assert config.translation.style == "casual"
         assert config.translation.threads == 10
         assert config.translation.retries == 5
-        assert config.translation.max_chunk_size == 3000
+        assert config.translation.max_chunk_tokens == 2400
 
     def test_from_dict_with_project_root_markers(self):
         """Test from_dict with project root markers."""

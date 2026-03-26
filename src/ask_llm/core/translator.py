@@ -10,6 +10,7 @@ from ask_llm.config.context import get_config
 from ask_llm.core.batch import BatchTask, ModelConfig
 from ask_llm.core.text_splitter import TextChunk
 from ask_llm.utils.file_handler import FileHandler
+from ask_llm.utils.token_counter import TokenCounter
 
 
 class TranslationStyle(str, Enum):
@@ -100,6 +101,24 @@ class Translator:
         prompt = prompt.replace("{content}", content)
 
         return prompt
+
+    def count_prompt_template_tokens(self, model: str) -> int:
+        """
+        Tiktoken count of the instruction-only part: template with language placeholders
+        filled and ``{content}`` removed (same substitution rules as ``generate_prompt``).
+        """
+        if self.custom_prompt_template:
+            template = self.custom_prompt_template
+        else:
+            template = self.PROMPT_TEMPLATES.get(self.style, self.DEFAULT_TEMPLATE)
+        source_lang = self._format_language_name(self.source_language)
+        target_lang = self._format_language_name(self.target_language)
+        static = (
+            template.replace("{source_lang}", source_lang)
+            .replace("{target_lang}", target_lang)
+            .replace("{content}", "")
+        )
+        return TokenCounter.count_tokens(static, model)
 
     def create_translation_tasks(
         self, chunks: list[TextChunk], model_config: ModelConfig

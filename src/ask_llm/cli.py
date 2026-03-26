@@ -8,7 +8,7 @@ import glob
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Tuple
 
 import typer
 from loguru import logger
@@ -20,6 +20,7 @@ from ask_llm.config.loader import ConfigLoader
 from ask_llm.config.manager import ConfigManager
 from ask_llm.core.batch import GlobalBatchProcessor, ModelConfig
 from ask_llm.core.chat import ChatSession
+from ask_llm.core.markdown_token_splitter import MarkdownTokenSplitter
 from ask_llm.core.md_heading_formatter import (
     HeadingApplier,
     HeadingExtractor,
@@ -28,9 +29,11 @@ from ask_llm.core.md_heading_formatter import (
 from ask_llm.core.processor import RequestProcessor
 from ask_llm.core.text_splitter import TextSplitter
 from ask_llm.core.translator import Translator
+from ask_llm.utils.chunk_balance import plain_text_chunks_by_tokens, rebalance_translation_chunks
 from ask_llm.utils.console import console
 from ask_llm.utils.file_handler import FileHandler
 from ask_llm.utils.notebook_translator import NotebookTranslator
+from ask_llm.utils.pricing import format_cost_estimate, load_providers_pricing
 from ask_llm.utils.translation_exporter import TranslationExporter
 
 # Import from llm_engine
@@ -709,6 +712,7 @@ def batch(
         from ask_llm.utils.batch_exporter import BatchResultExporter
         from ask_llm.utils.batch_loader import BatchConfigLoader
         from ask_llm.utils.interactive_config import InteractiveConfigHelper
+        from ask_llm.utils.pricing import format_cost_estimate, load_providers_pricing
 
         # Setup console with verbose mode
         if verbose:
@@ -720,6 +724,7 @@ def batch(
         load_result = ConfigLoader.load(config_path)
         set_config(load_result)
         batch_cfg = load_result.unified_config.batch
+        pricing_map, pricing_source = load_providers_pricing(None)
         effective_threads = threads if threads is not None else batch_cfg.threads
         effective_retries = retries if retries is not None else batch_cfg.retries
 
@@ -920,6 +925,18 @@ def batch(
                 console.print(
                     f"  Total Tokens: {statistics.total_input_tokens + statistics.total_output_tokens:,}"
                 )
+                parts = model_key.split("/", 1)
+                prov, mod = parts[0], parts[1] if len(parts) > 1 else ""
+                console.print(
+                    format_cost_estimate(
+                        prov,
+                        mod,
+                        statistics.total_input_tokens,
+                        statistics.total_output_tokens,
+                        pricing_map,
+                        pricing_source=pricing_source,
+                    )
+                )
 
         # Display summary of skipped providers
         if skipped_providers:
@@ -1112,8 +1129,10 @@ def _process_notebook_translation(
     final_model: str,
     force: bool,
     stream: bool,
-) -> None:
-    """Process .ipynb notebook translation (markdown cells only)."""
+    pricing_map: Any,
+    pricing_source: Any,
+) -> Optional[Tuple[int, int]]:
+    """Process .ipynb notebook translation (markdown cells only). Returns (input_tokens, output_tokens) if any."""
     # Determine output path
     if output:
         output_path = output
@@ -1149,16 +1168,18 @@ def _process_notebook_translation(
     notebook_translator = NotebookTranslator(
         translator=translator,
         model_config=model_config,
-        max_chunk_size=trans_config.max_chunk_size,
     )
 
-    successful, failed = notebook_translator.translate_notebook(
+    successful, failed, total_in, total_out = notebook_translator.translate_notebook(
         input_path=file_path,
         output_path=output_path,
         config_manager=config_manager,
         max_workers=trans_config.threads,
         max_retries=trans_config.retries,
         show_progress=not stream,
+        balance_chunks=trans_config.balance_translation_chunks,
+        max_chunk_tokens=trans_config.max_chunk_tokens,
+        min_chunk_merge_tokens=trans_config.min_chunk_merge_tokens,
     )
 
     total = successful + failed
@@ -1166,6 +1187,17 @@ def _process_notebook_translation(
     console.print(f"  Successful: {successful}/{total}")
     if failed > 0:
         console.print_warning(f"  Failed: {failed}/{total}")
+    console.print(
+        format_cost_estimate(
+            final_provider,
+            final_model,
+            total_in,
+            total_out,
+            pricing_map,
+            pricing_source=pricing_source,
+        )
+    )
+    return (total_in, total_out)
 
 
 @app.command()
@@ -1281,6 +1313,29 @@ def trans(
             help="Path to prompt template file (supports @ prefix for project-relative paths, e.g., @prompts/tech-paper-trans.md)",
         ),
     ] = None,
+    providers_pricing: Annotated[
+        Optional[str],
+        typer.Option(
+            "--providers-pricing",
+            help="Path to providers.yml (pricing_per_million_tokens). "
+            "Default search: ASK_LLM_PROVIDERS_YML, ./providers.yml, package root, ~/.config/ask_llm/providers.yml",
+        ),
+    ] = None,
+    no_balance_chunks: Annotated[
+        bool,
+        typer.Option(
+            "--no-balance-chunks",
+            help="Disable token-based chunk rebalancing (structure-only splitting)",
+        ),
+    ] = False,
+    max_chunk_tokens: Annotated[
+        Optional[int],
+        typer.Option(
+            "--max-chunk-tokens",
+            help="Max estimated body tokens per chunk after rebalance (default: config)",
+            min=256,
+        ),
+    ] = None,
 ) -> None:
     """
     Translate text files using LLM API.
@@ -1306,6 +1361,15 @@ def trans(
         app_config = load_result.app_config
         trans_cfg = load_result.unified_config.translation
 
+        pricing_map, pricing_source = load_providers_pricing(providers_pricing)
+        if pricing_source:
+            console.print_info(f"API pricing loaded from: {pricing_source}")
+        else:
+            console.print_info(
+                "No providers.yml with pricing found; token counts will still be shown, "
+                "cost estimate unavailable (add pricing_per_million_tokens or use --providers-pricing)"
+            )
+
         # Build trans config from default_config.yml, override with CLI
         effective_threads = threads if threads is not None else trans_cfg.max_concurrent_api_calls
         effective_max_parallel = (
@@ -1318,7 +1382,12 @@ def trans(
             threads=effective_threads,
             max_parallel_files=effective_max_parallel,
             retries=retries if retries is not None else trans_cfg.retries,
-            max_chunk_size=trans_cfg.max_chunk_size,
+            balance_translation_chunks=trans_cfg.balance_translation_chunks
+            and not no_balance_chunks,
+            max_chunk_tokens=max_chunk_tokens
+            if max_chunk_tokens is not None
+            else trans_cfg.max_chunk_tokens,
+            min_chunk_merge_tokens=trans_cfg.min_chunk_merge_tokens,
             preserve_format=preserve_format,
             include_original=trans_cfg.include_original,
             provider=provider,
@@ -1370,8 +1439,8 @@ def trans(
                 f"Processing with max {trans_config.max_parallel_files} file(s) in parallel"
             )
 
-        def _process_one_file(file_path: str) -> None:
-            """Process a single file (md, txt, or ipynb)."""
+        def _process_one_file(file_path: str) -> Optional[Tuple[int, int]]:
+            """Process a single file (md, txt, or ipynb). Returns (input_tokens, output_tokens) for session total."""
             console.print()
             console.print(f"[bold]Processing: {file_path}[/bold]")
 
@@ -1382,12 +1451,12 @@ def trans(
                     f"Unsupported file type: {Path(file_path).suffix}. "
                     f"Only .txt, .md, and .ipynb files are supported. Skipping."
                 )
-                return
+                return None
 
             # Handle .ipynb notebook translation (markdown cells only, code cells preserved)
             if file_type == "notebook":
                 try:
-                    _process_notebook_translation(
+                    return _process_notebook_translation(
                         file_path=file_path,
                         output=output,
                         trans_config=trans_config,
@@ -1396,36 +1465,56 @@ def trans(
                         final_model=final_model,
                         force=force,
                         stream=stream,
+                        pricing_map=pricing_map,
+                        pricing_source=pricing_source,
                     )
                 except FileExistsError:
                     console.print_error("Output file already exists. Use --force to overwrite.")
                 except Exception as e:
                     console.print_error(f"Failed to translate notebook {file_path}: {e}")
                     logger.exception("Notebook translation error")
-                return
+                return None
 
             # Read file content (for .txt and .md)
             try:
                 content = FileHandler.read(file_path, show_progress=not stream)
             except Exception as e:
                 console.print_error(f"Failed to read file {file_path}: {e}")
-                return
+                return None
 
             if not content.strip():
                 console.print_warning(f"File {file_path} is empty. Skipping.")
-                return
+                return None
 
-            # Split text into chunks
-            splitter = TextSplitter.create_splitter(
-                file_path, max_chunk_size=trans_config.max_chunk_size
-            )
-            chunks = splitter.split(content)
+            # Split by token budget (structure-aware for Markdown)
+            if TextSplitter.detect_file_type(file_path) == "markdown":
+                chunks = MarkdownTokenSplitter(final_model, trans_config.max_chunk_tokens).split(
+                    content
+                )
+            else:
+                chunks = plain_text_chunks_by_tokens(
+                    content, final_model, trans_config.max_chunk_tokens
+                )
 
             if not chunks:
                 console.print_warning(f"No chunks created from {file_path}. Skipping.")
-                return
+                return None
 
-            console.print_info(f"Split into {len(chunks)} chunk(s)")
+            n_before = len(chunks)
+            chunks = rebalance_translation_chunks(
+                chunks,
+                final_model,
+                max_chunk_tokens=trans_config.max_chunk_tokens,
+                min_merge_tokens=trans_config.min_chunk_merge_tokens,
+                enabled=trans_config.balance_translation_chunks,
+            )
+            if len(chunks) != n_before:
+                console.print_info(
+                    f"Token rebalance: {n_before} -> {len(chunks)} chunk(s) "
+                    f"(cap ≈ {trans_config.max_chunk_tokens} tokens)"
+                )
+            else:
+                console.print_info(f"Split into {len(chunks)} chunk(s)")
 
             # Create translator
             translator = Translator(
@@ -1512,6 +1601,25 @@ def trans(
                 if failed_count > 0:
                     console.print_warning(f"  Failed: {failed_count}/{len(results)}")
 
+                by_model = processor.calculate_statistics(results)
+                model_key = f"{final_provider}/{final_model}"
+                st = by_model.get(model_key)
+                if st is None and by_model:
+                    st = next(iter(by_model.values()))
+                total_in = st.total_input_tokens if st else 0
+                total_out = st.total_output_tokens if st else 0
+                console.print(
+                    format_cost_estimate(
+                        final_provider,
+                        final_model,
+                        total_in,
+                        total_out,
+                        pricing_map,
+                        pricing_source=pricing_source,
+                    )
+                )
+                return (total_in, total_out)
+
             except FileExistsError:
                 console.print_error(
                     f"Output file already exists: {output_path}. Use --force to overwrite."
@@ -1519,21 +1627,62 @@ def trans(
             except Exception as e:
                 console.print_error(f"Failed to export translation: {e}")
                 logger.exception("Export error")
+            return None
+
+        prompt_preview = Translator(
+            target_language=trans_config.target_language,
+            source_language=trans_config.source_language,
+            style=trans_config.style,
+            custom_prompt_template=trans_config.prompt_template,
+            prompt_file=trans_config.prompt_file,
+        )
+        prompt_template_tokens = prompt_preview.count_prompt_template_tokens(final_model)
+        pf = trans_config.prompt_file
+        if pf:
+            prompt_label = pf if pf.startswith("@") else str(Path(pf).expanduser().name)
+        else:
+            prompt_label = f"内置样式 ({trans_config.style})"
+        console.print_info(
+            f"提示词模板「{prompt_label}」指令部分(已替换语言占位、不含待译正文)≈ "
+            f"{prompt_template_tokens} tokens (tiktoken · {final_model})"
+        )
 
         # Run file processing (sequential or parallel)
+        session_in = 0
+        session_out = 0
         if trans_config.max_parallel_files <= 1:
             for file_path in resolved_files:
-                _process_one_file(file_path)
+                usage = _process_one_file(file_path)
+                if usage:
+                    session_in += usage[0]
+                    session_out += usage[1]
         else:
             with ThreadPoolExecutor(max_workers=trans_config.max_parallel_files) as executor:
                 futures = {executor.submit(_process_one_file, fp): fp for fp in resolved_files}
                 for future in as_completed(futures):
                     try:
-                        future.result()
+                        usage = future.result()
+                        if usage:
+                            session_in += usage[0]
+                            session_out += usage[1]
                     except Exception as e:
                         file_path = futures[future]
                         console.print_error(f"Failed to translate {file_path}: {e}")
                         logger.exception("Translation error")
+
+        if len(resolved_files) > 1:
+            console.print()
+            console.print("[bold]Session total (all files)[/bold]")
+            console.print(
+                format_cost_estimate(
+                    final_provider,
+                    final_model,
+                    session_in,
+                    session_out,
+                    pricing_map,
+                    pricing_source=pricing_source,
+                )
+            )
 
     except FileNotFoundError as e:
         console.print_error(str(e))

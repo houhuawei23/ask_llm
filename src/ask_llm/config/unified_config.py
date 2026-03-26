@@ -2,7 +2,8 @@
 
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from loguru import logger
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class GeneralConfig(BaseModel):
@@ -24,6 +25,8 @@ class GeneralConfig(BaseModel):
 
 class TranslationConfig(BaseModel):
     """Translation default configuration."""
+
+    model_config = ConfigDict(extra="ignore")
 
     target_language: str = Field(default="zh", description="Target language code")
     source_language: str = Field(
@@ -53,10 +56,20 @@ class TranslationConfig(BaseModel):
         description="Max concurrent LLM API calls per file (alias for threads)",
     )
     retries: int = Field(default=3, ge=0, le=10, description="Maximum retry attempts")
-    max_chunk_size: int = Field(
-        default=2000,
-        gt=0,
-        description="Maximum chunk size in characters",
+    balance_translation_chunks: bool = Field(
+        default=True,
+        description="Re-split/merge chunks by estimated tokens for more uniform parallel API cost",
+    )
+    max_chunk_tokens: int = Field(
+        default=2400,
+        gt=256,
+        le=128000,
+        description="Target max body tokens per translation request after rebalance (tiktoken estimate)",
+    )
+    min_chunk_merge_tokens: int = Field(
+        default=400,
+        ge=0,
+        description="Deprecated: rebalance merge is greedy up to max_chunk_tokens; value ignored (kept for YAML compat)",
     )
     preserve_format: bool = Field(
         default=True,
@@ -219,9 +232,15 @@ class UnifiedConfig(BaseModel):
         Returns:
             UnifiedConfig instance with defaults for missing sections
         """
+        trans_raw = data.get("translation") or {}
+        if isinstance(trans_raw, dict) and trans_raw.get("max_chunk_size") is not None:
+            logger.warning(
+                "translation.max_chunk_size is deprecated and ignored; splitting uses "
+                "max_chunk_tokens (tiktoken). Remove max_chunk_size from your YAML."
+            )
         return cls(
             general=GeneralConfig(**(data.get("general") or {})),
-            translation=TranslationConfig(**(data.get("translation") or {})),
+            translation=TranslationConfig(**trans_raw),
             batch=BatchConfig(**(data.get("batch") or {})),
             file=FileConfig(**(data.get("file") or {})),
             format_heading=FormatHeadingConfig(**(data.get("format_heading") or {})),

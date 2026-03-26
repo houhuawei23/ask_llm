@@ -30,7 +30,9 @@ ENV_TO_CONFIG: ClassVar[Dict[str, Tuple[str, ...]]] = {
         "max_concurrent_api_calls",
     ),
     "ASK_LLM_TRANSLATION_RETRIES": ("translation", "retries"),
-    "ASK_LLM_TRANSLATION_MAX_CHUNK_SIZE": ("translation", "max_chunk_size"),
+    "ASK_LLM_TRANSLATION_BALANCE_CHUNK_TOKENS": ("translation", "balance_translation_chunks"),
+    "ASK_LLM_TRANSLATION_MAX_CHUNK_TOKENS": ("translation", "max_chunk_tokens"),
+    "ASK_LLM_TRANSLATION_MIN_CHUNK_MERGE_TOKENS": ("translation", "min_chunk_merge_tokens"),
     "ASK_LLM_TRANSLATION_PRESERVE_FORMAT": ("translation", "preserve_format"),
     "ASK_LLM_TRANSLATION_INCLUDE_ORIGINAL": ("translation", "include_original"),
     "ASK_LLM_TRANSLATION_TEMPERATURE": ("translation", "temperature"),
@@ -48,11 +50,22 @@ def _parse_env_value(value: str, key_path: Tuple[str, ...]) -> Any:
     if value.lower() in ("null", "none", ""):
         return None
     last_key = key_path[-1].lower()
-    if "threads" in last_key or "retries" in last_key or "max_chunk_size" in last_key:
+    if (
+        "threads" in last_key
+        or "retries" in last_key
+        or "max_chunk_size" in last_key
+        or "max_chunk_tokens" in last_key
+        or "min_chunk_merge_tokens" in last_key
+    ):
         return int(value)
     if "retry_delay" in last_key or "temperature" in last_key:
         return float(value)
-    if "preserve_format" in last_key or "include_original" in last_key or "recursive" in last_key:
+    if (
+        "preserve_format" in last_key
+        or "include_original" in last_key
+        or "recursive" in last_key
+        or "balance_translation_chunks" in last_key
+    ):
         return value.lower() in ("true", "1", "yes")
     return value
 
@@ -86,6 +99,12 @@ def _set_nested(data: Dict[str, Any], path: Tuple[str, ...], value: Any) -> None
 def _apply_env_overrides(data: Dict[str, Any]) -> Dict[str, Any]:
     """Apply ASK_LLM_* environment variable overrides to config data."""
     result = copy.deepcopy(data)
+    legacy_chunk = os.getenv("ASK_LLM_TRANSLATION_MAX_CHUNK_SIZE")
+    if legacy_chunk is not None and legacy_chunk != "":
+        logger.warning(
+            "ASK_LLM_TRANSLATION_MAX_CHUNK_SIZE is deprecated and ignored; use "
+            "ASK_LLM_TRANSLATION_MAX_CHUNK_TOKENS for token-based chunking."
+        )
     for env_var, key_path in ENV_TO_CONFIG.items():
         env_val = os.getenv(env_var)
         if env_val is not None and env_val != "":

@@ -50,6 +50,28 @@ class BatchTask(BaseModel):
     ] = None  # Optional for backward compatibility (renamed from model_config to avoid Pydantic reserved keyword)
 
 
+def sort_batch_tasks_by_estimated_input(
+    tasks: List[BatchTask],
+    default_model: str,
+) -> List[BatchTask]:
+    """
+    Sort tasks by descending estimated full prompt tokens.
+
+    When concurrent workers are fewer than tasks, heavy requests start earlier and reduce
+    wall-clock tail latency.
+    """
+
+    def _estimate(t: BatchTask) -> int:
+        model = t.task_model_config.model if t.task_model_config else default_model
+        if "{content}" in t.prompt:
+            full = t.prompt.replace("{content}", t.content)
+        else:
+            full = f"{t.prompt}\n\n{t.content}"
+        return int(TokenCounter.estimate_tokens(full, model)["token_count"])
+
+    return sorted(tasks, key=_estimate, reverse=True)
+
+
 class BatchResult(BaseModel):
     """Result of a batch processing task."""
 
@@ -268,7 +290,7 @@ class BatchProcessor:
             List of batch results
         """
         results: List[BatchResult] = []
-        pending_tasks = tasks.copy()
+        pending_tasks = sort_batch_tasks_by_estimated_input(tasks.copy(), self.model_config.model)
 
         # Create progress display with multiple tasks
         if show_progress:
@@ -301,7 +323,7 @@ class BatchProcessor:
 
             # Create a progress task for each batch task
             task_to_progress_id: Dict[int, TaskID] = {}
-            for task in tasks:
+            for task in pending_tasks:
                 progress_id = progress.add_task(
                     f"Task {task.task_id}: Waiting...",
                     total=100,  # Use 100 as total for percentage display
@@ -551,6 +573,8 @@ class GlobalBatchProcessor:
             status=TaskStatus.PROCESSING,
             retry_count=retry_count,
         )
+        body_tokens = TokenCounter.count_tokens(task.content, model_config.model)
+        progress_tokens = f"body≈{body_tokens} prompt≈{display_input_tokens}"
 
         try:
             # Create provider for this task
@@ -565,6 +589,7 @@ class GlobalBatchProcessor:
             input_token_count = input_stats["token_count"]
             # Use provided input_tokens if available, otherwise use calculated value
             display_input_tokens = input_tokens if input_tokens is not None else input_token_count
+            progress_tokens = f"body≈{body_tokens} prompt≈{display_input_tokens}"
 
             # Log detailed API call information in verbose mode
             if self.verbose:
@@ -590,7 +615,7 @@ class GlobalBatchProcessor:
             if progress and progress_task_id is not None:
                 progress.update(
                     progress_task_id,
-                    description=f"{model_key} Task {task.task_id} ({display_input_tokens} tokens): Processing...",
+                    description=f"{model_key} Task {task.task_id} ({progress_tokens} tokens): Processing...",
                 )
 
             # Stream response
@@ -612,7 +637,7 @@ class GlobalBatchProcessor:
                 if progress and progress_task_id is not None:
                     progress.update(
                         progress_task_id,
-                        description=f"{model_key} Task {task.task_id} ({display_input_tokens} tokens): {output_token_count} tokens",
+                        description=f"{model_key} Task {task.task_id} ({progress_tokens} tokens): {output_token_count} out",
                     )
 
             response = "".join(response_parts)
@@ -649,7 +674,7 @@ class GlobalBatchProcessor:
             if progress and progress_task_id is not None:
                 progress.update(
                     progress_task_id,
-                    description=f"{model_key} Task {task.task_id} ({display_input_tokens} tokens): ✓ Complete ({output_token_count} tokens)",
+                    description=f"{model_key} Task {task.task_id} ({progress_tokens} tokens): ✓ Complete ({output_token_count} out)",
                     completed=100,
                 )
 
@@ -675,7 +700,7 @@ class GlobalBatchProcessor:
             if progress and progress_task_id is not None:
                 progress.update(
                     progress_task_id,
-                    description=f"{model_key} Task {task.task_id} ({display_input_tokens} tokens): ✗ Failed",
+                    description=f"{model_key} Task {task.task_id} ({progress_tokens} tokens): ✗ Failed",
                     completed=100,
                 )
 
@@ -722,7 +747,12 @@ class GlobalBatchProcessor:
             List of batch results
         """
         results: List[BatchResult] = []
-        pending_tasks = tasks.copy()
+        default_model = (
+            tasks[0].task_model_config.model
+            if tasks and tasks[0].task_model_config
+            else "gpt-3.5-turbo"
+        )
+        pending_tasks = sort_batch_tasks_by_estimated_input(tasks.copy(), default_model)
 
         # Create progress display with multiple tasks
         if show_progress:
@@ -755,7 +785,7 @@ class GlobalBatchProcessor:
             # Create a progress task for each batch task
             task_to_progress_id: Dict[int, TaskID] = {}
             task_to_input_tokens: Dict[int, int] = {}
-            for task in tasks:
+            for task in pending_tasks:
                 model_key = (
                     f"{task.task_model_config.provider}/{task.task_model_config.model}"
                     if task.task_model_config

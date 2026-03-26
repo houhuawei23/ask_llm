@@ -143,6 +143,48 @@ class TokenCounter:
         return get_config().unified_config.token.default_encoding
 
     @classmethod
+    def split_hard_by_max_tokens(
+        cls, text: str, max_tokens: int, model: Optional[str] = None
+    ) -> list[str]:
+        """
+        Greedy split: each returned segment has at most max_tokens (tiktoken), snapping at newlines when possible.
+        """
+        text = text.strip()
+        if not text:
+            return []
+        if cls.count_tokens(text, model) <= max_tokens:
+            return [text]
+
+        out: list[str] = []
+        remaining = text
+        while remaining:
+            if cls.count_tokens(remaining, model) <= max_tokens:
+                out.append(remaining)
+                break
+
+            lo, hi = 1, len(remaining)
+            best = 1
+            while lo <= hi:
+                mid = (lo + hi) // 2
+                if cls.count_tokens(remaining[:mid], model) <= max_tokens:
+                    best = mid
+                    lo = mid + 1
+                else:
+                    hi = mid - 1
+
+            cut = remaining.rfind("\n", 0, best)
+            if cut <= 0 or cut < best // 4:
+                cut = best
+            piece = remaining[:cut].strip()
+            if not piece:
+                piece = remaining[:best].strip()
+                cut = best
+            out.append(piece)
+            remaining = remaining[cut:].lstrip()
+
+        return out
+
+    @classmethod
     def truncate_to_tokens(cls, text: str, max_tokens: int, model: Optional[str] = None) -> str:
         """
         Truncate text to maximum token count.

@@ -39,7 +39,7 @@ def sample_config_dict():
             },
         },
         "general": {"default_prompt_template": "Test: {content}", "default_output_filename": "output.txt"},
-        "translation": {"target_language": "zh", "threads": 5, "retries": 3, "max_chunk_size": 2000},
+        "translation": {"target_language": "zh", "threads": 5, "retries": 3},
         "batch": {"threads": 5, "retries": 3},
         "file": {"chunk_size": 8192, "default_output_suffix": "_output"},
         "format_heading": {"batch_size": 80, "concurrency": 4},

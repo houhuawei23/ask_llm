@@ -31,7 +31,9 @@ translation:
   max_parallel_files: 3          # Max files processed in parallel when translating a directory
   max_concurrent_api_calls: 20   # Per-file concurrent API calls (alias for threads)
   retries: 3
-  max_chunk_size: 4000
+  balance_translation_chunks: true   # split/merge by tiktoken so parallel requests are similar cost
+  max_chunk_tokens: 3000            # target max body tokens per chunk after rebalance
+  min_chunk_merge_tokens: 1500        # unused (compat); bodies merge if combined ≤ max_chunk_tokens
   preserve_format: true
   include_original: false
   temperature: null             # null uses provider default

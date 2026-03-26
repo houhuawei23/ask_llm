@@ -5,6 +5,7 @@ import pytest
 from ask_llm.core.batch import ModelConfig
 from ask_llm.core.text_splitter import TextChunk
 from ask_llm.core.translator import Translator, TranslationStyle
+from ask_llm.utils.token_counter import TokenCounter
 
 
 class TestTranslator:
@@ -58,6 +59,18 @@ class TestTranslator:
         prompt = translator.generate_prompt("Hello world")
 
         assert prompt == "Translate this: Hello world"
+
+    def test_count_prompt_template_tokens_instruction_only(self):
+        translator = Translator(
+            target_language="zh",
+            source_language="en",
+            custom_prompt_template="Prefix {source_lang}->{target_lang}:\n\n{content}",
+        )
+        model = "deepseek-chat"
+        instr = translator.count_prompt_template_tokens(model)
+        full = TokenCounter.count_tokens(translator.generate_prompt("word " * 200), model)
+        assert instr > 0
+        assert instr < full
 
     def test_generate_prompt_auto_source_language(self):
         """Test generating prompt with auto source language."""
