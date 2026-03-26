@@ -3,10 +3,12 @@
 import re
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from loguru import logger
 from pydantic import BaseModel, Field
+
+from ask_llm.config.context import get_config
 
 
 class TextChunk(BaseModel):
@@ -62,8 +64,10 @@ class TextSplitter(ABC):
             return "markdown"
         return "text"
 
-    @staticmethod
-    def create_splitter(file_path: str, max_chunk_size: int = 2000) -> "TextSplitter":
+    @classmethod
+    def create_splitter(
+        cls, file_path: str, max_chunk_size: Optional[int] = None
+    ) -> "TextSplitter":
         """
         Create appropriate splitter based on file type.
 
@@ -74,7 +78,9 @@ class TextSplitter(ABC):
         Returns:
             TextSplitter instance
         """
-        file_type = TextSplitter.detect_file_type(file_path)
+        if max_chunk_size is None:
+            max_chunk_size = get_config().unified_config.text_splitter.max_chunk_size
+        file_type = cls.detect_file_type(file_path)
         if file_type == "markdown":
             return MarkdownSplitter(max_chunk_size=max_chunk_size)
         return PlainTextSplitter(max_chunk_size=max_chunk_size)

@@ -1,14 +1,101 @@
-"""Configuration loading utilities."""
+"""Configuration loading utilities.
 
+Parameter priority: CLI args > environment variables > user config > package default.
+"""
+
+import copy
 import os
 import re
 from pathlib import Path
-from typing import Any, ClassVar, Dict, Optional, Union
+from typing import Any, ClassVar, Dict, Optional, Tuple, Union
 
 import yaml
 from loguru import logger
 
+from ask_llm.config.unified_config import UnifiedConfig
 from ask_llm.core.models import AppConfig, ProviderConfig
+
+# Environment variable to config path mapping. Env vars overlay user config.
+# Format: "ASK_LLM_<SECTION>_<KEY>" -> ("section", "key") or "ASK_LLM_<KEY>" -> ("key",)
+ENV_TO_CONFIG: ClassVar[Dict[str, Tuple[str, ...]]] = {
+    "ASK_LLM_DEFAULT_PROVIDER": ("default_provider",),
+    "ASK_LLM_DEFAULT_MODEL": ("default_model",),
+    "ASK_LLM_TRANSLATION_TARGET_LANGUAGE": ("translation", "target_language"),
+    "ASK_LLM_TRANSLATION_SOURCE_LANGUAGE": ("translation", "source_language"),
+    "ASK_LLM_TRANSLATION_STYLE": ("translation", "style"),
+    "ASK_LLM_TRANSLATION_THREADS": ("translation", "threads"),
+    "ASK_LLM_TRANSLATION_MAX_PARALLEL_FILES": ("translation", "max_parallel_files"),
+    "ASK_LLM_TRANSLATION_MAX_CONCURRENT_API_CALLS": (
+        "translation",
+        "max_concurrent_api_calls",
+    ),
+    "ASK_LLM_TRANSLATION_RETRIES": ("translation", "retries"),
+    "ASK_LLM_TRANSLATION_MAX_CHUNK_SIZE": ("translation", "max_chunk_size"),
+    "ASK_LLM_TRANSLATION_PRESERVE_FORMAT": ("translation", "preserve_format"),
+    "ASK_LLM_TRANSLATION_INCLUDE_ORIGINAL": ("translation", "include_original"),
+    "ASK_LLM_TRANSLATION_TEMPERATURE": ("translation", "temperature"),
+    "ASK_LLM_TRANSLATION_DEFAULT_PROMPT_FILE": ("translation", "default_prompt_file"),
+    "ASK_LLM_TRANSLATION_RECURSIVE_DIR": ("translation", "recursive_dir"),
+    "ASK_LLM_BATCH_THREADS": ("batch", "threads"),
+    "ASK_LLM_BATCH_RETRIES": ("batch", "retries"),
+    "ASK_LLM_BATCH_RETRY_DELAY": ("batch", "retry_delay"),
+    "ASK_LLM_BATCH_RETRY_DELAY_MAX": ("batch", "retry_delay_max"),
+}
+
+
+def _parse_env_value(value: str, key_path: Tuple[str, ...]) -> Any:
+    """Parse env var string to appropriate type for the config key."""
+    if value.lower() in ("null", "none", ""):
+        return None
+    last_key = key_path[-1].lower()
+    if "threads" in last_key or "retries" in last_key or "max_chunk_size" in last_key:
+        return int(value)
+    if "retry_delay" in last_key or "temperature" in last_key:
+        return float(value)
+    if "preserve_format" in last_key or "include_original" in last_key or "recursive" in last_key:
+        return value.lower() in ("true", "1", "yes")
+    return value
+
+
+def _deep_merge(base: Dict[str, Any], overlay: Dict[str, Any]) -> Dict[str, Any]:
+    """Deep merge overlay into base. Overlay values take precedence.
+    For 'providers', user config replaces base entirely when provided.
+    """
+    result = copy.deepcopy(base)
+    replace_keys = {"providers"}  # These keys are replaced, not merged
+    for key, overlay_val in overlay.items():
+        if key in replace_keys and isinstance(overlay_val, dict):
+            result[key] = copy.deepcopy(overlay_val)
+        elif key in result and isinstance(result[key], dict) and isinstance(overlay_val, dict):
+            result[key] = _deep_merge(result[key], overlay_val)
+        else:
+            result[key] = copy.deepcopy(overlay_val)
+    return result
+
+
+def _set_nested(data: Dict[str, Any], path: Tuple[str, ...], value: Any) -> None:
+    """Set a nested key in data. Creates intermediate dicts as needed."""
+    current = data
+    for part in path[:-1]:
+        if part not in current:
+            current[part] = {}
+        current = current[part]
+    current[path[-1]] = value
+
+
+def _apply_env_overrides(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Apply ASK_LLM_* environment variable overrides to config data."""
+    result = copy.deepcopy(data)
+    for env_var, key_path in ENV_TO_CONFIG.items():
+        env_val = os.getenv(env_var)
+        if env_val is not None and env_val != "":
+            try:
+                parsed = _parse_env_value(env_val, key_path)
+                _set_nested(result, key_path, parsed)
+                logger.debug(f"Config override from {env_var}")
+            except (ValueError, TypeError) as e:
+                logger.warning(f"Invalid env {env_var}={env_val!r}: {e}")
+    return result
 
 
 def resolve_env_vars(value: Any) -> Any:
@@ -45,65 +132,146 @@ def resolve_env_vars(value: Any) -> Any:
         return value
 
 
-class ConfigLoader:
-    """Load and parse configuration files."""
+class LoadResult:
+    """Result of loading default_config.yml, containing both provider and unified config."""
 
+    def __init__(self, app_config: AppConfig, unified_config: UnifiedConfig, config_path: Path):
+        self.app_config = app_config
+        self.unified_config = unified_config
+        self.config_path = config_path
+
+
+class ConfigLoader:
+    """Load and parse default_config.yml."""
+
+    DEFAULT_CONFIG_FILENAME = "default_config.yml"
     DEFAULT_CONFIG_PATHS: ClassVar[list[Path]] = [
-        Path("providers.yml"),
-        Path.home() / ".config" / "ask_llm" / "providers.yml",
-        Path("/etc/ask_llm/providers.yml"),
+        Path(DEFAULT_CONFIG_FILENAME),
+        Path.home() / ".config" / "ask_llm" / DEFAULT_CONFIG_FILENAME,
+        Path("/etc/ask_llm") / DEFAULT_CONFIG_FILENAME,
     ]
 
     @classmethod
-    def load(cls, config_path: Optional[Union[str, Path]] = None) -> AppConfig:
-        """
-        Load configuration from file.
+    def _get_package_config_path(cls) -> Path:
+        """Get path to built-in default config in package."""
+        return Path(__file__).parent / cls.DEFAULT_CONFIG_FILENAME
 
-        Args:
-            config_path: Path to configuration file. If None, searches default paths.
-
-        Returns:
-            Parsed application configuration
-
-        Raises:
-            FileNotFoundError: If config file not found
-            ValueError: If config is invalid
-        """
-        path = cls._resolve_config_path(config_path)
-
-        if not path.exists():
-            raise FileNotFoundError(
-                f"Configuration file not found: {path}\n"
-                f"Searched paths: {[str(p) for p in cls.DEFAULT_CONFIG_PATHS]}"
-            )
-
-        logger.debug(f"Loading configuration from: {path}")
-
-        # Only support YAML format
+    @classmethod
+    def _load_yaml(cls, path: Path) -> Dict[str, Any]:
+        """Load and parse a YAML config file. Resolves ${VAR} references."""
         if path.suffix not in (".yml", ".yaml"):
             raise ValueError(
                 f"Unsupported config file format: {path.suffix}. "
                 f"Only YAML (.yml, .yaml) files are supported."
             )
-
         try:
             with open(path, encoding="utf-8") as f:
                 data = yaml.safe_load(f)
                 if not data:
                     data = {}
-                # Resolve environment variables
-                data = resolve_env_vars(data)
+                return resolve_env_vars(data)
         except yaml.YAMLError as e:
-            raise ValueError(f"Invalid YAML in config file: {e}") from e
+            raise ValueError(
+                f"Invalid YAML in config file: {e}\nPlease check the syntax of {path}"
+            ) from e
         except Exception as e:
             raise OSError(f"Failed to read config file: {e}") from e
 
-        # Convert providers.yml format to AppConfig format
-        data = cls._convert_providers_yml_format(data)
+    @classmethod
+    def load(cls, config_path: Optional[Union[str, Path]] = None) -> LoadResult:
+        """
+        Load configuration from default_config.yml.
 
-        config = cls._parse_config(data)
-        logger.info(f"Configuration loaded successfully from {path}")
-        return config
+        Search order: --config > ./default_config.yml > ~/.config/ask_llm/ >
+        /etc/ask_llm/ > package built-in.
+
+        Args:
+            config_path: Path to configuration file. If None, searches default paths.
+
+        Returns:
+            LoadResult with app_config and unified_config
+
+        Raises:
+            FileNotFoundError: If config file not found
+            ValueError: If config is invalid or missing required fields
+        """
+        pkg_path = cls._get_package_config_path()
+        user_path = cls._resolve_config_path(config_path)
+
+        if not user_path.exists():
+            cls._raise_config_not_found()
+
+        # 1. Load package default as base
+        if not pkg_path.exists():
+            raise FileNotFoundError(
+                f"Package default config not found at {pkg_path}. " "Reinstall the ask-llm package."
+            )
+        base_data = cls._load_yaml(pkg_path)
+
+        # 2. Merge user config over base (if user config is different from package)
+        if user_path != pkg_path:
+            logger.debug(f"Loading user config from: {user_path}")
+            user_data = cls._load_yaml(user_path)
+            data = _deep_merge(base_data, user_data)
+        else:
+            data = base_data
+
+        # 3. Apply environment variable overrides
+        data = _apply_env_overrides(data)
+
+        # 4. Validate required sections
+        if "providers" not in data:
+            raise ValueError(
+                "Config must contain 'providers' key. "
+                "Please add provider configuration.\n\n"
+                "  1. Run 'ask-llm config init' to generate a template in ~/.config/ask_llm/\n"
+                "  2. Or use --config /path/to/default_config.yml to specify location"
+            )
+
+        if not isinstance(data["providers"], dict):
+            raise ValueError("'providers' must be a dictionary")
+
+        if not data["providers"]:
+            raise ValueError(
+                "Config must contain at least one provider. "
+                "Please configure providers in your default_config.yml"
+            )
+
+        # Parse unified config (with defaults for missing sections)
+        unified_config = UnifiedConfig.from_dict(data)
+
+        # Convert providers to AppConfig format
+        provider_data = cls._convert_providers_format(data)
+
+        try:
+            app_config = cls._parse_app_config(provider_data)
+        except Exception as e:
+            raise ValueError(
+                f"Invalid provider configuration: {e}\n"
+                f"Please check providers.api_key (use ${{ENV_VAR}} for env vars) "
+                "and providers.api_base in your config"
+            ) from e
+
+        logger.info(f"Configuration loaded successfully from: {user_path}")
+        return LoadResult(
+            app_config=app_config, unified_config=unified_config, config_path=user_path
+        )
+
+    @classmethod
+    def _raise_config_not_found(cls) -> None:
+        """Raise FileNotFoundError with helpful guidance."""
+        searched = [str(p) for p in cls.DEFAULT_CONFIG_PATHS]
+        pkg_path = cls._get_package_config_path()
+        if pkg_path.exists():
+            searched.append(str(pkg_path))
+        raise FileNotFoundError(
+            "Configuration file not found.\n\n"
+            "Searched paths:\n  " + "\n  ".join(searched) + "\n\n"
+            "Please create default_config.yml:\n"
+            "  1. Run 'ask-llm config init' to generate a template in ~/.config/ask_llm/\n"
+            "  2. Or copy from docs/default_config.example.yml in the project\n"
+            "  3. Or use --config /path/to/default_config.yml to specify location"
+        )
 
     @classmethod
     def _resolve_config_path(cls, config_path: Optional[Union[str, Path]] = None) -> Path:
@@ -116,40 +284,20 @@ class ConfigLoader:
                 logger.debug(f"Found config at: {path}")
                 return path
 
-        # Return first default path if none found (for error message)
+        # Fallback to package built-in
+        pkg_path = cls._get_package_config_path()
+        if pkg_path.exists():
+            logger.debug(f"Using package default config: {pkg_path}")
+            return pkg_path
+
         return cls.DEFAULT_CONFIG_PATHS[0]
 
     @classmethod
-    def _convert_providers_yml_format(cls, data: Dict[str, Any]) -> Dict[str, Any]:
+    def _convert_providers_format(cls, data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Convert providers.yml format to AppConfig format.
+        Convert providers section to AppConfig format.
 
-        providers.yml format:
-        {
-            "providers": {
-                "deepseek": {
-                    "base_url": "...",
-                    "api_key": "...",
-                    "default_model": "...",
-                    "models": [{"name": "..."}, ...]
-                }
-            }
-        }
-
-        AppConfig format:
-        {
-            "default_provider": "...",
-            "default_model": "...",
-            "providers": {
-                "deepseek": {
-                    "api_provider": "deepseek",
-                    "api_base": "...",
-                    "api_key": "...",
-                    "models": ["...", ...],
-                    ...
-                }
-            }
-        }
+        Supports models as list of dicts {"name": "..."} or list of strings.
         """
         if "providers" not in data:
             return data
@@ -158,7 +306,6 @@ class ConfigLoader:
         if not isinstance(providers, dict):
             return data
 
-        # Determine default provider
         default_provider = data.get("default_provider")
         default_model = data.get("default_model")
 
@@ -167,9 +314,7 @@ class ConfigLoader:
             if not isinstance(provider_config, dict):
                 continue
 
-            # Convert provider config
             base_url = provider_config.get("base_url", "")
-            # If base_url is empty or None, try to get default from llm-engine config
             if not base_url:
                 try:
                     from llm_engine.config_loader import load_providers_config
@@ -180,8 +325,6 @@ class ConfigLoader:
                 except Exception:
                     pass
 
-            # If still empty, use a placeholder that passes validation
-            # The actual base_url will be determined by the provider implementation
             if not base_url:
                 base_url = "https://api.example.com/v1"
 
@@ -191,7 +334,6 @@ class ConfigLoader:
                 "api_base": base_url,
             }
 
-            # Handle models list - convert from list of dicts to list of strings
             models = provider_config.get("models", [])
             provider_default_model = provider_config.get("default_model")
 
@@ -205,16 +347,12 @@ class ConfigLoader:
                     elif isinstance(model, str):
                         model_names.append(model)
 
-                # Ensure default_model is first in the list if specified
-                if provider_default_model:
-                    if provider_default_model in model_names:
-                        # Move default_model to first position
-                        model_names.remove(provider_default_model)
+                if provider_default_model and provider_default_model in model_names:
+                    model_names.remove(provider_default_model)
                     model_names.insert(0, provider_default_model)
 
                 converted_config["models"] = model_names
 
-                # Set global default_model if not already set (use first provider's default)
                 if not default_model and provider_default_model:
                     default_model = provider_default_model
                 elif not default_model and model_names:
@@ -224,14 +362,11 @@ class ConfigLoader:
                 if not default_model:
                     default_model = provider_default_model
             else:
-                # No models and no default_model - this is an error but we'll handle it later
                 converted_config["models"] = []
 
-            # Set default_provider if not already set
             if not default_provider:
                 default_provider = name
 
-            # Add other optional fields
             if "api_temperature" in provider_config:
                 converted_config["api_temperature"] = provider_config["api_temperature"]
             if "api_top_p" in provider_config:
@@ -250,17 +385,13 @@ class ConfigLoader:
         }
 
     @classmethod
-    def _parse_config(cls, data: Dict[str, Any]) -> AppConfig:
-        """Parse configuration dictionary into AppConfig."""
+    def _parse_app_config(cls, data: Dict[str, Any]) -> AppConfig:
+        """Parse provider data into AppConfig."""
         if "providers" not in data:
             raise ValueError("Config must contain 'providers' key")
 
-        if not isinstance(data["providers"], dict):
-            raise ValueError("'providers' must be a dictionary")
-
         default_provider = data.get("default_provider")
         if not default_provider:
-            # Use first provider as default if not specified
             default_provider = next(iter(data["providers"].keys()))
             logger.warning(f"No default_provider specified, using: {default_provider}")
 
@@ -268,9 +399,7 @@ class ConfigLoader:
 
         providers = {}
         for name, config_data in data["providers"].items():
-            # Add provider name to config data
             config_data = {**config_data, "api_provider": name}
-            # Remove api_model if present (for backward compatibility)
             config_data.pop("api_model", None)
             try:
                 providers[name] = ProviderConfig.model_validate(config_data)

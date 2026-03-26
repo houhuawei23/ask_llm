@@ -5,7 +5,9 @@ A flexible command-line tool for calling multiple LLM APIs.
 """
 
 import glob
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, List, Optional
 
 import typer
@@ -13,6 +15,7 @@ from loguru import logger
 from typing_extensions import Annotated
 
 from ask_llm import __version__
+from ask_llm.config.context import get_config, set_config
 from ask_llm.config.loader import ConfigLoader
 from ask_llm.config.manager import ConfigManager
 from ask_llm.core.batch import GlobalBatchProcessor, ModelConfig
@@ -28,7 +31,6 @@ from ask_llm.core.translator import Translator
 from ask_llm.utils.console import console
 from ask_llm.utils.file_handler import FileHandler
 from ask_llm.utils.notebook_translator import NotebookTranslator
-from ask_llm.utils.trans_config_loader import TransConfigLoader
 from ask_llm.utils.translation_exporter import TranslationExporter
 
 # Import from llm_engine
@@ -39,6 +41,35 @@ except ImportError:
         "llm_engine is required but not installed. Please install it with: pip install llm-engine"
     )
     raise
+
+
+def _config_init(output_path: Optional[str] = None) -> None:
+    """Generate default_config.yml template."""
+    pkg_config = Path(__file__).resolve().parent / "config" / "default_config.yml"
+    if not pkg_config.exists():
+        console.print_error("Package default config not found")
+        raise typer.Exit(1)
+
+    if output_path:
+        dest = Path(output_path)
+    else:
+        dest = Path.home() / ".config" / "ask_llm" / "default_config.yml"
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.exists():
+        console.print_warning(f"File exists: {dest}")
+        if not typer.confirm("Overwrite?"):
+            raise typer.Exit(0)
+
+    try:
+        content = pkg_config.read_text(encoding="utf-8")
+        dest.write_text(content, encoding="utf-8")
+        console.print_success(f"Configuration template written to: {dest}")
+        console.print("Edit the file to set your API keys (use ${VAR} for environment variables).")
+    except Exception as e:
+        console.print_error(f"Failed to write config: {e}")
+        raise typer.Exit(1) from e
+
 
 # Create Typer app
 app = typer.Typer(
@@ -183,8 +214,9 @@ def ask(
 
     try:
         # Load configuration
-        config = ConfigLoader.load(config_path)
-        config_manager = ConfigManager(config)
+        load_result = ConfigLoader.load(config_path)
+        set_config(load_result)
+        config_manager = ConfigManager(load_result.app_config)
 
         # Set provider and apply overrides
         if provider:
@@ -246,7 +278,8 @@ def ask(
             if input_is_file:
                 output_path = FileHandler.generate_output_path(source, output)
             else:
-                output_path = output or "output.txt"
+                default_output = load_result.unified_config.general.default_output_filename
+                output_path = output or default_output
 
             # Prepare output content
             output_content = result.content
@@ -371,8 +404,9 @@ def chat(
     """
     try:
         # Load configuration
-        config = ConfigLoader.load(config_path)
-        config_manager = ConfigManager(config)
+        load_result = ConfigLoader.load(config_path)
+        set_config(load_result)
+        config_manager = ConfigManager(load_result.app_config)
 
         # Set provider
         if provider:
@@ -470,12 +504,23 @@ def chat(
 
 @app.command()
 def config(
-    action: Annotated[str, typer.Argument(help="Action: show, test")] = "show",
+    action: Annotated[
+        str,
+        typer.Argument(help="Action: show, test, init"),
+    ] = "show",
     config_path: Annotated[
         Optional[str], typer.Option("--config", "-c", help="Configuration file path")
     ] = None,
     provider: Annotated[
         Optional[str], typer.Option("--provider", "-p", help="Provider to test (with test action)")
+    ] = None,
+    output_path: Annotated[
+        Optional[str],
+        typer.Option(
+            "--output",
+            "-o",
+            help="Output path for init (default: ~/.config/ask_llm/default_config.yml)",
+        ),
     ] = None,
 ) -> None:
     """
@@ -485,10 +530,18 @@ def config(
         ask-llm config show
         ask-llm config test
         ask-llm config test -p deepseek
+        ask-llm config init
+        ask-llm config init -o ./my_config.yml
     """
     try:
+        if action == "init":
+            _config_init(output_path)
+            return
+
         # Load existing config
-        config = ConfigLoader.load(config_path)
+        load_result = ConfigLoader.load(config_path)
+        set_config(load_result)
+        config = load_result.app_config
 
         if action == "show":
             console.print("")
@@ -554,7 +607,7 @@ def config(
 
         else:
             console.print_error(f"Unknown action: {action}")
-            console.print("Available actions: show, test")
+            console.print("Available actions: show, test, init")
             raise typer.Exit(1)
 
     except FileNotFoundError as e:
@@ -585,25 +638,25 @@ def batch(
         ),
     ] = None,
     threads: Annotated[
-        int,
+        Optional[int],
         typer.Option(
             "--threads",
             "-t",
-            help="Number of concurrent threads (default: 5)",
+            help="Number of concurrent threads (from default_config.yml if not set)",
             min=1,
             max=50,
         ),
-    ] = 5,
+    ] = None,
     retries: Annotated[
-        int,
+        Optional[int],
         typer.Option(
             "--retries",
             "-r",
-            help="Maximum number of retries for failed tasks (default: 3)",
+            help="Maximum number of retries (from default_config.yml if not set)",
             min=0,
             max=10,
         ),
-    ] = 3,
+    ] = None,
     config_path: Annotated[
         Optional[str],
         typer.Option(
@@ -663,6 +716,13 @@ def batch(
         else:
             console.setup(quiet=False, debug=False)
 
+        # Load configuration first (required for batch defaults)
+        load_result = ConfigLoader.load(config_path)
+        set_config(load_result)
+        batch_cfg = load_result.unified_config.batch
+        effective_threads = threads if threads is not None else batch_cfg.threads
+        effective_retries = retries if retries is not None else batch_cfg.retries
+
         # Load batch configuration
         console.print_info(f"Loading batch configuration from: {config_file}")
         batch_config = BatchConfigLoader.load(config_file)
@@ -688,23 +748,20 @@ def batch(
                 f"Auto-detected output format '{output_format}' from file extension '{suffix}'"
             )
         elif output_format is None:
-            output_format = "json"  # Default format
+            output_format = batch_cfg.default_output_format
 
         console.print_success(f"Loaded {len(tasks)} tasks from configuration")
 
         # If no models specified, use interactive selection
         if not provider_models:
             console.print_info("No models specified in configuration. Using interactive selection.")
-            config = ConfigLoader.load(config_path)
-            config_manager = ConfigManager(config)
+            config_manager = ConfigManager(load_result.app_config)
             helper = InteractiveConfigHelper(config_manager)
             provider_models = helper.select_provider_and_models(allow_multiple=True)
 
-        batch_mode = batch_config.get("mode", "prompt-content-pairs")  # Store batch mode
-
-        # Load configuration once
-        config = ConfigLoader.load(config_path)
-        config_manager = ConfigManager(config)
+        batch_mode = batch_config.get("mode", batch_cfg.mode)
+        config_manager = ConfigManager(load_result.app_config)
+        app_config = load_result.app_config
 
         # Step 1: Validate all models and test connections
         console.print()
@@ -718,13 +775,13 @@ def batch(
 
             try:
                 # Check if provider exists
-                if model_config.provider not in config.providers:
+                if model_config.provider not in app_config.providers:
                     console.print("[red]✗[/red] Provider not found")
                     skipped_providers.append(model_key)
                     continue
 
                 # Get provider config
-                provider_config = config.providers[model_config.provider]
+                provider_config = app_config.providers[model_config.provider]
 
                 # Check API key
                 if not provider_config.api_key or provider_config.api_key.strip() in (
@@ -823,8 +880,10 @@ def batch(
 
         # Step 3: Process all tasks concurrently using GlobalBatchProcessor
         global_processor = GlobalBatchProcessor(
-            max_workers=threads,
-            max_retries=retries,
+            max_workers=effective_threads,
+            max_retries=effective_retries,
+            retry_delay=batch_cfg.retry_delay,
+            retry_delay_max=batch_cfg.retry_delay_max,
             verbose=verbose,
         )
 
@@ -921,7 +980,7 @@ def batch(
             else:
                 # Default output directory
                 config_file_path = Path(config_file)
-                output_dir = str(config_file_path.parent / "batch_output")
+                output_dir = str(config_file_path.parent / batch_cfg.batch_output_dir)
 
             # Export split files
             exported_files = BatchResultExporter.export_split_files(
@@ -938,7 +997,7 @@ def batch(
         # Export results
         if separate_files and len(validated_models) > 1:
             # Export to separate files per model
-            output_dir = output or "batch_results"
+            output_dir = output or batch_cfg.batch_results_dir
             exported_files = BatchResultExporter.export_multiple_models(
                 all_results, all_statistics, output_dir, output_format, batch_mode
             )
@@ -981,7 +1040,8 @@ def batch(
             else:
                 config_file_path = Path(config_file)
                 output_path = str(
-                    config_file_path.parent / f"{config_file_path.stem}_results.{output_format}"
+                    config_file_path.parent
+                    / f"{config_file_path.stem}{batch_cfg.output_suffix}.{output_format}"
                 )
 
             exporter = BatchResultExporter(combined_results, combined_stats, batch_mode)
@@ -1007,6 +1067,42 @@ def batch(
         raise typer.Exit(1) from e
 
 
+def _resolve_trans_input_paths(
+    files: List[str],
+    translatable_extensions: List[str],
+    recursive_dir: bool,
+) -> List[str]:
+    """
+    Resolve input paths to a list of translatable files.
+
+    Supports: directory (expands to matching files), file path, glob pattern.
+    """
+    resolved: List[str] = []
+    for pattern in files:
+        p = Path(pattern)
+        if p.is_dir():
+            for ext in translatable_extensions:
+                ext_clean = ext if ext.startswith(".") else f".{ext}"
+                if recursive_dir:
+                    resolved.extend(str(f) for f in p.rglob(f"*{ext_clean}"))
+                else:
+                    resolved.extend(str(f) for f in p.glob(f"*{ext_clean}"))
+        elif p.exists() and p.is_file():
+            resolved.append(str(p.resolve()))
+        else:
+            matched = glob.glob(pattern)
+            if matched:
+                for m in matched:
+                    mp = Path(m)
+                    if mp.is_file():
+                        resolved.append(str(mp.resolve()))
+            elif p.exists():
+                resolved.append(str(p.resolve()))
+            else:
+                console.print_warning(f"File not found: {pattern}")
+    return sorted(set(resolved))
+
+
 def _process_notebook_translation(
     file_path: str,
     output: Optional[str],
@@ -1023,10 +1119,12 @@ def _process_notebook_translation(
         output_path = output
         if Path(output).is_dir():
             input_file = Path(file_path)
-            output_name = f"{input_file.stem}_translated{input_file.suffix}"
+            output_name = f"{input_file.stem}{get_config().unified_config.file.translated_suffix}{input_file.suffix}"
             output_path = str(Path(output) / output_name)
     else:
-        output_path = FileHandler.generate_output_path(file_path, suffix="_translated")
+        output_path = FileHandler.generate_output_path(
+            file_path, suffix=get_config().unified_config.file.translated_suffix
+        )
 
     output_file = Path(output_path)
     if output_file.exists() and not force:
@@ -1089,17 +1187,17 @@ def trans(
         typer.Option(
             "--config",
             "-c",
-            help="Translation configuration file path",
+            help="Path to default_config.yml",
         ),
     ] = None,
     target_lang: Annotated[
-        str,
+        Optional[str],
         typer.Option(
             "--target-lang",
             "-t",
-            help="Target language code (default: zh)",
+            help="Target language code (from default_config.yml if not set)",
         ),
-    ] = "zh",
+    ] = None,
     source_lang: Annotated[
         Optional[str],
         typer.Option(
@@ -1109,25 +1207,34 @@ def trans(
         ),
     ] = None,
     threads: Annotated[
-        int,
+        Optional[int],
         typer.Option(
             "--threads",
             "-T",
-            help="Number of concurrent threads (default: 5)",
+            help="Per-file concurrent API calls (from default_config.yml if not set)",
+            min=1,
+            max=100,
+        ),
+    ] = None,
+    max_parallel_files: Annotated[
+        Optional[int],
+        typer.Option(
+            "--max-parallel-files",
+            help="Max files to process in parallel when translating a directory (default: 3)",
             min=1,
             max=50,
         ),
-    ] = 5,
+    ] = None,
     retries: Annotated[
-        int,
+        Optional[int],
         typer.Option(
             "--retries",
             "-r",
-            help="Maximum number of retries for failed tasks (default: 3)",
+            help="Maximum number of retries (from default_config.yml if not set)",
             min=0,
             max=10,
         ),
-    ] = 3,
+    ] = None,
     provider: Annotated[
         Optional[str],
         typer.Option(
@@ -1166,13 +1273,6 @@ def trans(
             help="Stream translation progress to console",
         ),
     ] = False,
-    trans_config_path: Annotated[
-        Optional[str],
-        typer.Option(
-            "--trans-config",
-            help="Translation configuration file path (alternative to --config)",
-        ),
-    ] = None,
     prompt_file: Annotated[
         Optional[str],
         typer.Option(
@@ -1191,38 +1291,45 @@ def trans(
 
     Examples:
         ask-llm trans document.txt
+        ask-llm trans /path/to/dir/ -o translated/
         ask-llm trans *.md -o translated/
         ask-llm trans notebook.ipynb -o translated/
         ask-llm trans file.txt -t en -s zh --threads 10
         ask-llm trans doc.md -m gpt-4 --preserve-format
         ask-llm trans paper.md -p @prompts/tech-paper-trans.md
+        ask-llm trans ./posts/ --max-parallel-files 5
     """
     try:
-        # Load translation configuration
-        trans_config_file = trans_config_path or config
-        trans_config = TransConfigLoader.load(trans_config_file)
-        if trans_config is None:
-            trans_config = TransConfigLoader.get_default_config()
+        # Load configuration
+        load_result = ConfigLoader.load(config)
+        set_config(load_result)
+        app_config = load_result.app_config
+        trans_cfg = load_result.unified_config.translation
 
-        # Override with command-line arguments
-        if target_lang != "zh":
-            trans_config.target_language = target_lang
-        if source_lang:
-            trans_config.source_language = source_lang
-        if threads != 5:
-            trans_config.threads = threads
-        if retries != 3:
-            trans_config.retries = retries
-        if provider:
-            trans_config.provider = provider
-        if model:
-            trans_config.model = model
-        if prompt_file:
-            trans_config.prompt_file = prompt_file
+        # Build trans config from default_config.yml, override with CLI
+        effective_threads = threads if threads is not None else trans_cfg.max_concurrent_api_calls
+        effective_max_parallel = (
+            max_parallel_files if max_parallel_files is not None else trans_cfg.max_parallel_files
+        )
+        trans_config = SimpleNamespace(
+            target_language=target_lang or trans_cfg.target_language,
+            source_language=trans_cfg.source_language if source_lang is None else source_lang,
+            style=trans_cfg.style,
+            threads=effective_threads,
+            max_parallel_files=effective_max_parallel,
+            retries=retries if retries is not None else trans_cfg.retries,
+            max_chunk_size=trans_cfg.max_chunk_size,
+            preserve_format=preserve_format,
+            include_original=trans_cfg.include_original,
+            provider=provider,
+            model=model,
+            prompt_file=prompt_file,
+            prompt_template=None,
+            temperature=trans_cfg.temperature,
+            translatable_extensions=trans_cfg.translatable_extensions,
+            recursive_dir=trans_cfg.recursive_dir,
+        )
 
-        # Load main configuration
-        config_path = config if config and not trans_config_file else None
-        app_config = ConfigLoader.load(config_path)
         config_manager = ConfigManager(app_config)
 
         # Determine provider and model
@@ -1246,30 +1353,25 @@ def trans(
             temperature=trans_config.temperature,
         )
 
-        # Resolve file patterns
-        resolved_files = []
-        for file_pattern in files:
-            matched_files = glob.glob(file_pattern)
-            if not matched_files:
-                # If no match, treat as literal file path
-                if Path(file_pattern).exists():
-                    resolved_files.append(file_pattern)
-                else:
-                    console.print_warning(f"File not found: {file_pattern}")
-            else:
-                resolved_files.extend(matched_files)
+        # Resolve file patterns (supports directory, glob, and file paths)
+        resolved_files = _resolve_trans_input_paths(
+            files,
+            translatable_extensions=trans_config.translatable_extensions,
+            recursive_dir=trans_config.recursive_dir,
+        )
 
         if not resolved_files:
             console.print_error("No files found to translate")
             raise typer.Exit(1)
 
-        # Remove duplicates and sort
-        resolved_files = sorted(set(resolved_files))
-
         console.print_info(f"Found {len(resolved_files)} file(s) to translate")
+        if trans_config.max_parallel_files > 1:
+            console.print_info(
+                f"Processing with max {trans_config.max_parallel_files} file(s) in parallel"
+            )
 
-        # Process each file
-        for file_path in resolved_files:
+        def _process_one_file(file_path: str) -> None:
+            """Process a single file (md, txt, or ipynb)."""
             console.print()
             console.print(f"[bold]Processing: {file_path}[/bold]")
 
@@ -1280,7 +1382,7 @@ def trans(
                     f"Unsupported file type: {Path(file_path).suffix}. "
                     f"Only .txt, .md, and .ipynb files are supported. Skipping."
                 )
-                continue
+                return
 
             # Handle .ipynb notebook translation (markdown cells only, code cells preserved)
             if file_type == "notebook":
@@ -1300,18 +1402,18 @@ def trans(
                 except Exception as e:
                     console.print_error(f"Failed to translate notebook {file_path}: {e}")
                     logger.exception("Notebook translation error")
-                continue
+                return
 
             # Read file content (for .txt and .md)
             try:
                 content = FileHandler.read(file_path, show_progress=not stream)
             except Exception as e:
                 console.print_error(f"Failed to read file {file_path}: {e}")
-                continue
+                return
 
             if not content.strip():
                 console.print_warning(f"File {file_path} is empty. Skipping.")
-                continue
+                return
 
             # Split text into chunks
             splitter = TextSplitter.create_splitter(
@@ -1321,7 +1423,7 @@ def trans(
 
             if not chunks:
                 console.print_warning(f"No chunks created from {file_path}. Skipping.")
-                continue
+                return
 
             console.print_info(f"Split into {len(chunks)} chunk(s)")
 
@@ -1368,19 +1470,21 @@ def trans(
                 # If output is a directory, create file-specific name
                 if Path(output).is_dir():
                     input_file = Path(file_path)
-                    output_name = f"{input_file.stem}_translated{input_file.suffix}"
+                    translated_suffix = get_config().unified_config.file.translated_suffix
+                    output_name = f"{input_file.stem}{translated_suffix}{input_file.suffix}"
                     output_path = str(Path(output) / output_name)
             else:
                 # Auto-generate output path
-                input_file = Path(file_path)
-                output_path = FileHandler.generate_output_path(file_path, suffix="_translated")
+                output_path = FileHandler.generate_output_path(
+                    file_path, suffix=get_config().unified_config.file.translated_suffix
+                )
 
             # Export results
             exporter = TranslationExporter(
                 chunks=chunks,
                 results=results,
                 preserve_format=preserve_format,
-                include_original=False,
+                include_original=trans_config.include_original,
             )
 
             # Detect output format from extension
@@ -1415,6 +1519,21 @@ def trans(
             except Exception as e:
                 console.print_error(f"Failed to export translation: {e}")
                 logger.exception("Export error")
+
+        # Run file processing (sequential or parallel)
+        if trans_config.max_parallel_files <= 1:
+            for file_path in resolved_files:
+                _process_one_file(file_path)
+        else:
+            with ThreadPoolExecutor(max_workers=trans_config.max_parallel_files) as executor:
+                futures = {executor.submit(_process_one_file, fp): fp for fp in resolved_files}
+                for future in as_completed(futures):
+                    try:
+                        future.result()
+                    except Exception as e:
+                        file_path = futures[future]
+                        console.print_error(f"Failed to translate {file_path}: {e}")
+                        logger.exception("Translation error")
 
     except FileNotFoundError as e:
         console.print_error(str(e))
@@ -1539,8 +1658,9 @@ def format(
     """
     try:
         # Load configuration
-        config = ConfigLoader.load(config_path)
-        config_manager = ConfigManager(config)
+        load_result = ConfigLoader.load(config_path)
+        set_config(load_result)
+        config_manager = ConfigManager(load_result.app_config)
 
         # Set provider and apply overrides
         if provider:
@@ -1629,8 +1749,9 @@ def format(
 
             # Format headings using LLM
             try:
-                # Use custom prompt file or default
-                default_prompt = prompt_file if prompt_file else "@prompts/md-heading-format.md"
+                # Use custom prompt file or default from config
+                fh_config = load_result.unified_config.format_heading
+                default_prompt = prompt_file or fh_config.default_prompt_file
                 formatter = HeadingFormatter(
                     processor=processor,
                     prompt_file=default_prompt,
@@ -1663,12 +1784,14 @@ def format(
                 # If output is a directory, create file-specific name
                 if Path(output).is_dir():
                     input_file = Path(file_path)
-                    output_name = f"{input_file.stem}_formatted{input_file.suffix}"
+                    formatted_suffix = get_config().unified_config.file.formatted_suffix
+                    output_name = f"{input_file.stem}{formatted_suffix}{input_file.suffix}"
                     output_path = str(Path(output) / output_name)
             else:
                 # Auto-generate output path
-                input_file = Path(file_path)
-                output_path = FileHandler.generate_output_path(file_path, suffix="_formatted")
+                output_path = FileHandler.generate_output_path(
+                    file_path, suffix=get_config().unified_config.file.formatted_suffix
+                )
 
             # Write output
             try:

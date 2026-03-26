@@ -7,7 +7,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
 from loguru import logger
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from rich.progress import Progress, TaskID
 
 if TYPE_CHECKING:
@@ -53,6 +53,8 @@ class BatchTask(BaseModel):
 class BatchResult(BaseModel):
     """Result of a batch processing task."""
 
+    model_config = ConfigDict(protected_namespaces=())
+
     task_id: int
     prompt: str
     content: str
@@ -90,6 +92,7 @@ class BatchProcessor:
         max_workers: int = 5,
         max_retries: int = 3,
         retry_delay: float = 1.0,
+        retry_delay_max: float = 10.0,
     ):
         """
         Initialize batch processor.
@@ -100,12 +103,14 @@ class BatchProcessor:
             max_workers: Maximum number of concurrent workers
             max_retries: Maximum number of retries for failed tasks
             retry_delay: Initial delay between retries (exponential backoff)
+            retry_delay_max: Maximum retry delay cap in seconds
         """
         self.provider = provider
         self.model_config = model_config
         self.max_workers = max_workers
         self.max_retries = max_retries
         self.retry_delay = retry_delay
+        self.retry_delay_max = retry_delay_max
         self.processor = RequestProcessor(provider)
 
     def _process_single_task(
@@ -387,7 +392,7 @@ class BatchProcessor:
                     if retry_queue:
                         # Calculate delay with exponential backoff
                         delay = self.retry_delay * (2 ** (retry_queue[0][1] - 1))
-                        time.sleep(min(delay, 10.0))  # Cap at 10 seconds
+                        time.sleep(min(delay, self.retry_delay_max))
 
                         # Submit retry tasks
                         for task, retry_count in retry_queue:
@@ -451,6 +456,7 @@ class GlobalBatchProcessor:
         max_workers: int = 5,
         max_retries: int = 3,
         retry_delay: float = 1.0,
+        retry_delay_max: float = 10.0,
         verbose: bool = False,
     ):
         """
@@ -460,11 +466,13 @@ class GlobalBatchProcessor:
             max_workers: Maximum number of concurrent workers across all models
             max_retries: Maximum number of retries for failed tasks
             retry_delay: Initial delay between retries (exponential backoff)
+            retry_delay_max: Maximum retry delay cap in seconds
             verbose: Enable verbose output with detailed API call information
         """
         self.max_workers = max_workers
         self.max_retries = max_retries
         self.retry_delay = retry_delay
+        self.retry_delay_max = retry_delay_max
         self.verbose = verbose
 
     def _create_provider_for_task(
@@ -866,7 +874,7 @@ class GlobalBatchProcessor:
                     if retry_queue:
                         # Calculate delay with exponential backoff
                         delay = self.retry_delay * (2 ** (retry_queue[0][1] - 1))
-                        time.sleep(min(delay, 10.0))  # Cap at 10 seconds
+                        time.sleep(min(delay, self.retry_delay_max))
 
                         # Submit retry tasks
                         for task, retry_count in retry_queue:

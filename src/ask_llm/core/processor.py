@@ -5,6 +5,7 @@ from typing import Generator, Optional
 
 from loguru import logger
 
+from ask_llm.config.context import get_config
 from ask_llm.core.models import (
     ChatHistory,
     MessageRole,
@@ -18,16 +19,27 @@ from ask_llm.utils.token_counter import TokenCounter
 class RequestProcessor:
     """Process LLM API requests."""
 
-    DEFAULT_PROMPT_TEMPLATE = "Please process the following text:\n\n{content}"
-
-    def __init__(self, provider: LLMProviderProtocol):
+    def __init__(
+        self,
+        provider: LLMProviderProtocol,
+        default_prompt_template: Optional[str] = None,
+    ):
         """
         Initialize processor with provider.
 
         Args:
             provider: LLM provider instance
+            default_prompt_template: Default prompt template when none provided.
+                If None, uses value from default_config.yml
         """
         self.provider = provider
+        self._default_prompt_template = default_prompt_template
+
+    def _get_default_prompt_template(self) -> str:
+        """Get default prompt template from config."""
+        if self._default_prompt_template is not None:
+            return self._default_prompt_template
+        return get_config().unified_config.general.default_prompt_template
 
     def _format_prompt(self, content: str, prompt_template: Optional[str] = None) -> str:
         """
@@ -40,7 +52,7 @@ class RequestProcessor:
         Returns:
             Formatted prompt string
         """
-        template = prompt_template or self.DEFAULT_PROMPT_TEMPLATE
+        template = prompt_template or self._get_default_prompt_template()
 
         if "{content}" in template:
             return template.format(content=content)

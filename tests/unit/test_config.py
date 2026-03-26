@@ -1,5 +1,6 @@
 """Unit tests for configuration modules."""
 
+import os
 from pathlib import Path
 
 import pytest
@@ -15,13 +16,14 @@ class TestConfigLoader:
 
     def test_load_valid_config(self, sample_config_file, sample_config_dict):
         """Test loading valid config file."""
-        config = ConfigLoader.load(sample_config_file)
+        load_result = ConfigLoader.load(sample_config_file)
+        config = load_result.app_config
 
-        assert isinstance(config, AppConfig)
         assert config.default_provider == "test_provider"
         assert len(config.providers) == 2
         assert "test_provider" in config.providers
         assert "another_provider" in config.providers
+        assert load_result.unified_config.translation.threads == 5  # From sample_config
 
     def test_load_nonexistent_file(self, temp_dir):
         """Test loading non-existent file raises error."""
@@ -37,10 +39,10 @@ class TestConfigLoader:
             ConfigLoader.load(config_path)
 
     def test_load_missing_providers(self, temp_dir):
-        """Test loading config without providers raises error."""
+        """Test loading config with empty providers raises error."""
         config_path = temp_dir / "bad_config.yml"
         with open(config_path, "w") as f:
-            yaml.dump({"default_provider": "test"}, f)
+            yaml.dump({"providers": {}}, f)  # Explicitly empty providers
 
         with pytest.raises(ValueError):
             ConfigLoader.load(config_path)
@@ -53,6 +55,15 @@ class TestConfigLoader:
         with pytest.raises(ValueError) as exc_info:
             ConfigLoader.load(config_path)
         assert "Unsupported config file format" in str(exc_info.value)
+
+    def test_env_var_override(self, sample_config_file):
+        """Test ASK_LLM_* environment variables override config."""
+        try:
+            os.environ["ASK_LLM_TRANSLATION_TARGET_LANGUAGE"] = "en"
+            load_result = ConfigLoader.load(sample_config_file)
+            assert load_result.unified_config.translation.target_language == "en"
+        finally:
+            os.environ.pop("ASK_LLM_TRANSLATION_TARGET_LANGUAGE", None)
 
 
 class TestConfigManager:

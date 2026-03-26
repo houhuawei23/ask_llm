@@ -72,6 +72,9 @@ package-dir = { "" = "src" }
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+"ask_llm.config" = ["default_config.yml"]
+
 [tool.mypy]
 python_version = "3.8"
 warn_return_any = true

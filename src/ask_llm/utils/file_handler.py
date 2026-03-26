@@ -6,11 +6,21 @@ from typing import Optional, Union
 from loguru import logger
 from tqdm import tqdm
 
+from ask_llm.config.context import get_config
+
 
 class FileHandler:
     """Handle file I/O operations with progress tracking."""
 
-    CHUNK_SIZE = 8192  # 8KB chunks for reading
+    @classmethod
+    def _get_chunk_size(cls) -> int:
+        """Get chunk size from config."""
+        return get_config().unified_config.file.chunk_size
+
+    @classmethod
+    def _get_tqdm_ncols(cls) -> int:
+        """Get progress bar width from config."""
+        return get_config().unified_config.file.tqdm_ncols
 
     @classmethod
     def read(cls, path: Union[str, Path], show_progress: bool = False) -> str:
@@ -39,7 +49,7 @@ class FileHandler:
         try:
             size = file_path.stat().st_size
 
-            if show_progress and size > cls.CHUNK_SIZE:
+            if show_progress and size > cls._get_chunk_size():
                 content = cls._read_with_progress(file_path, size)
             else:
                 content = file_path.read_text(encoding="utf-8")
@@ -58,10 +68,14 @@ class FileHandler:
         content_parts = []
 
         with open(path, encoding="utf-8") as f, tqdm(
-            total=total_size, unit="B", unit_scale=True, desc=f"Reading {path.name}", ncols=80
+            total=total_size,
+            unit="B",
+            unit_scale=True,
+            desc=f"Reading {path.name}",
+            ncols=cls._get_tqdm_ncols(),
         ) as pbar:
             while True:
-                chunk = f.read(cls.CHUNK_SIZE)
+                chunk = f.read(cls._get_chunk_size())
                 if not chunk:
                     break
                 content_parts.append(chunk)
@@ -99,7 +113,7 @@ class FileHandler:
             raise OSError(f"Failed to create directory for {path}: {e}") from e
 
         try:
-            if show_progress and len(content) > cls.CHUNK_SIZE:
+            if show_progress and len(content) > cls._get_chunk_size():
                 cls._write_with_progress(file_path, content)
             else:
                 file_path.write_text(content, encoding="utf-8")
@@ -116,10 +130,14 @@ class FileHandler:
         written = 0
 
         with open(path, "w", encoding="utf-8") as f, tqdm(
-            total=total, unit="B", unit_scale=True, desc=f"Writing {path.name}", ncols=80
+            total=total,
+            unit="B",
+            unit_scale=True,
+            desc=f"Writing {path.name}",
+            ncols=cls._get_tqdm_ncols(),
         ) as pbar:
             while written < total:
-                chunk = content[written : written + cls.CHUNK_SIZE]
+                chunk = content[written : written + cls._get_chunk_size()]
                 f.write(chunk)
                 written += len(chunk)
                 pbar.update(len(chunk.encode("utf-8")))
@@ -129,7 +147,7 @@ class FileHandler:
         cls,
         input_path: Union[str, Path],
         custom_path: Optional[Union[str, Path]] = None,
-        suffix: str = "_output",
+        suffix: Optional[str] = None,
     ) -> str:
         """
         Generate output file path based on input path.
@@ -144,6 +162,9 @@ class FileHandler:
         """
         if custom_path:
             return str(custom_path)
+
+        if suffix is None:
+            suffix = get_config().unified_config.file.default_output_suffix
 
         input_file = Path(input_path)
         ext = input_file.suffix

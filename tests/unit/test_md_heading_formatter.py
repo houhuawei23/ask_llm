@@ -7,6 +7,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from ask_llm.config.context import set_config
+from ask_llm.config.loader import ConfigLoader
 from ask_llm.core.md_heading_formatter import (
     HeadingApplier,
     HeadingExtractor,
@@ -96,6 +98,10 @@ More content.
             assert heading.level == i
 
 
+# Minimal prompt template for unit tests (HeadingFormatter requires prompt when none from file)
+_TEST_PROMPT_TEMPLATE = "Format headings:\n\n{content}"
+
+
 class TestHeadingFormatter:
     """Test HeadingFormatter."""
 
@@ -138,7 +144,7 @@ class TestHeadingFormatter:
 ## 1 Section"""
 
         processor = self._create_mock_processor(mock_response)
-        formatter = HeadingFormatter(processor=processor)
+        formatter = HeadingFormatter(processor=processor, prompt_template=_TEST_PROMPT_TEMPLATE)
 
         formatted = formatter.format_headings(headings)
 
@@ -161,7 +167,7 @@ class TestHeadingFormatter:
 #### 1.1.1 Sub-subsection"""
 
         processor = self._create_mock_processor(mock_response)
-        formatter = HeadingFormatter(processor=processor)
+        formatter = HeadingFormatter(processor=processor, prompt_template=_TEST_PROMPT_TEMPLATE)
 
         formatted = formatter.format_headings(headings)
 
@@ -174,7 +180,7 @@ class TestHeadingFormatter:
     def test_format_headings_empty(self):
         """Test formatting empty heading list."""
         processor = self._create_mock_processor("")
-        formatter = HeadingFormatter(processor=processor)
+        formatter = HeadingFormatter(processor=processor, prompt_template=_TEST_PROMPT_TEMPLATE)
 
         formatted = formatter.format_headings([])
 
@@ -194,7 +200,7 @@ class TestHeadingFormatter:
 That's all!"""
 
         processor = self._create_mock_processor(mock_response)
-        formatter = HeadingFormatter(processor=processor)
+        formatter = HeadingFormatter(processor=processor, prompt_template=_TEST_PROMPT_TEMPLATE)
 
         formatted = formatter.format_headings(headings)
 
@@ -212,7 +218,7 @@ That's all!"""
         mock_response = """# Title"""
 
         processor = self._create_mock_processor(mock_response)
-        formatter = HeadingFormatter(processor=processor)
+        formatter = HeadingFormatter(processor=processor, prompt_template=_TEST_PROMPT_TEMPLATE)
 
         with pytest.raises(RuntimeError, match="LLM API call failed"):
             formatter.format_headings(headings)
@@ -234,6 +240,7 @@ That's all!"""
     def test_format_headings_batched(self):
         """Test that headings exceeding batch_size are processed in batches with context."""
         # Create 100 headings (exceeds default batch_size of 80)
+        # Use batch_size=30, concurrency=2 for predictable testing
         headings = [
             HeadingMatch(f"# Heading {i}", i * 15, i * 15 + 12, 1, f"Heading {i}")
             for i in range(100)
@@ -275,14 +282,22 @@ That's all!"""
         processor = RequestProcessor(mock_provider)
         processor.process_with_metadata = mock_process
 
-        formatter = HeadingFormatter(processor=processor, batch_size=50)
+        formatter = HeadingFormatter(
+            processor=processor,
+            prompt_template=_TEST_PROMPT_TEMPLATE,
+            batch_size=50,
+        )
         formatted = formatter.format_headings(headings)
 
         assert len(formatted) == 100
         assert call_count == 2  # 100 headings / 50 per batch = 2 batches
 
-    def test_load_prompt_with_at_prefix(self):
+    def test_load_prompt_with_at_prefix(self, sample_config_file):
         """Test loading prompt with @ prefix (project-relative)."""
+        # Set config for project root marker resolution
+        load_result = ConfigLoader.load(str(sample_config_file))
+        set_config(load_result)
+
         # Create a temporary project structure
         with tempfile.TemporaryDirectory() as tmpdir:
             project_root = Path(tmpdir)

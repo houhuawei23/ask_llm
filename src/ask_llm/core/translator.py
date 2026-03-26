@@ -6,6 +6,7 @@ from typing import ClassVar, Optional
 
 from loguru import logger
 
+from ask_llm.config.context import get_config
 from ask_llm.core.batch import BatchTask, ModelConfig
 from ask_llm.core.text_splitter import TextChunk
 from ask_llm.utils.file_handler import FileHandler
@@ -151,9 +152,7 @@ class Translator:
             # Try to find project root by looking for common markers
             current_dir = Path.cwd()
             project_root = None
-
-            # Look for project root markers
-            markers = ["pyproject.toml", "setup.py", ".git", "providers.yml"]
+            markers = get_config().unified_config.project_root_markers
             for marker in markers:
                 for parent in [current_dir, *list(current_dir.parents)]:
                     if (parent / marker).exists():

@@ -6,6 +6,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from ask_llm.config.context import set_config
+from ask_llm.config.loader import ConfigLoader
 from ask_llm.core.md_heading_formatter import (
     HeadingApplier,
     HeadingExtractor,
@@ -79,7 +81,9 @@ Content for second section.
 ## 2 Second Section"""
 
             processor = self._create_mock_processor(mock_response)
-            formatter = HeadingFormatter(processor=processor)
+            formatter = HeadingFormatter(
+                processor=processor, prompt_template="Format: {content}"
+            )
 
             # Format headings
             formatted_headings = formatter.format_headings(headings)
@@ -114,7 +118,9 @@ Just paragraphs.
 
         # Should handle empty headings gracefully
         processor = self._create_mock_processor("")
-        formatter = HeadingFormatter(processor=processor)
+        formatter = HeadingFormatter(
+            processor=processor, prompt_template="Format: {content}"
+        )
 
         formatted = formatter.format_headings(headings)
         assert len(formatted) == 0
@@ -193,7 +199,9 @@ More content.
         mock_response = "\n".join(mock_response_lines[:len(headings)])
 
         processor = self._create_mock_processor(mock_response)
-        formatter = HeadingFormatter(processor=processor)
+        formatter = HeadingFormatter(
+            processor=processor, prompt_template="Format: {content}"
+        )
         formatted_headings = formatter.format_headings(headings)
 
         applier = HeadingApplier()
@@ -254,7 +262,9 @@ Content.
 
         processor.process_with_metadata = mock_process_with_metadata
 
-        formatter = HeadingFormatter(processor=processor)
+        formatter = HeadingFormatter(
+            processor=processor, prompt_template="Format: {content}"
+        )
 
         with pytest.raises(RuntimeError, match="LLM API call failed"):
             formatter.format_headings(headings)

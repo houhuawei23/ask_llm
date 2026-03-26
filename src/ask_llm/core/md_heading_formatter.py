@@ -12,6 +12,7 @@ from typing import List, Optional
 
 from loguru import logger
 
+from ask_llm.config.context import get_config
 from ask_llm.core.processor import RequestProcessor
 from ask_llm.utils.file_handler import FileHandler
 
@@ -69,36 +70,6 @@ class HeadingExtractor:
 class HeadingFormatter:
     """Format headings using LLM API."""
 
-    DEFAULT_PROMPT_TEMPLATE = """请根据以下 Markdown 标题的层级关系，为它们分配合适的标题级别（# 到 ######）。
-
-规则：
-1. 第一个标题通常是 # (h1)
-2. 如果标题包含编号（如 1, 1.1, 1.1.1），根据编号层级确定标题级别：
-   - 1 → ## (h2)
-   - 1.1 → ### (h3)
-   - 1.1.1 → #### (h4)
-   - 以此类推
-3. 如果标题没有编号，根据上下文和缩进推断层级
-4. 保持标题文本内容不变，只调整 # 的数量
-5. 若输入包含 --- 分隔符，前部分为前文标题（供层级参考），后部分为待格式化标题。请根据前文与后文的衔接，为后部分分配合适级别。只输出后部分的格式化结果。
-
-请只输出格式化后的标题，每行一个，保持原有顺序。不要添加任何其他内容。
-
-输入标题：
-{content}
-
-格式化后的标题："""
-
-    # Default batch size to avoid LLM output token limit (~4000 tokens)
-    # ~80 headings ≈ 1600 output tokens, safe for most models
-    DEFAULT_BATCH_SIZE = 80
-
-    # Default concurrency for parallel API calls
-    DEFAULT_CONCURRENCY = 4
-
-    # Number of previous headings to pass as context for next batch (for level consistency)
-    CONTEXT_HEADING_COUNT = 5
-
     # Instruction for context-aware batch processing (uses original headings, enables concurrent)
     CONTEXT_BATCH_INSTRUCTION = """注意：以下输入用 --- 分隔。前部分为前文标题（原始格式，供层级和编号规律参考），后部分为待格式化标题。请根据前文与后文的衔接关系，为后部分分配合适级别。只输出后部分的格式化结果，每行一个，保持顺序。
 
@@ -126,8 +97,10 @@ class HeadingFormatter:
         self.processor = processor
         self.prompt_template = prompt_template
         self.prompt_file = prompt_file
-        self.batch_size = batch_size or self.DEFAULT_BATCH_SIZE
-        self.concurrency = concurrency if concurrency is not None else self.DEFAULT_CONCURRENCY
+        fh_config = get_config().unified_config.format_heading
+        self.batch_size = batch_size if batch_size is not None else fh_config.batch_size
+        self.concurrency = concurrency if concurrency is not None else fh_config.concurrency
+        self._context_heading_count = fh_config.context_heading_count
 
         # Load prompt from file if specified
         if prompt_file:
@@ -186,7 +159,14 @@ class HeadingFormatter:
         if not headings:
             return []
 
-        template = self.prompt_template or self.DEFAULT_PROMPT_TEMPLATE
+        template = self.prompt_template
+        if not template and self.prompt_file:
+            template = self._load_prompt_from_file(self.prompt_file)
+        if not template:
+            raise ValueError(
+                "Prompt template required for heading formatting. "
+                "Set format_heading.default_prompt_file in default_config.yml."
+            )
 
         # Build batch list with context (original headings from prev batch, computed upfront)
         batches: List[tuple[int, List[HeadingMatch], Optional[List[str]]]] = []
@@ -195,7 +175,7 @@ class HeadingFormatter:
             context: Optional[List[str]] = None
             if i > 0:
                 prev_batch = headings[i - self.batch_size : i]
-                context = [h.raw_text for h in prev_batch[-self.CONTEXT_HEADING_COUNT :]]
+                context = [h.raw_text for h in prev_batch[-self._context_heading_count :]]
             batches.append((i, batch, context))
 
         max_workers = min(self.concurrency, len(batches))
@@ -332,9 +312,7 @@ class HeadingFormatter:
             relative_path = prompt_path[1:]
             current_dir = Path.cwd()
             project_root = None
-
-            # Look for project root markers
-            markers = ["pyproject.toml", "setup.py", ".git", "providers.yml"]
+            markers = get_config().unified_config.project_root_markers
             for marker in markers:
                 for parent in [current_dir, *list(current_dir.parents)]:
                     if (parent / marker).exists():

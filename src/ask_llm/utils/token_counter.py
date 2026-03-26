@@ -4,6 +4,8 @@ from typing import ClassVar, Optional
 
 from loguru import logger
 
+from ask_llm.config.context import get_config
+
 try:
     import tiktoken
 
@@ -16,8 +18,7 @@ except ImportError:
 class TokenCounter:
     """Count tokens and words in text."""
 
-    # Default encoding for unknown models
-    DEFAULT_ENCODING: ClassVar[str] = "cl100k_base"
+    # Model to encoding mapping (kept in code as models evolve frequently)
 
     # Model to encoding mapping
     ENCODING_MAP: ClassVar[dict[str, str]] = {
@@ -126,7 +127,7 @@ class TokenCounter:
             Encoding name
         """
         if not model:
-            return cls.DEFAULT_ENCODING
+            return get_config().unified_config.token.default_encoding
 
         model_lower = model.lower()
 
@@ -139,7 +140,7 @@ class TokenCounter:
             if key in model_lower:
                 return encoding
 
-        return cls.DEFAULT_ENCODING
+        return get_config().unified_config.token.default_encoding
 
     @classmethod
     def truncate_to_tokens(cls, text: str, max_tokens: int, model: Optional[str] = None) -> str:

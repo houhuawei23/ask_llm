@@ -5,13 +5,14 @@ from pathlib import Path
 
 import pytest
 
+from ask_llm.cli import _resolve_trans_input_paths
 from ask_llm.core.batch import BatchResult, GlobalBatchProcessor, ModelConfig, TaskStatus
 from ask_llm.core.text_splitter import TextSplitter
 from ask_llm.core.translator import Translator
 from ask_llm.core.models import RequestMetadata
+from ask_llm.config.context import set_config
 from ask_llm.config.loader import ConfigLoader
 from ask_llm.config.manager import ConfigManager
-from ask_llm.utils.trans_config_loader import TransConfigLoader
 from ask_llm.utils.translation_exporter import TranslationExporter
 
 
@@ -166,16 +167,17 @@ Content for section 2.
         finally:
             Path(temp_path).unlink()
 
-    def test_config_loading_integration(self):
-        """Test configuration loading integration."""
-        # Test default config
-        default_config = TransConfigLoader.get_default_config()
-        assert default_config is not None
-        assert default_config.target_language == "zh"
+    def test_config_loading_integration(self, sample_config_file):
+        """Test configuration loading integration with default_config.yml."""
+        load_result = ConfigLoader.load(str(sample_config_file))
+        set_config(load_result)
+        assert load_result.app_config.default_provider is not None
+        assert load_result.unified_config.translation.target_language == "zh"
 
-        # Test loading non-existent config (should return None)
-        config = TransConfigLoader.load("nonexistent_config.yml")
-        assert config is None
+    def test_config_not_found_raises(self):
+        """Test loading non-existent config raises FileNotFoundError."""
+        with pytest.raises(FileNotFoundError):
+            ConfigLoader.load("/nonexistent/default_config.yml")
 
     def test_translator_task_creation(self):
         """Test translator creating tasks from chunks."""
@@ -281,3 +283,38 @@ More content.
 
         finally:
             Path(input_path).unlink()
+
+    def test_resolve_trans_input_paths_directory(self):
+        """Test _resolve_trans_input_paths with directory input."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            (Path(tmpdir) / "a.md").write_text("# A")
+            (Path(tmpdir) / "b.txt").write_text("text")
+            (Path(tmpdir) / "c.ipynb").write_text("{}")
+            (Path(tmpdir) / "d.py").write_text("# code")  # Not translatable
+
+            resolved = _resolve_trans_input_paths(
+                [tmpdir],
+                translatable_extensions=[".md", ".markdown", ".txt", ".ipynb"],
+                recursive_dir=False,
+            )
+            assert len(resolved) == 3  # a.md, b.txt, c.ipynb (not d.py)
+            assert any("a.md" in p for p in resolved)
+            assert any("b.txt" in p for p in resolved)
+            assert any("c.ipynb" in p for p in resolved)
+            assert not any("d.py" in p for p in resolved)
+
+    def test_resolve_trans_input_paths_recursive(self):
+        """Test _resolve_trans_input_paths with recursive_dir=True."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            (Path(tmpdir) / "root.md").write_text("# Root")
+            sub = Path(tmpdir) / "sub"
+            sub.mkdir()
+            (sub / "nested.md").write_text("# Nested")
+
+            resolved = _resolve_trans_input_paths(
+                [tmpdir],
+                translatable_extensions=[".md"],
+                recursive_dir=True,
+            )
+            assert len(resolved) == 2  # root.md and sub/nested.md
+            assert any("nested.md" in p for p in resolved)

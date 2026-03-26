@@ -34,10 +34,12 @@ pip install -e .
 ### Configuration
 
 ```bash
-# Create example configuration
+# Create default_config.yml template
 ask-llm config init
 
-# Edit config.json with your API keys
+# Edit default_config.yml with your API keys (use ${VAR} for environment variables)
+# Config priority: CLI args > env vars (ASK_LLM_*) > user config > package default
+# Config is searched in: --config > ./default_config.yml > ~/.config/ask_llm/ > /etc/ask_llm/
 # Then verify
 ask-llm config test
 ```
@@ -57,6 +59,11 @@ ask-llm chat
 # With initial context
 ask-llm chat -i context.txt -s "You are a helpful assistant"
 
+# Translation (file, directory, or glob)
+ask-llm trans document.md
+ask-llm trans /path/to/dir/ -o translated/
+ask-llm trans *.md --max-parallel-files 5
+
 # Batch processing
 ask-llm batch batch-examples/prompt-contents.yml -o results.json
 ```
@@ -67,6 +74,7 @@ ask-llm batch batch-examples/prompt-contents.yml -o results.json
 |---------|-------------|
 | `ask-llm ask [INPUT]` | Process input with LLM |
 | `ask-llm chat` | Start interactive chat |
+| `ask-llm trans [FILES...]` | Translate files (supports directory and glob) |
 | `ask-llm batch [CONFIG]` | Process batch tasks from YAML config |
 | `ask-llm config show` | Display configuration |
 | `ask-llm config test` | Test API connections |
@@ -93,12 +101,11 @@ ask_llm/
 ├── src/ask_llm/          # Main package
 │   ├── cli.py            # CLI entry point
 │   ├── core/             # Core logic
-│   ├── providers/        # API providers
 │   ├── config/           # Configuration
 │   └── utils/            # Utilities
 ├── tests/                # Tests
 ├── docs/                 # Documentation
-└── config.json           # Configuration file
+└── default_config.yml    # Unified configuration (run `ask-llm config init` to create)
 ```
 
 ## Development

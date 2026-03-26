@@ -5,17 +5,20 @@ from pathlib import Path
 
 import pytest
 
+from ask_llm.config.unified_config import TranslationConfig
 from ask_llm.core.translator import Translator
-from ask_llm.utils.trans_config_loader import TransConfig
 
 
 class TestTransPromptFileIntegration:
     """Integration tests for prompt file functionality."""
 
-    def test_trans_config_with_prompt_file(self):
-        """Test TransConfig with prompt_file field."""
-        config = TransConfig(prompt_file="@prompts/tech-paper-trans.md")
-        assert config.prompt_file == "@prompts/tech-paper-trans.md"
+    def test_translation_config_defaults(self):
+        """Test TranslationConfig default values."""
+        config = TranslationConfig()
+        assert config.target_language == "zh"
+        assert config.threads == 20
+        assert config.max_parallel_files == 3
+        assert config.retries == 3
 
     def test_translator_with_prompt_file(self):
         """Test Translator with prompt file."""

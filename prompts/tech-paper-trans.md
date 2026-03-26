@@ -26,9 +26,9 @@
     3. 列表项 3
 - 注意保留原文中的图片，并使用 markdown 语法插入图片。如：
   ```markdown
-  ![图 1](path/to/image.jpg)
+  ![xxx_image](path/to/xxx_image.png)
 
-  > 图 1 | 图片描述。
+  > 图片描述。
   ```
 - 注意保留原文中的表格，并使用 markdown 语法插入表格。不用翻译表格中的内容，如：
   ```markdown

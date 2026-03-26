@@ -29,7 +29,9 @@ ask_llm/
 │   │   ├── text_splitter.py  # Text splitting logic
 │   │   └── md_heading_formatter.py  # Markdown formatting
 │   ├── config/               # Configuration management
-│   │   ├── loader.py         # Config loading
+│   │   ├── loader.py         # Loads default_config.yml
+│   │   ├── unified_config.py # UnifiedConfig model
+│   │   ├── context.py        # Config context for current command
 │   │   └── manager.py        # Config management
 │   └── utils/                # Utility modules
 │       ├── console.py        # Rich console wrapper
@@ -38,7 +40,6 @@ ask_llm/
 │       ├── batch_exporter.py # Batch result export
 │       ├── batch_loader.py   # Batch config loading
 │       ├── notebook_translator.py  # Jupyter notebook support
-│       ├── trans_config_loader.py  # Translation config
 │       └── translation_exporter.py # Translation export
 ├── tests/                    # Tests
 │   ├── unit/                 # Unit tests
@@ -47,7 +48,7 @@ ask_llm/
 ├── docs/                     # Documentation
 ├── pyproject.toml            # Modern Python project config
 ├── requirements.txt          # Dependencies
-└── providers.yml             # Provider configuration
+└── default_config.yml       # Unified configuration (providers, translation, batch, etc.)
 ```
 
 ## Coding Conventions
@@ -194,24 +195,14 @@ pre-commit run --all-files
 
 ## Configuration
 
-### Provider Configuration
+### Unified Configuration (default_config.yml)
 
-The tool uses a YAML/JSON configuration file for API providers:
+The tool uses a single `default_config.yml` for all settings. Run `ask-llm config init` to create a template.
 
-```yaml
-# providers.yml
-default_provider: deepseek
-default_model: deepseek-chat
-providers:
-  deepseek:
-    api_provider: deepseek
-    api_key: sk-your-api-key
-    api_base: https://api.deepseek.com/v1
-    models:
-      - deepseek-chat
-      - deepseek-reasoner
-    api_temperature: 0.7
-```
+Search order: `--config` > `./default_config.yml` > `~/.config/ask_llm/` > `/etc/ask_llm/` > package built-in.
+
+Sections: `providers`, `general`, `translation`, `batch`, `file`, `format_heading`, `text_splitter`, `token`, `project_root_markers`.
+Use `${VAR}` in YAML for environment variable substitution.
 
 ### CLI Commands
 
@@ -222,6 +213,7 @@ providers:
 | `ask-llm batch [CONFIG]` | Batch processing from YAML |
 | `ask-llm config show` | Display configuration |
 | `ask-llm config test` | Test API connections |
+| `ask-llm config init` | Generate default_config.yml template |
 
 ### Example Usage
 
@@ -256,10 +248,12 @@ response = provider.call(messages=[...])
 
 ```python
 from ask_llm.config.loader import ConfigLoader
+from ask_llm.config.context import set_config
 from ask_llm.config.manager import ConfigManager
 
-config = ConfigLoader.load("config.json")
-manager = ConfigManager(config)
+load_result = ConfigLoader.load()  # loads default_config.yml
+set_config(load_result)  # required for modules using get_config()
+manager = ConfigManager(load_result.app_config)
 manager.set_provider("deepseek")
 manager.apply_overrides(model="gpt-4", temperature=0.5)
 ```

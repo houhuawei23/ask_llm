@@ -2,6 +2,8 @@
 
 import pytest
 
+from ask_llm.config.context import set_config
+from ask_llm.config.loader import ConfigLoader
 from ask_llm.utils.token_counter import TokenCounter
 from ask_llm.utils.file_handler import FileHandler
 
@@ -33,9 +35,12 @@ class TestTokenCounter:
         assert stats["word_count"] == 2
         assert stats["char_count"] == 11
 
-    def test_get_encoding(self):
+    def test_get_encoding(self, sample_config_file):
         """Test encoding selection."""
-        assert TokenCounter._get_encoding(None) == TokenCounter.DEFAULT_ENCODING
+        load_result = ConfigLoader.load(str(sample_config_file))
+        set_config(load_result)
+        # When model is None, uses default from config (cl100k_base)
+        assert TokenCounter._get_encoding(None) == "cl100k_base"
         assert TokenCounter._get_encoding("gpt-4") == "cl100k_base"
         assert TokenCounter._get_encoding("deepseek-chat") == "cl100k_base"
 
@@ -91,8 +96,10 @@ class TestFileHandler:
 
         assert test_file.read_text() == "New content"
 
-    def test_generate_output_path(self, temp_dir):
+    def test_generate_output_path(self, temp_dir, sample_config_file):
         """Test output path generation."""
+        load_result = ConfigLoader.load(str(sample_config_file))
+        set_config(load_result)
         input_path = temp_dir / "input.txt"
 
         output = FileHandler.generate_output_path(input_path)

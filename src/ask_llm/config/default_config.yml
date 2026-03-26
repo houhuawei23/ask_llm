@@ -1,0 +1,86 @@
+# Ask LLM - Built-in Default Configuration (package fallback)
+
+# === 1. Provider/API Configuration ===
+default_provider: deepseek
+default_model: deepseek-chat
+providers:
+  deepseek:
+    base_url: "https://api.deepseek.com/v1"
+    api_key: ${DEEPSEEK_API_KEY}
+    default_model: deepseek-chat
+    models:
+      - name: deepseek-chat
+      - name: deepseek-reasoner
+    api_temperature: 0.7
+    api_top_p: null
+    max_tokens: null
+    timeout: 60.0
+
+# === 2. General/Global Defaults ===
+general:
+  default_prompt_template: "Please process the following text:\n\n{content}"
+  default_output_filename: output.txt
+  stream_default: true
+
+# === 3. Translation Defaults ===
+translation:
+  target_language: zh
+  source_language: auto
+  style: formal
+  threads: 20                    # Single-file concurrent API calls (max_concurrent_api_calls)
+  max_parallel_files: 3          # Max files processed in parallel when translating a directory
+  max_concurrent_api_calls: 20   # Per-file concurrent API calls (alias for threads)
+  retries: 3
+  max_chunk_size: 4000
+  preserve_format: true
+  include_original: false
+  temperature: null             # null uses provider default
+  default_prompt_file: null       # null for style-based prompts
+  translatable_extensions:
+    - ".md"
+    - ".markdown"
+    - ".txt"
+    - ".ipynb"
+  recursive_dir: false          # Include subdirectories when translating a directory
+
+# === 4. Batch Processing Defaults ===
+batch:
+  mode: prompt-content-pairs
+  threads: 20
+  retries: 3
+  retry_delay: 1.0
+  retry_delay_max: 10.0
+  default_output_format: json
+  batch_output_dir: batch_output
+  batch_results_dir: batch_results
+  output_suffix: _results
+
+# === 5. File Handling ===
+file:
+  chunk_size: 8192
+  default_output_suffix: _output
+  translated_suffix: _translated
+  formatted_suffix: _formatted
+  tqdm_ncols: 80
+
+# === 6. Markdown Heading Formatting ===
+format_heading:
+  default_prompt_file: "@prompts/md-heading-format.md"
+  batch_size: 80
+  concurrency: 4
+  context_heading_count: 5
+
+# === 7. Text Splitter ===
+text_splitter:
+  max_chunk_size: 2000
+
+# === 8. Token Counting ===
+token:
+  default_encoding: cl100k_base
+
+# === 9. Project Root Markers ===
+project_root_markers:
+  - pyproject.toml
+  - setup.py
+  - .git
+  - default_config.yml
