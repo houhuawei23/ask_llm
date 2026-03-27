@@ -1,7 +1,9 @@
-"""Console output utilities using Rich."""
+"""Terminal output: Loguru for leveled logs; Rich for layout, tables, progress, streaming."""
+
+from __future__ import annotations
 
 import sys
-from typing import Any, Optional
+from typing import Any
 
 from loguru import logger
 from rich.console import Console as RichConsole
@@ -12,13 +14,36 @@ from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
 
+# Align with arxiv2md-beta / paper_pipeline_beta: timestamp | source | level | message
+_LOGURU_CONSOLE_FORMAT = (
+    "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
+    "<cyan>{extra[component]}</cyan> | "
+    "<level>{level: <8}</level> | "
+    "<level>{message}</level>"
+)
+
+logger.configure(extra={"component": "ask-llm"})
+
+# Default sink before Typer callback (e.g. import-time errors). CLI.setup() replaces levels.
+logger.add(
+    sys.stderr,
+    level="INFO",
+    format=_LOGURU_CONSOLE_FORMAT,
+    colorize=True,
+)
+
 
 class Console:
-    """Console output handler with Rich formatting."""
+    """
+    User-facing output.
 
-    _instance: Optional["Console"] = None
+    - Loguru: print_success/info/warning/error map to logger levels.
+    - Rich: print (styled/Panel), print_markdown, print_table, progress, print_stream, etc.
+    """
 
-    def __new__(cls) -> "Console":
+    _instance: Console | None = None
+
+    def __new__(cls) -> Console:
         if cls._instance is None:
             cls._instance = super().__new__(cls)
         return cls._instance
@@ -27,7 +52,6 @@ class Console:
         """Initialize console."""
         if not hasattr(self, "_initialized"):
             self._console = RichConsole()
-            self._error_console = RichConsole(stderr=True)
             self._quiet = False
             self._debug = False
             self._initialized = True
@@ -43,8 +67,8 @@ class Console:
         self._quiet = quiet
         self._debug = debug
 
-        # Configure loguru
         logger.remove()
+        logger.configure(extra={"component": "ask-llm"})
 
         if quiet:
             level = "ERROR"
@@ -53,23 +77,33 @@ class Console:
         else:
             level = "INFO"
 
+        fmt = _LOGURU_CONSOLE_FORMAT
+        if debug:
+            fmt = (
+                "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
+                "<cyan>{extra[component]}</cyan> | "
+                "<level>{level: <8}</level> | "
+                "<dim>{name}:{function}:{line}</dim> | "
+                "<level>{message}</level>"
+            )
+
         logger.add(
             sys.stderr,
             level=level,
-            format="<level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
+            format=fmt,
             colorize=True,
         )
 
     def print(
         self,
         message: Any = "",
-        style: Optional[str] = None,
+        style: str | None = None,
         panel: bool = False,
-        panel_title: Optional[str] = None,
+        panel_title: str | None = None,
         end: str = "\n",
     ) -> None:
         """
-        Print message to console.
+        Rich to stdout: styled text, panels, non-log presentation.
 
         Args:
             message: Message to print
@@ -106,20 +140,26 @@ class Console:
                 self._console.print(message, style=style)
 
     def print_success(self, message: str) -> None:
-        """Print success message."""
-        self.print(f"✓ {message}", style="green")
+        """Map to loguru SUCCESS level."""
+        if self._quiet:
+            return
+        logger.success(message)
 
     def print_error(self, message: str) -> None:
-        """Print error message."""
-        self._error_console.print(f"✗ {message}", style="bold red")
+        """Map to loguru ERROR (not suppressed by quiet)."""
+        logger.error(message)
 
     def print_warning(self, message: str) -> None:
-        """Print warning message."""
-        self.print(f"⚠ {message}", style="yellow")
+        """Map to loguru WARNING."""
+        if self._quiet:
+            return
+        logger.warning(message)
 
     def print_info(self, message: str) -> None:
-        """Print info message."""
-        self.print(f"i {message}", style="blue")  # Use 'i' instead of ambiguous character
+        """Map to loguru INFO."""
+        if self._quiet:
+            return
+        logger.info(message)
 
     def print_markdown(self, text: str) -> None:
         """Print markdown formatted text."""
@@ -136,7 +176,7 @@ class Console:
         self._console.print(syntax)
 
     def print_table(
-        self, headers: list[str], rows: list[list[Any]], title: Optional[str] = None
+        self, headers: list[str], rows: list[list[Any]], title: str | None = None
     ) -> None:
         """
         Print data as table.

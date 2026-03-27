@@ -617,6 +617,10 @@ class GlobalBatchProcessor:
                     progress_task_id,
                     description=f"{model_key} Task {task.task_id} ({progress_tokens} tokens): Processing...",
                 )
+            elif progress is None:
+                logger.info(
+                    f"Translation chunk {task.task_id} start ({model_key}, {progress_tokens})"
+                )
 
             # Stream response
             for chunk in processor.process(
@@ -676,6 +680,10 @@ class GlobalBatchProcessor:
                     progress_task_id,
                     description=f"{model_key} Task {task.task_id} ({progress_tokens} tokens): ✓ Complete ({output_token_count} out)",
                     completed=100,
+                )
+            elif progress is None:
+                logger.info(
+                    f"Translation chunk {task.task_id} complete ({output_token_count} output tokens)"
                 )
 
             logger.debug(f"Task {task.task_id} ({model_key}) completed successfully")
