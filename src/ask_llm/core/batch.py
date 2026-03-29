@@ -1,5 +1,6 @@
 """Batch processing core logic and data models."""
 
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
@@ -496,6 +497,39 @@ class GlobalBatchProcessor:
         self.retry_delay = retry_delay
         self.retry_delay_max = retry_delay_max
         self.verbose = verbose
+        self._auth_error_lock = threading.Lock()
+        self._auth_error_logged = False
+
+    @staticmethod
+    def _is_authentication_error(error_msg: str) -> bool:
+        e = (error_msg or "").lower()
+        return any(
+            k in e
+            for k in (
+                "401",
+                "authentication",
+                "invalid api key",
+                "api key",
+                "invalid_request_error",
+                "authentication_error",
+                "unauthorized",
+            )
+        )
+
+    def _log_global_task_failure(self, task_id: int, model_key: str, error_msg: str) -> None:
+        """Log task failure; collapse duplicate authentication errors from parallel workers."""
+        if self._is_authentication_error(error_msg):
+            with self._auth_error_lock:
+                if not self._auth_error_logged:
+                    self._auth_error_logged = True
+                    logger.error(
+                        f"API authentication failed ({model_key}): {error_msg}\n"
+                        "(Further parallel tasks with the same auth error are logged at DEBUG only.)"
+                    )
+                else:
+                    logger.debug(f"Task {task_id} ({model_key}) failed (auth): {error_msg}")
+        else:
+            logger.error(f"Task {task_id} ({model_key}) failed: {error_msg}")
 
     def _create_provider_for_task(
         self,
@@ -690,7 +724,7 @@ class GlobalBatchProcessor:
 
         except Exception as e:
             error_msg = str(e)
-            logger.error(f"Task {task.task_id} ({model_key}) failed: {error_msg}")
+            self._log_global_task_failure(task.task_id, model_key, error_msg)
 
             # Log detailed error information in verbose mode
             if self.verbose:

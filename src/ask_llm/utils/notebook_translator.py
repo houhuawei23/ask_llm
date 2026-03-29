@@ -138,6 +138,11 @@ class NotebookTranslator:
         )
         results = processor.process_global_tasks(tasks, config_manager, show_progress=show_progress)
 
+        successful = sum(1 for r in results if r.status.value == "success")
+        failed = len(results) - successful
+        if successful == 0 and failed > 0 and getattr(processor, "_auth_error_logged", False):
+            raise RuntimeError("API authentication failed; no translated output.")
+
         # Build cell_index -> list of translated chunks (in order)
         result_map = {r.task_id: r for r in results}
         cell_translations: Dict[int, List[str]] = {}
@@ -182,8 +187,6 @@ class NotebookTranslator:
         with open(output_path, "w", encoding="utf-8") as f:
             nbformat.write(translated_notebook, f)
 
-        successful = sum(1 for r in results if r.status.value == "success")
-        failed = len(results) - successful
         ok = [r for r in results if r.status.value == "success" and r.metadata]
         total_in = sum(r.metadata.input_tokens for r in ok if r.metadata)
         total_out = sum(r.metadata.output_tokens for r in ok if r.metadata)

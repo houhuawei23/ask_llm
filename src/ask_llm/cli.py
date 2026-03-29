@@ -29,6 +29,11 @@ from ask_llm.core.md_heading_formatter import (
 from ask_llm.core.processor import RequestProcessor
 from ask_llm.core.text_splitter import TextSplitter
 from ask_llm.core.translator import Translator
+from ask_llm.utils.api_key_gate import (
+    api_key_is_missing_or_unresolved,
+    ensure_api_key_for_provider,
+    require_resolved_api_key,
+)
 from ask_llm.utils.chunk_balance import plain_text_chunks_by_tokens, rebalance_translation_chunks
 from ask_llm.utils.console import console
 from ask_llm.utils.file_handler import FileHandler
@@ -199,6 +204,13 @@ def ask(
             help="Stream response to console",
         ),
     ] = True,
+    skip_api_key_check: Annotated[
+        bool,
+        typer.Option(
+            "--skip-api-key-check",
+            help="Skip API key presence check (not recommended)",
+        ),
+    ] = False,
 ) -> None:
     """
     Send a request to LLM API with input content.
@@ -229,6 +241,14 @@ def ask(
             model=model,
             temperature=temperature,
         )
+
+        strict_gate = ensure_api_key_for_provider(
+            config_manager,
+            config_manager.current_provider_name,
+            skip_api_key_check=skip_api_key_check,
+        )
+        if strict_gate:
+            require_resolved_api_key(config_manager, config_manager.current_provider_name)
 
         provider_config = config_manager.get_provider_config()
 
@@ -396,6 +416,13 @@ def chat(
             help="Configuration file path",
         ),
     ] = None,
+    skip_api_key_check: Annotated[
+        bool,
+        typer.Option(
+            "--skip-api-key-check",
+            help="Skip API key presence check (not recommended)",
+        ),
+    ] = False,
 ) -> None:
     """
     Start interactive chat session.
@@ -419,6 +446,14 @@ def chat(
             model=model,
             temperature=temperature,
         )
+
+        strict_gate = ensure_api_key_for_provider(
+            config_manager,
+            config_manager.current_provider_name,
+            skip_api_key_check=skip_api_key_check,
+        )
+        if strict_gate:
+            require_resolved_api_key(config_manager, config_manager.current_provider_name)
 
         provider_config = config_manager.get_provider_config()
 
@@ -689,6 +724,13 @@ def batch(
             help="Enable verbose output with detailed API call information",
         ),
     ] = False,
+    skip_api_key_check: Annotated[
+        bool,
+        typer.Option(
+            "--skip-api-key-check",
+            help="Skip API key presence check (not recommended)",
+        ),
+    ] = False,
 ) -> None:
     """
     Process batch tasks from YAML configuration file.
@@ -768,6 +810,16 @@ def batch(
         config_manager = ConfigManager(load_result.app_config)
         app_config = load_result.app_config
 
+        unique_providers = sorted({m.provider for m in provider_models})
+        for pname in unique_providers:
+            strict_gate = ensure_api_key_for_provider(
+                config_manager,
+                pname,
+                skip_api_key_check=skip_api_key_check,
+            )
+            if strict_gate:
+                require_resolved_api_key(config_manager, pname)
+
         # Step 1: Validate all models and test connections
         console.print()
         console.print("[bold]Validating models and testing connections...[/bold]")
@@ -789,11 +841,7 @@ def batch(
                 provider_config = app_config.providers[model_config.provider]
 
                 # Check API key
-                if not provider_config.api_key or provider_config.api_key.strip() in (
-                    "",
-                    "your-api-key-here",
-                    "placeholder",
-                ):
+                if api_key_is_missing_or_unresolved(provider_config.api_key):
                     console.print("[red]✗[/red] API key not configured")
                     skipped_providers.append(model_key)
                     continue
@@ -1170,17 +1218,23 @@ def _process_notebook_translation(
         model_config=model_config,
     )
 
-    successful, failed, total_in, total_out = notebook_translator.translate_notebook(
-        input_path=file_path,
-        output_path=output_path,
-        config_manager=config_manager,
-        max_workers=trans_config.threads,
-        max_retries=trans_config.retries,
-        show_progress=not stream,
-        balance_chunks=trans_config.balance_translation_chunks,
-        max_chunk_tokens=trans_config.max_chunk_tokens,
-        min_chunk_merge_tokens=trans_config.min_chunk_merge_tokens,
-    )
+    try:
+        successful, failed, total_in, total_out = notebook_translator.translate_notebook(
+            input_path=file_path,
+            output_path=output_path,
+            config_manager=config_manager,
+            max_workers=trans_config.threads,
+            max_retries=trans_config.retries,
+            show_progress=not stream,
+            balance_chunks=trans_config.balance_translation_chunks,
+            max_chunk_tokens=trans_config.max_chunk_tokens,
+            min_chunk_merge_tokens=trans_config.min_chunk_merge_tokens,
+        )
+    except RuntimeError as e:
+        if "API authentication failed" in str(e):
+            console.print_error(str(e))
+            raise typer.Exit(1) from e
+        raise
 
     total = successful + failed
     console.print_success(f"Translation saved to: {output_path}")
@@ -1336,6 +1390,13 @@ def trans(
             min=256,
         ),
     ] = None,
+    skip_api_key_check: Annotated[
+        bool,
+        typer.Option(
+            "--skip-api-key-check",
+            help="Skip API key presence check (not recommended)",
+        ),
+    ] = False,
 ) -> None:
     """
     Translate text files using LLM API.
@@ -1421,6 +1482,14 @@ def trans(
             model=final_model,
             temperature=trans_config.temperature,
         )
+
+        strict_gate = ensure_api_key_for_provider(
+            config_manager,
+            final_provider,
+            skip_api_key_check=skip_api_key_check,
+        )
+        if strict_gate:
+            require_resolved_api_key(config_manager, final_provider)
 
         # Resolve file patterns (supports directory, glob, and file paths)
         resolved_files = _resolve_trans_input_paths(
@@ -1550,8 +1619,16 @@ def trans(
 
             # Check for failures
             failed_count = sum(1 for r in results if r.status.value == "failed")
+            successful_chunks = sum(1 for r in results if r.status.value == "success")
             if failed_count > 0:
                 console.print_warning(f"{failed_count} chunk(s) failed to translate")
+            if (
+                successful_chunks == 0
+                and failed_count > 0
+                and getattr(processor, "_auth_error_logged", False)
+            ):
+                console.print_error("翻译失败: API 认证错误, 未产生有效译文。")
+                raise typer.Exit(1)
 
             # Determine output path
             if output:
@@ -1596,8 +1673,7 @@ def trans(
                 console.print_success(f"Translation saved to: {exported_path}")
 
                 # Display statistics
-                successful = sum(1 for r in results if r.status.value == "success")
-                console.print(f"  Successful: {successful}/{len(results)}")
+                console.print(f"  Successful: {successful_chunks}/{len(results)}")
                 if failed_count > 0:
                     console.print_warning(f"  Failed: {failed_count}/{len(results)}")
 

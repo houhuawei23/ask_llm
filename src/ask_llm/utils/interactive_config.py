@@ -8,6 +8,7 @@ from loguru import logger
 
 from ask_llm.config.manager import ConfigManager
 from ask_llm.core.batch import ModelConfig
+from ask_llm.utils.api_key_gate import api_key_is_missing_or_unresolved
 from ask_llm.utils.console import console
 
 try:
@@ -129,7 +130,7 @@ class InteractiveConfigHelper:
         # Check if API key is configured
         api_key = provider_config.api_key
 
-        if not api_key or api_key.strip() in ("", "your-api-key-here", "placeholder"):
+        if api_key_is_missing_or_unresolved(api_key):
             console.print()
             console.print_warning(f"API key not configured for provider '{provider_name}'")
             console.print_info("You can set it via environment variable or enter it now.")
@@ -150,8 +151,9 @@ class InteractiveConfigHelper:
                 if not api_key:
                     raise ValueError(f"API key is required for provider '{provider_name}'")
 
-                # Update config manager
+                # Update config manager and process env so llm_engine's providers.yml resolution matches
                 self.config_manager.apply_overrides(api_key=api_key)
+                os.environ[env_var_name] = api_key
                 provider_config = self.config_manager.get_provider_config(provider_name)
 
                 # Ask if user wants to save to config file
