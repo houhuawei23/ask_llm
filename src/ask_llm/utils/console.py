@@ -22,15 +22,9 @@ _LOGURU_CONSOLE_FORMAT = (
     "<level>{message}</level>"
 )
 
-logger.configure(extra={"component": "ask-llm"})
-
-# Default sink before Typer callback (e.g. import-time errors). CLI.setup() replaces levels.
-logger.add(
-    sys.stderr,
-    level="INFO",
-    format=_LOGURU_CONSOLE_FORMAT,
-    colorize=True,
-)
+# 不在模块导入时注册 loguru sink：否则在 logger.remove() 之前会叠加默认 handler，
+# 出现每条日志重复两次；且 logger.configure(extra=...) 会污染宿主（如 paper_pipeline_beta）的全局 component。
+# 统一由 Console.setup()（Typer callback）执行 logger.remove() + configure + add。
 
 
 class Console:

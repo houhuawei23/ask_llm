@@ -1211,6 +1211,7 @@ def _process_notebook_translation(
         provider=final_provider,
         model=final_model,
         temperature=trans_config.temperature,
+        max_tokens=trans_config.max_output_tokens,
     )
 
     notebook_translator = NotebookTranslator(
@@ -1449,6 +1450,7 @@ def trans(
             if max_chunk_tokens is not None
             else trans_cfg.max_chunk_tokens,
             min_chunk_merge_tokens=trans_cfg.min_chunk_merge_tokens,
+            max_output_tokens=trans_cfg.max_output_tokens,
             preserve_format=preserve_format,
             include_original=trans_cfg.include_original,
             provider=provider,
@@ -1599,6 +1601,7 @@ def trans(
                 provider=final_provider,
                 model=final_model,
                 temperature=trans_config.temperature,
+                max_tokens=trans_config.max_output_tokens,
             )
 
             # Create translation tasks

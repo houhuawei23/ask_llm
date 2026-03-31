@@ -35,6 +35,7 @@ ENV_TO_CONFIG: ClassVar[Dict[str, Tuple[str, ...]]] = {
     "ASK_LLM_TRANSLATION_RETRIES": ("translation", "retries"),
     "ASK_LLM_TRANSLATION_BALANCE_CHUNK_TOKENS": ("translation", "balance_translation_chunks"),
     "ASK_LLM_TRANSLATION_MAX_CHUNK_TOKENS": ("translation", "max_chunk_tokens"),
+    "ASK_LLM_TRANSLATION_MAX_OUTPUT_TOKENS": ("translation", "max_output_tokens"),
     "ASK_LLM_TRANSLATION_MIN_CHUNK_MERGE_TOKENS": ("translation", "min_chunk_merge_tokens"),
     "ASK_LLM_TRANSLATION_PRESERVE_FORMAT": ("translation", "preserve_format"),
     "ASK_LLM_TRANSLATION_INCLUDE_ORIGINAL": ("translation", "include_original"),
@@ -58,6 +59,7 @@ def _parse_env_value(value: str, key_path: Tuple[str, ...]) -> Any:
         or "retries" in last_key
         or "max_chunk_size" in last_key
         or "max_chunk_tokens" in last_key
+        or "max_output_tokens" in last_key
         or "min_chunk_merge_tokens" in last_key
     ):
         return int(value)

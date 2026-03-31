@@ -23,6 +23,9 @@ _INVALID_PLACEHOLDERS = frozenset(
 
 def provider_env_var_name(provider_name: str) -> str:
     """Conventional env var for a provider (e.g. deepseek -> DEEPSEEK_API_KEY)."""
+    # Special case: kimi uses KIMI_CODE_API_KEY (Kimi Code API)
+    if provider_name.lower() == "kimi-code":
+        return "KIMI_CODE_API_KEY"
     return f"{provider_name.upper().replace('-', '_')}_API_KEY"
 
 

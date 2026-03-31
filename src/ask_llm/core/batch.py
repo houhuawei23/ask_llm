@@ -608,7 +608,7 @@ class GlobalBatchProcessor:
             retry_count=retry_count,
         )
         body_tokens = TokenCounter.count_tokens(task.content, model_config.model)
-        progress_tokens = f"body≈{body_tokens} prompt≈{display_input_tokens}"
+        progress_tokens = f"body≈{body_tokens} input≈{display_input_tokens}"
 
         try:
             # Create provider for this task
@@ -623,7 +623,7 @@ class GlobalBatchProcessor:
             input_token_count = input_stats["token_count"]
             # Use provided input_tokens if available, otherwise use calculated value
             display_input_tokens = input_tokens if input_tokens is not None else input_token_count
-            progress_tokens = f"body≈{body_tokens} prompt≈{display_input_tokens}"
+            progress_tokens = f"body≈{body_tokens} input≈{display_input_tokens}"
 
             # Log detailed API call information in verbose mode
             if self.verbose:

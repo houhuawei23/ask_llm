@@ -34,3 +34,51 @@ providers:
           output: 3 # ￥/百万
         functions:
           json_output: true
+
+  kimi:
+    base_url: "https://api.kimi.com/coding/v1"
+    api_key: ${KIMI_CODE_API_KEY}
+    default_model: "kimi-k2-0711-preview"
+    models:
+      - name: "kimi-k2-0711-preview"
+        context_length: 256000
+        max_output:
+          default: 8000
+          maximum: 32000
+        speed_tokens_per_second: 40
+        token_per_character:
+          english: 0.3
+          chinese: 0.6
+        pricing_per_million_tokens: # 人民币/元
+          input: 3 # ￥/百万
+          output: 6 # ￥/百万
+        functions:
+          json_output: true
+      - name: "kimi-k2-0711-preview-longcontext"
+        context_length: 2000000
+        max_output:
+          default: 8000
+          maximum: 32000
+        speed_tokens_per_second: 30
+        token_per_character:
+          english: 0.3
+          chinese: 0.6
+        pricing_per_million_tokens: # 人民币/元
+          input: 5 # ￥/百万
+          output: 10 # ￥/百万
+        functions:
+          json_output: true
+      - name: "kimi-k2.5-preview"
+        context_length: 256000
+        max_output:
+          default: 8000
+          maximum: 32000
+        speed_tokens_per_second: 50
+        token_per_character:
+          english: 0.3
+          chinese: 0.6
+        pricing_per_million_tokens: # 人民币/元
+          input: 2 # ￥/百万
+          output: 4 # ￥/百万
+        functions:
+          json_output: true

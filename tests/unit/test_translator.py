@@ -99,6 +99,8 @@ class TestTranslator:
         assert tasks[0].content == "First chunk"
         assert tasks[1].content == "Second chunk"
         assert tasks[0].task_model_config == model_config
+        assert "{content}" in tasks[0].prompt
+        assert tasks[0].prompt == tasks[1].prompt
 
     def test_format_language_name(self):
         """Test language name formatting."""

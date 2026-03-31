@@ -37,6 +37,41 @@ class TranslationExporter:
         # Create mapping from chunk_id to result
         self.result_map = {result.task_id: result for result in results}
 
+    @staticmethod
+    def _unwrap_translation_payload(text: str) -> str:
+        """
+        Unwrap common JSON-wrapped translation payloads returned by some prompts/models.
+
+        Supports payloads like:
+        - {"translation": "..."}
+        - ```json {"translation":"..."} ```
+        Falls back to original text when parsing fails.
+        """
+        raw = text.strip()
+        if not raw:
+            return raw
+
+        # Strip optional fenced code block wrapper.
+        if raw.startswith("```"):
+            lines = raw.splitlines()
+            if len(lines) >= 3 and lines[0].startswith("```") and lines[-1].strip() == "```":
+                raw = "\n".join(lines[1:-1]).strip()
+
+        if not (raw.startswith("{") and raw.endswith("}")):
+            return text
+
+        try:
+            obj = json.loads(raw)
+        except Exception:
+            return text
+
+        if isinstance(obj, dict):
+            for key in ("translation", "translated_text", "content", "text", "result"):
+                val = obj.get(key)
+                if isinstance(val, str) and val.strip():
+                    return val.strip()
+        return text
+
     def export(self, output_path: str, format_type: Optional[str] = None) -> str:
         """
         Export translation results to file.
@@ -94,7 +129,7 @@ class TranslationExporter:
         for chunk in sorted_chunks:
             result = self.result_map.get(chunk.chunk_id)
             if result and result.response:
-                translated_text = result.response.strip()
+                translated_text = self._unwrap_translation_payload(result.response).strip()
                 if self.include_original:
                     content_parts.append(f"{chunk.content}\n---\n{translated_text}\n")
                 else:
@@ -131,7 +166,7 @@ class TranslationExporter:
         for chunk in sorted_chunks:
             result = self.result_map.get(chunk.chunk_id)
             if result and result.response:
-                translated_text = result.response.strip()
+                translated_text = self._unwrap_translation_payload(result.response).strip()
 
                 # If chunk has heading metadata, preserve it
                 if "heading_level" in chunk.metadata:

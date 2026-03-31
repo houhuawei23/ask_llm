@@ -66,6 +66,12 @@ class TranslationConfig(BaseModel):
         le=128000,
         description="Target max body tokens per translation request after rebalance (tiktoken estimate)",
     )
+    max_output_tokens: int = Field(
+        default=8192,
+        ge=256,
+        le=128000,
+        description="Completion max_tokens per translation API call (must cover zh expansion vs body)",
+    )
     min_chunk_merge_tokens: int = Field(
         default=400,
         ge=0,

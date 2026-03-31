@@ -25,6 +25,7 @@ class TestTranslationConfig:
         assert config.max_parallel_files == 3
         assert config.retries == 3
         assert config.max_chunk_tokens == 2400
+        assert config.max_output_tokens == 8192
 
     def test_custom_config(self):
         """Test custom configuration."""

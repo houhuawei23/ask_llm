@@ -123,6 +123,7 @@ ignore = [
     "B008",   # do not perform function calls in argument defaults
     "ARG001", # unused function argument (may be used by frameworks)
     "ARG002", # unused method argument
+    "RUF003", # Chinese prompts use fullwidth punctuation
 ]
 
 [tool.ruff.format]
@@ -133,7 +134,9 @@ line-ending = "auto"
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"] # unused imports allowed in __init__.py
-"src/ask_llm/core/md_heading_formatter.py" = ["RUF001"]  # Chinese prompts use fullwidth punctuation
+"src/ask_llm/core/md_heading_formatter.py" = [
+    "RUF001",
+] # Chinese prompts use fullwidth punctuation
 "tests/**/*.py" = [
     "ARG",
     "F401",
@@ -168,7 +171,7 @@ exclude_lines = [
 
 [tool.bandit]
 exclude_dirs = ["tests", "venv", ".venv", "build", "dist"]
-skips = ["B101"]  # assert_used (allowed in tests)
+skips = ["B101"]                                           # assert_used (allowed in tests)
 
 [tool.pydocstyle]
 convention = "google"

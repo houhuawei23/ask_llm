@@ -16,6 +16,19 @@ providers:
     max_tokens: null
     timeout: 60.0
 
+  kimi-code:
+    base_url: "https://api.kimi.com/coding/v1"
+    api_key: ${KIMI_CODE_API_KEY}
+    default_model: kimi-k2-0711-preview
+    models:
+      - name: kimi-k2-0711-preview
+      - name: kimi-k2-0711-preview-longcontext
+      - name: kimi-k2.5-preview
+    api_temperature: 0.7
+    api_top_p: null
+    max_tokens: null
+    timeout: 120.0
+
 # === 2. General/Global Defaults ===
 general:
   default_prompt_template: "Please process the following text:\n\n{content}"
@@ -33,6 +46,7 @@ translation:
   retries: 3
   balance_translation_chunks: true   # split/merge by tiktoken so parallel requests are similar cost
   max_chunk_tokens: 3000            # target max body tokens per chunk after rebalance
+  max_output_tokens: 8192           # completion cap per chunk (avoid truncation vs llm_engine default 2000)
   min_chunk_merge_tokens: 1500        # unused (compat); bodies merge if combined ≤ max_chunk_tokens
   preserve_format: true
   include_original: false

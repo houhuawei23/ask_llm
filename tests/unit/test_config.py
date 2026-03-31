@@ -66,6 +66,61 @@ class TestConfigLoader:
             os.environ.pop("ASK_LLM_TRANSLATION_TARGET_LANGUAGE", None)
 
 
+class TestKimiProviderConfig:
+    """Test Kimi provider configuration."""
+
+    def test_kimi_provider_in_default_config(self):
+        """Test that kimi provider is defined in default config."""
+        from ask_llm.config.loader import ConfigLoader
+
+        pkg_path = ConfigLoader._get_package_config_path()
+        load_result = ConfigLoader.load(pkg_path)
+        config = load_result.app_config
+
+        # Check kimi provider exists
+        assert "kimi" in config.providers, "kimi provider should be in default config"
+
+        kimi_config = config.providers["kimi"]
+
+        # Check required fields
+        assert kimi_config.api_provider == "kimi"
+        assert kimi_config.api_base == "https://api.kimi.com/coding"
+        assert "kimi-k2-0711-preview" in kimi_config.models
+
+    def test_kimi_provider_config_structure(self):
+        """Test kimi provider config has correct structure."""
+        from ask_llm.config.loader import ConfigLoader
+
+        pkg_path = ConfigLoader._get_package_config_path()
+        load_result = ConfigLoader.load(pkg_path)
+        config = load_result.app_config
+
+        kimi_config = config.providers["kimi"]
+
+        # Validate ProviderConfig structure
+        assert isinstance(kimi_config, ProviderConfig)
+        assert kimi_config.api_temperature == 0.7
+        assert kimi_config.timeout == 120.0
+
+    def test_kimi_provider_models(self):
+        """Test kimi provider has expected models."""
+        from ask_llm.config.loader import ConfigLoader
+
+        pkg_path = ConfigLoader._get_package_config_path()
+        load_result = ConfigLoader.load(pkg_path)
+        config = load_result.app_config
+
+        kimi_config = config.providers["kimi"]
+        expected_models = [
+            "kimi-k2-0711-preview",
+            "kimi-k2-0711-preview-longcontext",
+            "kimi-k2.5-preview",
+        ]
+
+        for model in expected_models:
+            assert model in kimi_config.models, f"Model {model} should be in kimi provider"
+
+
 class TestConfigManager:
     """Test ConfigManager."""
 

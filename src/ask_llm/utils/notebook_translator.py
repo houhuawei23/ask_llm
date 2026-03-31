@@ -118,14 +118,14 @@ class NotebookTranslator:
                 nbformat.write(notebook, f)
             return 0, 0, 0, 0
 
-        # Create BatchTasks
+        # Create BatchTasks (template keeps {content}; processor merges once)
+        prompt_template = self.translator.prompt_template_for_batch()
         tasks: List[BatchTask] = []
         for task_id, (_, chunk_content) in enumerate(tasks_data):
-            prompt = self.translator.generate_prompt(chunk_content)
             tasks.append(
                 BatchTask(
                     task_id=task_id,
-                    prompt=prompt,
+                    prompt=prompt_template,
                     content=chunk_content,
                     task_model_config=self.model_config,
                 )

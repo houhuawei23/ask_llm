@@ -72,6 +72,24 @@ class Translator:
         if prompt_file:
             self.custom_prompt_template = self._load_prompt_from_file(prompt_file)
 
+    def prompt_template_for_batch(self) -> str:
+        """
+        Template with ``{source_lang}`` / ``{target_lang}`` substituted; ``{content}`` unchanged.
+
+        Used by :meth:`create_translation_tasks` so :class:`~ask_llm.core.processor.RequestProcessor`
+        can merge ``task.content`` via ``{content}`` once. Storing a fully expanded prompt here
+        would cause :meth:`RequestProcessor._format_prompt` to append the body again.
+        """
+        if self.custom_prompt_template:
+            template = self.custom_prompt_template
+        else:
+            template = self.PROMPT_TEMPLATES.get(self.style, self.DEFAULT_TEMPLATE)
+
+        source_lang = self._format_language_name(self.source_language)
+        target_lang = self._format_language_name(self.target_language)
+
+        return template.replace("{source_lang}", source_lang).replace("{target_lang}", target_lang)
+
     def generate_prompt(self, content: str) -> str:
         """
         Generate translation prompt for given content.
@@ -82,42 +100,14 @@ class Translator:
         Returns:
             Formatted prompt string
         """
-        # Use custom template if provided
-        if self.custom_prompt_template:
-            template = self.custom_prompt_template
-        else:
-            # Use style-specific template
-            template = self.PROMPT_TEMPLATES.get(self.style, self.DEFAULT_TEMPLATE)
-
-        # Format language names
-        source_lang = self._format_language_name(self.source_language)
-        target_lang = self._format_language_name(self.target_language)
-
-        # Format prompt - use safe replacement to avoid KeyError with LaTeX formulas
-        # str.format() would parse all { } braces including LaTeX formulas like {\beta}
-        # So we manually replace only the placeholders we need
-        prompt = template.replace("{source_lang}", source_lang)
-        prompt = prompt.replace("{target_lang}", target_lang)
-        prompt = prompt.replace("{content}", content)
-
-        return prompt
+        return self.prompt_template_for_batch().replace("{content}", content)
 
     def count_prompt_template_tokens(self, model: str) -> int:
         """
         Tiktoken count of the instruction-only part: template with language placeholders
         filled and ``{content}`` removed (same substitution rules as ``generate_prompt``).
         """
-        if self.custom_prompt_template:
-            template = self.custom_prompt_template
-        else:
-            template = self.PROMPT_TEMPLATES.get(self.style, self.DEFAULT_TEMPLATE)
-        source_lang = self._format_language_name(self.source_language)
-        target_lang = self._format_language_name(self.target_language)
-        static = (
-            template.replace("{source_lang}", source_lang)
-            .replace("{target_lang}", target_lang)
-            .replace("{content}", "")
-        )
+        static = self.prompt_template_for_batch().replace("{content}", "")
         return TokenCounter.count_tokens(static, model)
 
     def create_translation_tasks(
@@ -134,11 +124,11 @@ class Translator:
             List of batch tasks
         """
         tasks = []
+        prompt_template = self.prompt_template_for_batch()
         for chunk in chunks:
-            prompt = self.generate_prompt(chunk.content)
             task = BatchTask(
                 task_id=chunk.chunk_id,
-                prompt=prompt,
+                prompt=prompt_template,
                 content=chunk.content,
                 task_model_config=model_config,
             )
