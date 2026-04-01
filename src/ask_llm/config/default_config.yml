@@ -94,7 +94,17 @@ text_splitter:
 token:
   default_encoding: cl100k_base
 
-# === 9. Project Root Markers ===
+# === 9. Paper explanation (ask-llm paper) ===
+paper:
+  default_run: all              # sections | full | all
+  output_subdir: explain
+  prompt_dir: "@prompts/paper"
+  concurrency: 20                # parallel LLM calls (I/O-bound; cap to respect rate limits)
+  max_output_tokens: 65536         # clamped per model by providers.yml max_output.maximum
+  full_model: deepseek-reasoner    # full-text job only; saves reasoning_content when API returns it
+  request_timeout_seconds: 600.0  # HTTP timeout (default provider timeout is often 60s; reasoner needs more)
+
+# === 10. Project Root Markers ===
 project_root_markers:
   - pyproject.toml
   - setup.py

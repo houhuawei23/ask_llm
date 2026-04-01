@@ -37,7 +37,7 @@ dependencies = [
     "pydantic-settings>=2.0.0",
     "litellm>=1.0.0",
     "pyyaml>=6.0.0",
-    "llm-api-engine>=0.1.2",    # 使用 llm-api-engine 作为 LLM 引擎
+    "llm-api-engine>=0.1.5",    # 使用 llm-api-engine 作为 LLM 引擎（流式 reasoning、并发重试 runner）
     "nbformat>=5.0.0",          # Jupyter notebook support for trans .ipynb
 ]
 
@@ -74,6 +74,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "ask_llm.config" = ["default_config.yml"]
+"ask_llm" = ["prompts/**/*.md"]
 
 [tool.mypy]
 python_version = "3.8"

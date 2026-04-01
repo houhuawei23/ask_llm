@@ -66,6 +66,10 @@ ask-llm trans *.md --max-parallel-files 5
 
 # Batch processing
 ask-llm batch batch-examples/prompt-contents.yml -o results.json
+
+# Paper explanation (Markdown by headings, or arxiv2md-beta directory)
+ask-llm paper -i paper.md --run all
+ask-llm paper -i path/to/arxiv-paper-dir --run sections
 ```
 
 ## Commands
@@ -75,6 +79,7 @@ ask-llm batch batch-examples/prompt-contents.yml -o results.json
 | `ask-llm ask [INPUT]` | Process input with LLM |
 | `ask-llm chat` | Start interactive chat |
 | `ask-llm trans [FILES...]` | Translate files (supports directory and glob) |
+| `ask-llm paper -i PATH` | Explain a paper: outputs under `./explain/` next to the file or directory |
 | `ask-llm batch [CONFIG]` | Process batch tasks from YAML config |
 | `ask-llm config show` | Display configuration |
 | `ask-llm config test` | Test API connections |
@@ -94,11 +99,22 @@ ask-llm batch config.yml -o results.json -f json --threads 10 --retries 5
 
 See [docs/BATCH_USAGE.md](docs/BATCH_USAGE.md) for detailed batch processing documentation.
 
+### Paper explanation (`paper`)
+
+- **Input**: a single `.md` whose **level-2** headings (`## …`) delimit explain sections (subsections `###`+ stay inside the same job), **or** a directory produced by tools like arxiv2md-beta (`paper.yml`, main `*.md`, optional `*-References.md`, `*-Appendix.md`).
+- **Runs**: `--run sections` (meta + each recognized section), `--run full` (whole document), `--run all` (both).
+- **Output**: `<input_dir>/explain/` (or next to the `.md` file). Files are **numbered in document order**, e.g. `0-meta.explain.md`, `1-abstract.explain.md`, …, `full.explain.md` as `N-full.explain.md`. Headings that do not match standard chapter names (e.g. `3 Model Architecture`) become keys like `extra:…` and use `section-generic.md` with filenames such as `3-model-architecture.explain.md` (no `extra-` in the filename).
+- **Preamble**: each output file starts with a short **说明** block (source slice + prompt path + one-line summary of the analysis prompt).
+- **Length & models**: `paper.max_output_tokens` is the requested completion cap; the CLI sets API `max_tokens` to **min(requested, `max_output.maximum`)** from `providers.yml` for that model. **DeepSeek** HTTP caps differ by model: **`deepseek-chat`** ≤8192, **`deepseek-reasoner`** ≤65536 (then `min` with YAML). The **full-document** job (`full`) uses `paper.full_model` (default `deepseek-reasoner`). When the API returns reasoning content, it is written under **推理过程（思维链）** before **正文解析**. On API errors, the log includes **`model=`** and **`max_tokens=`** (from `llm_engine`).
+- **Concurrency**: section jobs use **`GlobalBatchProcessor.process_global_tasks`** (same pipeline as `ask-llm trans`): each job gets its own provider/HTTP client, with Rich per-task progress. Default `paper.concurrency` (e.g. `20`); override with `ask-llm paper -i ... -j 8`. Use `1` to force sequential calls.
+- **Prompts**: canonical tree is `prompts/paper/` at the **repository root** (`ask_llm/prompts/…`). Under `src/ask_llm/` the `prompts` entry is a **symlink** to that tree so setuptools package-data stays valid. Override directory via `paper.prompt_dir` in `default_config.yml`.
+
 ## Project Structure
 
 ```
 ask_llm/
-├── src/ask_llm/          # Main package
+├── prompts/              # Prompt templates (paper/, tech-paper-trans.md, …)
+├── src/ask_llm/          # Main package (prompts → symlink to ../prompts)
 │   ├── cli.py            # CLI entry point
 │   ├── core/             # Core logic
 │   ├── config/           # Configuration

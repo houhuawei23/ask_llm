@@ -2,7 +2,6 @@
 
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from enum import Enum
 from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
@@ -14,10 +13,12 @@ from rich.progress import Progress, TaskID
 if TYPE_CHECKING:
     from ask_llm.config.manager import ConfigManager
 
+from ask_llm.config.context import get_config_or_none
 from ask_llm.core.models import RequestMetadata
 from ask_llm.core.processor import RequestProcessor
 from ask_llm.core.protocols import LLMProviderProtocol
 from ask_llm.utils.token_counter import TokenCounter
+from llm_engine.concurrent import run_thread_pool_with_retries
 
 
 class TaskStatus(str, Enum):
@@ -49,6 +50,9 @@ class BatchTask(BaseModel):
     task_model_config: Optional[
         ModelConfig
     ] = None  # Optional for backward compatibility (renamed from model_config to avoid Pydantic reserved keyword)
+    # Paper explain (ask-llm paper): non-streaming completion; one provider per task like trans
+    paper_mode: bool = False
+    return_reasoning: bool = False
 
 
 def sort_batch_tasks_by_estimated_input(
@@ -87,6 +91,7 @@ class BatchResult(BaseModel):
     )
     response: Optional[str] = None
     metadata: Optional[RequestMetadata] = None
+    reasoning: Optional[str] = None  # e.g. DeepSeek reasoner when paper_mode + return_reasoning
     status: TaskStatus = TaskStatus.PENDING
     error: Optional[str] = None
     timestamp: datetime = Field(default_factory=datetime.now)
@@ -254,29 +259,6 @@ class BatchProcessor:
 
         return result
 
-    def _is_retryable_error(self, error: str) -> bool:
-        """
-        Check if an error is retryable.
-
-        Args:
-            error: Error message
-
-        Returns:
-            True if error is retryable
-        """
-        retryable_keywords = [
-            "timeout",
-            "connection",
-            "network",
-            "rate limit",
-            "429",
-            "503",
-            "502",
-            "500",
-        ]
-        error_lower = error.lower()
-        return any(keyword in error_lower for keyword in retryable_keywords)
-
     def process_tasks(
         self, tasks: List[BatchTask], show_progress: bool = True
     ) -> List[BatchResult]:
@@ -290,7 +272,6 @@ class BatchProcessor:
         Returns:
             List of batch results
         """
-        results: List[BatchResult] = []
         pending_tasks = sort_batch_tasks_by_estimated_input(tasks.copy(), self.model_config.model)
 
         # Create progress display with multiple tasks
@@ -335,108 +316,56 @@ class BatchProcessor:
             task_to_progress_id = {}
 
         try:
-            with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-                # Submit initial tasks with progress tracking
-                future_to_task = {}
-                for task in pending_tasks:
-                    progress_task_id = task_to_progress_id.get(task.task_id)
-                    future = executor.submit(
-                        self._process_single_task,
-                        task,
-                        0,  # retry_count
-                        progress,
-                        progress_task_id,
+
+            def _worker(task: BatchTask, retry_count: int) -> BatchResult:
+                return self._process_single_task(
+                    task,
+                    retry_count,
+                    progress,
+                    task_to_progress_id.get(task.task_id),
+                )
+
+            def _on_retry_scheduled(task: BatchTask, failed_result: BatchResult) -> None:
+                logger.debug(
+                    f"Task {task.task_id} will be retried "
+                    f"(attempt {failed_result.retry_count + 1}/{self.max_retries})"
+                )
+
+            def _on_worker_exception(task: BatchTask, exc: BaseException) -> BatchResult:
+                logger.error(f"Unexpected error processing task {task.task_id}: {exc}")
+                if progress and task.task_id in task_to_progress_id:
+                    progress.update(
+                        task_to_progress_id[task.task_id],
+                        completed=100,
                     )
-                    future_to_task[future] = task
+                return BatchResult(
+                    task_id=task.task_id,
+                    prompt=task.prompt,
+                    content=task.content,
+                    output_filename=task.output_filename,
+                    model_settings=self.model_config,
+                    status=TaskStatus.FAILED,
+                    error=f"Unexpected error: {exc!s}",
+                )
 
-                # Process completed tasks and retry failed ones
-                retry_queue: List[Tuple[BatchTask, int]] = []  # (task, retry_count)
-
-                while future_to_task or retry_queue:
-                    # Process completed futures
-                    if future_to_task:
-                        for future in as_completed(future_to_task):
-                            task = future_to_task.pop(future)
-                            try:
-                                result = future.result()
-
-                                if result.status == TaskStatus.FAILED:
-                                    # Check if we should retry
-                                    if (
-                                        result.retry_count < self.max_retries
-                                        and self._is_retryable_error(result.error or "")
-                                    ):
-                                        # Add to retry queue with incremented retry count
-                                        retry_queue.append((task, result.retry_count + 1))
-                                        logger.debug(
-                                            f"Task {task.task_id} will be retried "
-                                            f"(attempt {result.retry_count + 1}/{self.max_retries})"
-                                        )
-                                    else:
-                                        results.append(result)
-                                        # Mark progress as complete
-                                        if progress and task.task_id in task_to_progress_id:
-                                            progress.update(
-                                                task_to_progress_id[task.task_id],
-                                                completed=100,
-                                            )
-                                else:
-                                    results.append(result)
-                                    # Mark progress as complete
-                                    if progress and task.task_id in task_to_progress_id:
-                                        progress.update(
-                                            task_to_progress_id[task.task_id],
-                                            completed=100,
-                                        )
-
-                            except Exception as e:
-                                logger.error(
-                                    f"Unexpected error processing task {task.task_id}: {e}"
-                                )
-                                results.append(
-                                    BatchResult(
-                                        task_id=task.task_id,
-                                        prompt=task.prompt,
-                                        content=task.content,
-                                        output_filename=task.output_filename,
-                                        model_settings=self.model_config,
-                                        status=TaskStatus.FAILED,
-                                        error=f"Unexpected error: {e!s}",
-                                    )
-                                )
-                                # Mark progress as complete
-                                if progress and task.task_id in task_to_progress_id:
-                                    progress.update(
-                                        task_to_progress_id[task.task_id],
-                                        completed=100,
-                                    )
-
-                    # Retry failed tasks with exponential backoff
-                    if retry_queue:
-                        # Calculate delay with exponential backoff
-                        delay = self.retry_delay * (2 ** (retry_queue[0][1] - 1))
-                        time.sleep(min(delay, self.retry_delay_max))
-
-                        # Submit retry tasks
-                        for task, retry_count in retry_queue:
-                            progress_task_id = task_to_progress_id.get(task.task_id)
-                            future = executor.submit(
-                                self._process_single_task,
-                                task,
-                                retry_count,
-                                progress,
-                                progress_task_id,
-                            )
-                            future_to_task[future] = task
-
-                        retry_queue.clear()
+            results = run_thread_pool_with_retries(
+                pending_tasks,
+                _worker,
+                max_workers=self.max_workers,
+                max_retries=self.max_retries,
+                retry_delay=self.retry_delay,
+                retry_delay_max=self.retry_delay_max,
+                is_failed=lambda r: r.status == TaskStatus.FAILED,
+                error_message=lambda r: r.error or "",
+                retry_count_from_result=lambda r: r.retry_count,
+                on_worker_exception=_on_worker_exception,
+                on_retry_scheduled=_on_retry_scheduled,
+                order_key=lambda r: r.task_id,
+            )
 
         finally:
             if show_progress and progress:
                 progress.stop()
-
-        # Sort results by task_id to maintain order
-        results.sort(key=lambda r: r.task_id)
 
         return results
 
@@ -535,6 +464,7 @@ class GlobalBatchProcessor:
         self,
         model_config: ModelConfig,
         config_manager: "ConfigManager",
+        timeout_override: Optional[float] = None,
     ) -> Tuple[LLMProviderProtocol, ModelConfig]:
         """
         Create provider instance for a specific model configuration.
@@ -556,6 +486,10 @@ class GlobalBatchProcessor:
         )
 
         provider_config_with_overrides = config_manager.get_provider_config()
+        if timeout_override is not None:
+            provider_config_with_overrides = provider_config_with_overrides.model_copy(
+                update={"timeout": float(timeout_override)}
+            )
         default_model = config_manager.get_model_override() or config_manager.get_default_model()
 
         # Create provider adapter
@@ -611,9 +545,128 @@ class GlobalBatchProcessor:
         progress_tokens = f"body≈{body_tokens} input≈{display_input_tokens}"
 
         try:
-            # Create provider for this task
-            provider, _ = self._create_provider_for_task(model_config, config_manager)
+            paper_timeout: Optional[float] = None
+            if task.paper_mode:
+                lr = get_config_or_none()
+                paper_timeout = 600.0
+                if lr is not None:
+                    paper_timeout = float(lr.unified_config.paper.request_timeout_seconds)
+
+            # Create provider for this task (paper: longer HTTP timeout for reasoner / large completions)
+            provider, _ = self._create_provider_for_task(
+                model_config,
+                config_manager,
+                timeout_override=paper_timeout if task.paper_mode else None,
+            )
             processor = RequestProcessor(provider)
+
+            # Paper explain: streaming completion + live output token estimate (same UX as trans)
+            if task.paper_mode:
+                input_stats = TokenCounter.estimate_tokens(
+                    task.prompt.strip(), model_config.model
+                )
+                input_token_count = input_stats["token_count"]
+                display_input_tokens = (
+                    input_tokens if input_tokens is not None else input_token_count
+                )
+                progress_tokens = f"paper≈{display_input_tokens} tok"
+
+                if progress and progress_task_id is not None:
+                    progress.update(
+                        progress_task_id,
+                        description=(
+                            f"{model_key} paper task {task.task_id} ({progress_tokens} tokens): "
+                            "0 out"
+                        ),
+                    )
+
+                if self.verbose:
+                    api_params = [
+                        f"provider={model_config.provider}",
+                        f"model={model_config.model}",
+                    ]
+                    if model_config.temperature is not None:
+                        api_params.append(f"temperature={model_config.temperature}")
+                    if model_config.max_tokens is not None:
+                        api_params.append(f"max_tokens={model_config.max_tokens}")
+                    api_params.append(f"input_tokens={display_input_tokens}")
+                    api_params.append(f"timeout={paper_timeout}s")
+                    logger.info(f"[Task {task.task_id}] Paper API: {', '.join(api_params)}")
+
+                start_time = time.time()
+                response_parts: List[str] = []
+                reasoning_parts: List[str] = []
+
+                for chunk in processor.iter_process_raw_stream(
+                    task.prompt,
+                    temperature=model_config.temperature,
+                    model=model_config.model,
+                    max_tokens=model_config.max_tokens,
+                    return_reasoning=task.return_reasoning,
+                ):
+                    if task.return_reasoning:
+                        c, r = chunk  # type: ignore[misc]
+                        if c:
+                            response_parts.append(c)
+                        if r:
+                            reasoning_parts.append(r)
+                        out_so_far = "".join(reasoning_parts) + "".join(response_parts)
+                    else:
+                        response_parts.append(str(chunk))
+                        out_so_far = "".join(response_parts)
+
+                    output_token_count = TokenCounter.count_tokens(
+                        out_so_far, model_config.model
+                    )
+                    if progress and progress_task_id is not None:
+                        progress.update(
+                            progress_task_id,
+                            description=(
+                                f"{model_key} paper task {task.task_id} ({progress_tokens} tokens): "
+                                f"{output_token_count} out"
+                            ),
+                        )
+
+                response = "".join(response_parts).strip()
+                reasoning_joined = "".join(reasoning_parts).strip()
+                reasoning_out = reasoning_joined if reasoning_joined else None
+                latency = time.time() - start_time
+
+                out_for_count = response
+                if reasoning_out:
+                    out_for_count = f"{reasoning_out}\n{response}"
+                output_stats = TokenCounter.estimate_tokens(out_for_count, model_config.model)
+
+                metadata = RequestMetadata(
+                    provider=provider.name,
+                    model=model_config.model,
+                    temperature=model_config.temperature
+                    if model_config.temperature is not None
+                    else provider.config.api_temperature,
+                    input_words=input_stats["word_count"],
+                    input_tokens=input_stats["token_count"],
+                    output_words=output_stats["word_count"],
+                    output_tokens=output_stats["token_count"],
+                    latency=latency,
+                )
+
+                result.response = response
+                result.reasoning = reasoning_out
+                result.metadata = metadata
+                result.status = TaskStatus.SUCCESS
+
+                if progress and progress_task_id is not None:
+                    ot = metadata.output_tokens
+                    progress.update(
+                        progress_task_id,
+                        description=(
+                            f"{model_key} paper task {task.task_id}: ✓ Complete ({ot} out)"
+                        ),
+                        completed=100,
+                    )
+
+                logger.debug(f"Task {task.task_id} ({model_key}) paper job completed")
+                return result
 
             # Format prompt with content
             full_prompt = processor._format_prompt(task.content, task.prompt)
@@ -748,29 +801,6 @@ class GlobalBatchProcessor:
 
         return result
 
-    def _is_retryable_error(self, error: str) -> bool:
-        """
-        Check if an error is retryable.
-
-        Args:
-            error: Error message
-
-        Returns:
-            True if error is retryable
-        """
-        retryable_keywords = [
-            "timeout",
-            "connection",
-            "network",
-            "rate limit",
-            "429",
-            "503",
-            "502",
-            "500",
-        ]
-        error_lower = error.lower()
-        return any(keyword in error_lower for keyword in retryable_keywords)
-
     def process_global_tasks(
         self,
         tasks: List[BatchTask],
@@ -788,7 +818,6 @@ class GlobalBatchProcessor:
         Returns:
             List of batch results
         """
-        results: List[BatchResult] = []
         default_model = (
             tasks[0].task_model_config.model
             if tasks and tasks[0].task_model_config
@@ -858,119 +887,59 @@ class GlobalBatchProcessor:
             task_to_input_tokens = {}
 
         try:
-            with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-                # Submit initial tasks with progress tracking
-                future_to_task = {}
-                for task in pending_tasks:
-                    progress_task_id = task_to_progress_id.get(task.task_id)
-                    input_token_count = task_to_input_tokens.get(task.task_id)
-                    future = executor.submit(
-                        self._process_single_global_task,
-                        task,
-                        config_manager,
-                        0,  # retry_count
-                        progress,
-                        progress_task_id,
-                        input_token_count,
+
+            def _worker(task: BatchTask, retry_count: int) -> BatchResult:
+                return self._process_single_global_task(
+                    task,
+                    config_manager,
+                    retry_count,
+                    progress,
+                    task_to_progress_id.get(task.task_id),
+                    task_to_input_tokens.get(task.task_id),
+                )
+
+            def _on_retry_scheduled(task: BatchTask, failed_result: BatchResult) -> None:
+                logger.debug(
+                    f"Task {task.task_id} will be retried "
+                    f"(attempt {failed_result.retry_count + 1}/{self.max_retries})"
+                )
+
+            def _on_worker_exception(task: BatchTask, exc: BaseException) -> BatchResult:
+                logger.error(f"Unexpected error processing task {task.task_id}: {exc}")
+                if progress and task.task_id in task_to_progress_id:
+                    progress.update(
+                        task_to_progress_id[task.task_id],
+                        completed=100,
                     )
-                    future_to_task[future] = task
+                return BatchResult(
+                    task_id=task.task_id,
+                    prompt=task.prompt,
+                    content=task.content,
+                    output_filename=task.output_filename,
+                    model_settings=task.task_model_config
+                    or ModelConfig(provider="unknown", model="unknown"),
+                    status=TaskStatus.FAILED,
+                    error=f"Unexpected error: {exc!s}",
+                )
 
-                # Process completed tasks and retry failed ones
-                retry_queue: List[Tuple[BatchTask, int]] = []  # (task, retry_count)
-
-                while future_to_task or retry_queue:
-                    # Process completed futures
-                    if future_to_task:
-                        for future in as_completed(future_to_task):
-                            task = future_to_task.pop(future)
-                            try:
-                                result = future.result()
-
-                                if result.status == TaskStatus.FAILED:
-                                    # Check if we should retry
-                                    if (
-                                        result.retry_count < self.max_retries
-                                        and self._is_retryable_error(result.error or "")
-                                    ):
-                                        # Add to retry queue with incremented retry count
-                                        retry_queue.append((task, result.retry_count + 1))
-                                        logger.debug(
-                                            f"Task {task.task_id} will be retried "
-                                            f"(attempt {result.retry_count + 1}/{self.max_retries})"
-                                        )
-                                    else:
-                                        results.append(result)
-                                        # Mark progress as complete
-                                        if progress and task.task_id in task_to_progress_id:
-                                            progress.update(
-                                                task_to_progress_id[task.task_id],
-                                                completed=100,
-                                            )
-                                else:
-                                    results.append(result)
-                                    # Mark progress as complete
-                                    if progress and task.task_id in task_to_progress_id:
-                                        progress.update(
-                                            task_to_progress_id[task.task_id],
-                                            completed=100,
-                                        )
-
-                            except Exception as e:
-                                logger.error(
-                                    f"Unexpected error processing task {task.task_id}: {e}"
-                                )
-                                if task.task_model_config:
-                                    model_key = f"{task.task_model_config.provider}/{task.task_model_config.model}"
-                                else:
-                                    model_key = "unknown"
-                                results.append(
-                                    BatchResult(
-                                        task_id=task.task_id,
-                                        prompt=task.prompt,
-                                        content=task.content,
-                                        output_filename=task.output_filename,
-                                        model_settings=task.task_model_config
-                                        or ModelConfig(provider="unknown", model="unknown"),
-                                        status=TaskStatus.FAILED,
-                                        error=f"Unexpected error: {e!s}",
-                                    )
-                                )
-                                # Mark progress as complete
-                                if progress and task.task_id in task_to_progress_id:
-                                    progress.update(
-                                        task_to_progress_id[task.task_id],
-                                        completed=100,
-                                    )
-
-                    # Retry failed tasks with exponential backoff
-                    if retry_queue:
-                        # Calculate delay with exponential backoff
-                        delay = self.retry_delay * (2 ** (retry_queue[0][1] - 1))
-                        time.sleep(min(delay, self.retry_delay_max))
-
-                        # Submit retry tasks
-                        for task, retry_count in retry_queue:
-                            progress_task_id = task_to_progress_id.get(task.task_id)
-                            input_token_count = task_to_input_tokens.get(task.task_id)
-                            future = executor.submit(
-                                self._process_single_global_task,
-                                task,
-                                config_manager,
-                                retry_count,
-                                progress,
-                                progress_task_id,
-                                input_token_count,
-                            )
-                            future_to_task[future] = task
-
-                        retry_queue.clear()
+            results = run_thread_pool_with_retries(
+                pending_tasks,
+                _worker,
+                max_workers=self.max_workers,
+                max_retries=self.max_retries,
+                retry_delay=self.retry_delay,
+                retry_delay_max=self.retry_delay_max,
+                is_failed=lambda r: r.status == TaskStatus.FAILED,
+                error_message=lambda r: r.error or "",
+                retry_count_from_result=lambda r: r.retry_count,
+                on_worker_exception=_on_worker_exception,
+                on_retry_scheduled=_on_retry_scheduled,
+                order_key=lambda r: r.task_id,
+            )
 
         finally:
             if show_progress and progress:
                 progress.stop()
-
-        # Sort results by task_id to maintain order
-        results.sort(key=lambda r: r.task_id)
 
         return results
 

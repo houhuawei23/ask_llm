@@ -212,6 +212,52 @@ class TokenConfig(BaseModel):
     )
 
 
+class PaperConfig(BaseModel):
+    """Paper explanation / parsing defaults (ask-llm paper)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    default_run: str = Field(
+        default="all",
+        description="Default --run: sections, full, or all",
+    )
+    output_subdir: str = Field(
+        default="explain",
+        description="Subdirectory under paper file/dir for explanation outputs",
+    )
+    prompt_dir: str = Field(
+        default="@prompts/paper",
+        description="Base directory for paper prompt templates (@ prefix resolves to package root)",
+    )
+    concurrency: int = Field(
+        default=5,
+        ge=1,
+        le=64,
+        description="Max parallel LLM calls for ask-llm paper (ThreadPoolExecutor)",
+    )
+    max_output_tokens: int = Field(
+        default=65536,
+        ge=1,
+        le=262144,
+        description=(
+            "Requested completion cap per paper job; effective max_tokens is "
+            "min(this, providers.yml max_output.maximum for the model); "
+            "DeepSeek caps: deepseek-chat ≤8192, deepseek-reasoner ≤65536"
+        ),
+    )
+    full_model: str = Field(
+        default="deepseek-reasoner",
+        description="Model for --run full / full job (reasoning + long output)",
+    )
+    request_timeout_seconds: float = Field(
+        default=600.0,
+        gt=0,
+        description=(
+            "HTTP client timeout for ask-llm paper API calls (reasoner / large outputs often exceed 60s)"
+        ),
+    )
+
+
 class UnifiedConfig(BaseModel):
     """Unified configuration loaded from default_config.yml."""
 
@@ -222,6 +268,7 @@ class UnifiedConfig(BaseModel):
     format_heading: FormatHeadingConfig = Field(default_factory=FormatHeadingConfig)
     text_splitter: TextSplitterConfig = Field(default_factory=TextSplitterConfig)
     token: TokenConfig = Field(default_factory=TokenConfig)
+    paper: PaperConfig = Field(default_factory=PaperConfig)
     project_root_markers: List[str] = Field(
         default_factory=lambda: ["pyproject.toml", "setup.py", ".git", "default_config.yml"],
         description="Markers to detect project root for @ path resolution",
@@ -252,6 +299,7 @@ class UnifiedConfig(BaseModel):
             format_heading=FormatHeadingConfig(**(data.get("format_heading") or {})),
             text_splitter=TextSplitterConfig(**(data.get("text_splitter") or {})),
             token=TokenConfig(**(data.get("token") or {})),
+            paper=PaperConfig(**(data.get("paper") or {})),
             project_root_markers=data.get("project_root_markers")
             or [
                 "pyproject.toml",

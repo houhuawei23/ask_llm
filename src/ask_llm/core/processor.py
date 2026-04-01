@@ -1,7 +1,7 @@
 """Request processing logic."""
 
 import time
-from typing import Generator, Optional
+from typing import Generator, Iterator, Optional, Tuple, Union
 
 from loguru import logger
 
@@ -100,12 +100,47 @@ class RequestProcessor:
             )
             yield response
 
+    def iter_process_raw_stream(
+        self,
+        prompt_template: str,
+        *,
+        temperature: Optional[float] = None,
+        model: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+        return_reasoning: bool = False,
+    ) -> Iterator[Union[str, Tuple[str, str]]]:
+        """
+        Stream a full user prompt (paper / raw mode) and yield chunks.
+
+        When *return_reasoning* is False, yields content string fragments (same as ``process(..., stream=True)`` style).
+        When True (e.g. DeepSeek reasoner), yields ``(content_delta, reasoning_delta)`` pairs.
+        """
+        prompt = (prompt_template or "").strip()
+        logger.debug(f"Streaming raw prompt request with {len(prompt)} characters")
+
+        call_kw: dict = {
+            "prompt": prompt,
+            "temperature": temperature,
+            "model": model,
+            "stream": True,
+        }
+        if max_tokens is not None:
+            call_kw["max_tokens"] = max_tokens
+        if return_reasoning:
+            call_kw["return_reasoning"] = True
+
+        gen = self.provider.call(**call_kw)
+        yield from gen
+
     def process_with_metadata(
         self,
         content: str,
         prompt_template: Optional[str] = None,
         temperature: Optional[float] = None,
         model: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+        return_reasoning: bool = False,
+        raw_prompt: bool = False,
     ) -> ProcessingResult:
         """
         Process content and return result with metadata.
@@ -115,29 +150,56 @@ class RequestProcessor:
             prompt_template: Prompt template
             temperature: Sampling temperature
             model: Model name
+            max_tokens: Completion token cap (omit to use provider default)
+            return_reasoning: If True, request ``reasoning_content`` (e.g. DeepSeek reasoner)
+            raw_prompt: If True, ``prompt_template`` is sent as the full user message (no
+                ``{content}`` merge); ``content`` is ignored.
 
         Returns:
             Processing result with metadata
         """
-        prompt = self._format_prompt(content, prompt_template)
+        if raw_prompt:
+            prompt = (prompt_template or "").strip()
+        else:
+            prompt = self._format_prompt(content, prompt_template)
 
         # Count input tokens
         input_stats = TokenCounter.estimate_tokens(prompt, model)
 
         # Call API
         start_time = time.time()
-        response = self.provider.call(
-            prompt=prompt, temperature=temperature, model=model, stream=False
-        )
+        call_kw: dict = {
+            "prompt": prompt,
+            "temperature": temperature,
+            "model": model,
+            "stream": False,
+        }
+        if max_tokens is not None:
+            call_kw["max_tokens"] = max_tokens
+        if return_reasoning:
+            call_kw["return_reasoning"] = True
+
+        raw = self.provider.call(**call_kw)
+        reasoning: Optional[str] = None
+        if isinstance(raw, tuple) and len(raw) == 2:
+            response, reasoning = raw[0], raw[1]
+        else:
+            response = raw if isinstance(raw, str) else str(raw)
+
         latency = time.time() - start_time
 
-        # Count output tokens
-        output_stats = TokenCounter.estimate_tokens(response, model)
+        # Count output tokens (main answer + optional reasoning)
+        out_for_count = response
+        if reasoning:
+            out_for_count = f"{reasoning}\n{response}"
+        output_stats = TokenCounter.estimate_tokens(out_for_count, model)
+
+        resolved_model = model or self.provider.default_model
 
         # Create metadata
         metadata = RequestMetadata(
             provider=self.provider.name,
-            model=model or self.provider.default_model,
+            model=resolved_model,
             temperature=temperature
             if temperature is not None
             else self.provider.config.api_temperature,
@@ -153,7 +215,7 @@ class RequestProcessor:
             f"tokens in {latency:.2f}s"
         )
 
-        return ProcessingResult(content=response, metadata=metadata)
+        return ProcessingResult(content=response, metadata=metadata, reasoning=reasoning)
 
     def create_chat_history(
         self,

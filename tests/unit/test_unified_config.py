@@ -7,6 +7,7 @@ import pytest
 import yaml
 
 from ask_llm.config.unified_config import (
+    PaperConfig,
     TranslationConfig,
     UnifiedConfig,
 )
@@ -54,6 +55,23 @@ class TestUnifiedConfig:
         assert config.translation.target_language == "zh"
         assert config.general.default_output_filename == "output.txt"
         assert config.batch.threads == 5
+        assert config.paper.default_run == "all"
+        assert config.paper.output_subdir == "explain"
+        assert config.paper.max_output_tokens == 65536
+        assert config.paper.full_model == "deepseek-reasoner"
+
+
+class TestPaperConfig:
+    """Paper explanation defaults."""
+
+    def test_paper_defaults(self):
+        p = PaperConfig()
+        assert p.default_run == "all"
+        assert p.output_subdir == "explain"
+        assert "prompts/paper" in p.prompt_dir
+        assert p.concurrency == 5
+        assert p.max_output_tokens == 65536
+        assert p.full_model == "deepseek-reasoner"
 
     def test_from_dict_with_translation(self):
         """Test from_dict with translation section."""

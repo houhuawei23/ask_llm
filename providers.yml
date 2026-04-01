@@ -7,8 +7,8 @@ providers:
       - name: "deepseek-chat"
         context_length: 128000
         max_output:
-          default: 4000
-          maximum: 8000
+          default: 4096
+          maximum: 8192
         speed_tokens_per_second: 30
         token_per_character:
           english: 0.3
@@ -22,8 +22,8 @@ providers:
       - name: "deepseek-reasoner"
         context_length: 128000
         max_output:
-          default: 4000
-          maximum: 64000
+          default: 4096
+          maximum: 65536   # API allows max_tokens up to 65536 for this model (chat is 8192)
         speed_tokens_per_second: 30
         token_per_character:
           english: 0.3
