@@ -124,6 +124,13 @@ ask_llm/
 └── default_config.yml    # Unified configuration (run `ask-llm config init` to create)
 ```
 
+### Batch, translation, and paper internals
+
+- `ask_llm.config.cli_session` — shared config load (`ConfigLoader` + `set_config`), `ConfigManager`, CLI overrides, and API key gate used by `trans`, `paper`, and `batch`.
+- `ask_llm.core.global_batch_runner` — `run_global_batch_tasks` creates `GlobalBatchProcessor` and runs `process_global_tasks` (optional worker clamp vs. task count for paper).
+- `ask_llm.core.tasks.builders` — factories such as `build_paper_explain_task` for typed `BatchTask` construction.
+- `BatchTask.task_kind` — `translation_chunk` or `paper_explain`; legacy `paper_mode=True` still maps to `paper_explain`.
+
 ## Development
 
 ```bash

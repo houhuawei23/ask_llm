@@ -4,10 +4,10 @@ import threading
 import time
 from datetime import datetime
 from enum import Enum
-from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple
 
 from loguru import logger
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rich.progress import Progress, TaskID
 
 if TYPE_CHECKING:
@@ -50,9 +50,18 @@ class BatchTask(BaseModel):
     task_model_config: Optional[
         ModelConfig
     ] = None  # Optional for backward compatibility (renamed from model_config to avoid Pydantic reserved keyword)
-    # Paper explain (ask-llm paper): non-streaming completion; one provider per task like trans
-    paper_mode: bool = False
+    task_kind: Literal["translation_chunk", "paper_explain"] = "translation_chunk"
+    paper_mode: bool = False  # legacy; if True, task_kind is coerced to paper_explain
     return_reasoning: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def _legacy_paper_mode(cls, data: Any) -> Any:
+        if isinstance(data, dict) and data.get("paper_mode") and data.get(
+            "task_kind", "translation_chunk"
+        ) == "translation_chunk":
+            return {**data, "task_kind": "paper_explain"}
+        return data
 
 
 def sort_batch_tasks_by_estimated_input(
@@ -501,6 +510,230 @@ class GlobalBatchProcessor:
 
         return llm_provider, model_config
 
+    def _run_paper_explain_global_task(
+        self,
+        task: BatchTask,
+        model_config: ModelConfig,
+        model_key: str,
+        processor: RequestProcessor,
+        provider: LLMProviderProtocol,
+        paper_timeout: Optional[float],
+        progress: Optional[Progress],
+        progress_task_id: Optional[TaskID],
+        input_tokens: Optional[int],
+        result: BatchResult,
+    ) -> Tuple[BatchResult, str]:
+        """Paper explain: streaming completion + live output token estimate (same UX as trans)."""
+        input_stats = TokenCounter.estimate_tokens(task.prompt.strip(), model_config.model)
+        input_token_count = input_stats["token_count"]
+        display_input_tokens = input_tokens if input_tokens is not None else input_token_count
+        progress_tokens = f"paper≈{display_input_tokens} tok"
+
+        if progress and progress_task_id is not None:
+            progress.update(
+                progress_task_id,
+                description=(
+                    f"{model_key} paper task {task.task_id} ({progress_tokens} tokens): "
+                    "0 out"
+                ),
+            )
+
+        if self.verbose:
+            api_params = [
+                f"provider={model_config.provider}",
+                f"model={model_config.model}",
+            ]
+            if model_config.temperature is not None:
+                api_params.append(f"temperature={model_config.temperature}")
+            if model_config.max_tokens is not None:
+                api_params.append(f"max_tokens={model_config.max_tokens}")
+            api_params.append(f"input_tokens={display_input_tokens}")
+            api_params.append(f"timeout={paper_timeout}s")
+            logger.info(f"[Task {task.task_id}] Paper API: {', '.join(api_params)}")
+
+        start_time = time.time()
+        response_parts: List[str] = []
+        reasoning_parts: List[str] = []
+
+        for chunk in processor.iter_process_raw_stream(
+            task.prompt,
+            temperature=model_config.temperature,
+            model=model_config.model,
+            max_tokens=model_config.max_tokens,
+            return_reasoning=task.return_reasoning,
+        ):
+            if task.return_reasoning:
+                c, r = chunk  # type: ignore[misc]
+                if c:
+                    response_parts.append(c)
+                if r:
+                    reasoning_parts.append(r)
+                out_so_far = "".join(reasoning_parts) + "".join(response_parts)
+            else:
+                response_parts.append(str(chunk))
+                out_so_far = "".join(response_parts)
+
+            output_token_count = TokenCounter.count_tokens(out_so_far, model_config.model)
+            if progress and progress_task_id is not None:
+                progress.update(
+                    progress_task_id,
+                    description=(
+                        f"{model_key} paper task {task.task_id} ({progress_tokens} tokens): "
+                        f"{output_token_count} out"
+                    ),
+                )
+
+        response = "".join(response_parts).strip()
+        reasoning_joined = "".join(reasoning_parts).strip()
+        reasoning_out = reasoning_joined if reasoning_joined else None
+        latency = time.time() - start_time
+
+        out_for_count = response
+        if reasoning_out:
+            out_for_count = f"{reasoning_out}\n{response}"
+        output_stats = TokenCounter.estimate_tokens(out_for_count, model_config.model)
+
+        metadata = RequestMetadata(
+            provider=provider.name,
+            model=model_config.model,
+            temperature=model_config.temperature
+            if model_config.temperature is not None
+            else provider.config.api_temperature,
+            input_words=input_stats["word_count"],
+            input_tokens=input_stats["token_count"],
+            output_words=output_stats["word_count"],
+            output_tokens=output_stats["token_count"],
+            latency=latency,
+        )
+
+        result.response = response
+        result.reasoning = reasoning_out
+        result.metadata = metadata
+        result.status = TaskStatus.SUCCESS
+
+        if progress and progress_task_id is not None:
+            ot = metadata.output_tokens
+            progress.update(
+                progress_task_id,
+                description=(
+                    f"{model_key} paper task {task.task_id}: ✓ Complete ({ot} out)"
+                ),
+                completed=100,
+            )
+
+        logger.debug(f"Task {task.task_id} ({model_key}) paper job completed")
+        return result, progress_tokens
+
+    def _run_translation_chunk_global_task(
+        self,
+        task: BatchTask,
+        model_config: ModelConfig,
+        model_key: str,
+        processor: RequestProcessor,
+        provider: LLMProviderProtocol,
+        progress: Optional[Progress],
+        progress_task_id: Optional[TaskID],
+        input_tokens: Optional[int],
+        result: BatchResult,
+        body_tokens: int,
+    ) -> Tuple[BatchResult, str]:
+        """Translation chunk: format prompt + stream via RequestProcessor.process."""
+        full_prompt = processor._format_prompt(task.content, task.prompt)
+
+        input_stats = TokenCounter.estimate_tokens(full_prompt, model_config.model)
+        input_token_count = input_stats["token_count"]
+        display_input_tokens = input_tokens if input_tokens is not None else input_token_count
+        progress_tokens = f"body≈{body_tokens} input≈{display_input_tokens}"
+
+        if self.verbose:
+            api_params = [
+                f"provider={model_config.provider}",
+                f"model={model_config.model}",
+            ]
+            if model_config.temperature is not None:
+                api_params.append(f"temperature={model_config.temperature}")
+            if model_config.max_tokens is not None:
+                api_params.append(f"max_tokens={model_config.max_tokens}")
+            if model_config.top_p is not None:
+                api_params.append(f"top_p={model_config.top_p}")
+            api_params.append(f"input_tokens={display_input_tokens}")
+            logger.info(f"[Task {task.task_id}] API Call: {', '.join(api_params)}")
+
+        start_time = time.time()
+        response_parts: List[str] = []
+        output_token_count = 0
+
+        if progress and progress_task_id is not None:
+            progress.update(
+                progress_task_id,
+                description=f"{model_key} Task {task.task_id} ({progress_tokens} tokens): Processing...",
+            )
+        elif progress is None:
+            logger.info(
+                f"Translation chunk {task.task_id} start ({model_key}, {progress_tokens})"
+            )
+
+        for chunk in processor.process(
+            content=task.content,
+            prompt_template=task.prompt,
+            temperature=model_config.temperature,
+            model=model_config.model,
+            max_tokens=model_config.max_tokens,
+            stream=True,
+        ):
+            response_parts.append(chunk)
+            output_token_count = TokenCounter.count_tokens(
+                "".join(response_parts), model_config.model
+            )
+
+            if progress and progress_task_id is not None:
+                progress.update(
+                    progress_task_id,
+                    description=f"{model_key} Task {task.task_id} ({progress_tokens} tokens): {output_token_count} out",
+                )
+
+        response = "".join(response_parts)
+        latency = time.time() - start_time
+
+        metadata = RequestMetadata(
+            provider=provider.name,
+            model=model_config.model,
+            temperature=model_config.temperature
+            if model_config.temperature is not None
+            else provider.config.api_temperature,
+            input_words=input_stats["word_count"],
+            input_tokens=input_stats["token_count"],
+            output_words=TokenCounter.count_words(response),
+            output_tokens=output_token_count,
+            latency=latency,
+        )
+
+        result.response = response
+        result.metadata = metadata
+        result.status = TaskStatus.SUCCESS
+
+        if self.verbose:
+            logger.info(
+                f"[Task {task.task_id}] API Call Completed: "
+                f"output_tokens={output_token_count}, "
+                f"latency={latency:.2f}s, "
+                f"status=success"
+            )
+
+        if progress and progress_task_id is not None:
+            progress.update(
+                progress_task_id,
+                description=f"{model_key} Task {task.task_id} ({progress_tokens} tokens): ✓ Complete ({output_token_count} out)",
+                completed=100,
+            )
+        elif progress is None:
+            logger.info(
+                f"Translation chunk {task.task_id} complete ({output_token_count} output tokens)"
+            )
+
+        logger.debug(f"Task {task.task_id} ({model_key}) completed successfully")
+        return result, progress_tokens
+
     def _process_single_global_task(
         self,
         task: BatchTask,
@@ -546,234 +779,46 @@ class GlobalBatchProcessor:
 
         try:
             paper_timeout: Optional[float] = None
-            if task.paper_mode:
+            if task.task_kind == "paper_explain":
                 lr = get_config_or_none()
                 paper_timeout = 600.0
                 if lr is not None:
                     paper_timeout = float(lr.unified_config.paper.request_timeout_seconds)
 
-            # Create provider for this task (paper: longer HTTP timeout for reasoner / large completions)
             provider, _ = self._create_provider_for_task(
                 model_config,
                 config_manager,
-                timeout_override=paper_timeout if task.paper_mode else None,
+                timeout_override=paper_timeout if task.task_kind == "paper_explain" else None,
             )
             processor = RequestProcessor(provider)
 
-            # Paper explain: streaming completion + live output token estimate (same UX as trans)
-            if task.paper_mode:
-                input_stats = TokenCounter.estimate_tokens(
-                    task.prompt.strip(), model_config.model
-                )
-                input_token_count = input_stats["token_count"]
-                display_input_tokens = (
-                    input_tokens if input_tokens is not None else input_token_count
-                )
-                progress_tokens = f"paper≈{display_input_tokens} tok"
-
-                if progress and progress_task_id is not None:
-                    progress.update(
-                        progress_task_id,
-                        description=(
-                            f"{model_key} paper task {task.task_id} ({progress_tokens} tokens): "
-                            "0 out"
-                        ),
-                    )
-
-                if self.verbose:
-                    api_params = [
-                        f"provider={model_config.provider}",
-                        f"model={model_config.model}",
-                    ]
-                    if model_config.temperature is not None:
-                        api_params.append(f"temperature={model_config.temperature}")
-                    if model_config.max_tokens is not None:
-                        api_params.append(f"max_tokens={model_config.max_tokens}")
-                    api_params.append(f"input_tokens={display_input_tokens}")
-                    api_params.append(f"timeout={paper_timeout}s")
-                    logger.info(f"[Task {task.task_id}] Paper API: {', '.join(api_params)}")
-
-                start_time = time.time()
-                response_parts: List[str] = []
-                reasoning_parts: List[str] = []
-
-                for chunk in processor.iter_process_raw_stream(
-                    task.prompt,
-                    temperature=model_config.temperature,
-                    model=model_config.model,
-                    max_tokens=model_config.max_tokens,
-                    return_reasoning=task.return_reasoning,
-                ):
-                    if task.return_reasoning:
-                        c, r = chunk  # type: ignore[misc]
-                        if c:
-                            response_parts.append(c)
-                        if r:
-                            reasoning_parts.append(r)
-                        out_so_far = "".join(reasoning_parts) + "".join(response_parts)
-                    else:
-                        response_parts.append(str(chunk))
-                        out_so_far = "".join(response_parts)
-
-                    output_token_count = TokenCounter.count_tokens(
-                        out_so_far, model_config.model
-                    )
-                    if progress and progress_task_id is not None:
-                        progress.update(
-                            progress_task_id,
-                            description=(
-                                f"{model_key} paper task {task.task_id} ({progress_tokens} tokens): "
-                                f"{output_token_count} out"
-                            ),
-                        )
-
-                response = "".join(response_parts).strip()
-                reasoning_joined = "".join(reasoning_parts).strip()
-                reasoning_out = reasoning_joined if reasoning_joined else None
-                latency = time.time() - start_time
-
-                out_for_count = response
-                if reasoning_out:
-                    out_for_count = f"{reasoning_out}\n{response}"
-                output_stats = TokenCounter.estimate_tokens(out_for_count, model_config.model)
-
-                metadata = RequestMetadata(
-                    provider=provider.name,
-                    model=model_config.model,
-                    temperature=model_config.temperature
-                    if model_config.temperature is not None
-                    else provider.config.api_temperature,
-                    input_words=input_stats["word_count"],
-                    input_tokens=input_stats["token_count"],
-                    output_words=output_stats["word_count"],
-                    output_tokens=output_stats["token_count"],
-                    latency=latency,
-                )
-
-                result.response = response
-                result.reasoning = reasoning_out
-                result.metadata = metadata
-                result.status = TaskStatus.SUCCESS
-
-                if progress and progress_task_id is not None:
-                    ot = metadata.output_tokens
-                    progress.update(
-                        progress_task_id,
-                        description=(
-                            f"{model_key} paper task {task.task_id}: ✓ Complete ({ot} out)"
-                        ),
-                        completed=100,
-                    )
-
-                logger.debug(f"Task {task.task_id} ({model_key}) paper job completed")
-                return result
-
-            # Format prompt with content
-            full_prompt = processor._format_prompt(task.content, task.prompt)
-
-            # Count input tokens
-            input_stats = TokenCounter.estimate_tokens(full_prompt, model_config.model)
-            input_token_count = input_stats["token_count"]
-            # Use provided input_tokens if available, otherwise use calculated value
-            display_input_tokens = input_tokens if input_tokens is not None else input_token_count
-            progress_tokens = f"body≈{body_tokens} input≈{display_input_tokens}"
-
-            # Log detailed API call information in verbose mode
-            if self.verbose:
-                api_params = [
-                    f"provider={model_config.provider}",
-                    f"model={model_config.model}",
-                ]
-                if model_config.temperature is not None:
-                    api_params.append(f"temperature={model_config.temperature}")
-                if model_config.max_tokens is not None:
-                    api_params.append(f"max_tokens={model_config.max_tokens}")
-                if model_config.top_p is not None:
-                    api_params.append(f"top_p={model_config.top_p}")
-                api_params.append(f"input_tokens={display_input_tokens}")
-                logger.info(f"[Task {task.task_id}] API Call: {', '.join(api_params)}")
-
-            # Process with streaming
-            start_time = time.time()
-            response_parts = []
-            output_token_count = 0
-
-            # Update progress description
-            if progress and progress_task_id is not None:
-                progress.update(
+            if task.task_kind == "paper_explain":
+                result, progress_tokens = self._run_paper_explain_global_task(
+                    task,
+                    model_config,
+                    model_key,
+                    processor,
+                    provider,
+                    paper_timeout,
+                    progress,
                     progress_task_id,
-                    description=f"{model_key} Task {task.task_id} ({progress_tokens} tokens): Processing...",
+                    input_tokens,
+                    result,
                 )
-            elif progress is None:
-                logger.info(
-                    f"Translation chunk {task.task_id} start ({model_key}, {progress_tokens})"
-                )
-
-            # Stream response
-            for chunk in processor.process(
-                content=task.content,
-                prompt_template=task.prompt,
-                temperature=model_config.temperature,
-                model=model_config.model,
-                max_tokens=model_config.max_tokens,
-                stream=True,
-            ):
-                response_parts.append(chunk)
-                # Estimate output tokens incrementally
-                output_token_count = TokenCounter.count_tokens(
-                    "".join(response_parts), model_config.model
-                )
-
-                # Update progress with token count
-                if progress and progress_task_id is not None:
-                    progress.update(
-                        progress_task_id,
-                        description=f"{model_key} Task {task.task_id} ({progress_tokens} tokens): {output_token_count} out",
-                    )
-
-            response = "".join(response_parts)
-            latency = time.time() - start_time
-
-            # Create metadata
-            metadata = RequestMetadata(
-                provider=provider.name,
-                model=model_config.model,
-                temperature=model_config.temperature
-                if model_config.temperature is not None
-                else provider.config.api_temperature,
-                input_words=input_stats["word_count"],
-                input_tokens=input_stats["token_count"],
-                output_words=TokenCounter.count_words(response),
-                output_tokens=output_token_count,
-                latency=latency,
-            )
-
-            result.response = response
-            result.metadata = metadata
-            result.status = TaskStatus.SUCCESS
-
-            # Log detailed API call result in verbose mode
-            if self.verbose:
-                logger.info(
-                    f"[Task {task.task_id}] API Call Completed: "
-                    f"output_tokens={output_token_count}, "
-                    f"latency={latency:.2f}s, "
-                    f"status=success"
-                )
-
-            # Update progress to completed
-            if progress and progress_task_id is not None:
-                progress.update(
+            else:
+                result, progress_tokens = self._run_translation_chunk_global_task(
+                    task,
+                    model_config,
+                    model_key,
+                    processor,
+                    provider,
+                    progress,
                     progress_task_id,
-                    description=f"{model_key} Task {task.task_id} ({progress_tokens} tokens): ✓ Complete ({output_token_count} out)",
-                    completed=100,
+                    input_tokens,
+                    result,
+                    body_tokens,
                 )
-            elif progress is None:
-                logger.info(
-                    f"Translation chunk {task.task_id} complete ({output_token_count} output tokens)"
-                )
-
-            logger.debug(f"Task {task.task_id} ({model_key}) completed successfully")
+            return result
 
         except Exception as e:
             error_msg = str(e)

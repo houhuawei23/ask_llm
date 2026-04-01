@@ -15,15 +15,21 @@ from loguru import logger
 from typing_extensions import Annotated
 
 from ask_llm import __version__
+from ask_llm.config.cli_session import (
+    apply_cli_overrides_and_gate_api_key,
+    load_cli_session,
+    resolve_default_model_or_exit,
+)
 from ask_llm.config.context import get_config, set_config
 from ask_llm.config.loader import ConfigLoader
 from ask_llm.config.manager import ConfigManager
 from ask_llm.core.batch import (
     BatchTask,
-    GlobalBatchProcessor,
     ModelConfig,
     TaskStatus,
 )
+from ask_llm.core.global_batch_runner import run_global_batch_tasks
+from ask_llm.core.tasks.builders import build_paper_explain_task
 from ask_llm.core.chat import ChatSession
 from ask_llm.core.markdown_token_splitter import MarkdownTokenSplitter
 from ask_llm.core.md_heading_formatter import (
@@ -767,7 +773,6 @@ def batch(
         from ask_llm.core.batch import (
             BatchStatistics,
             BatchTask,
-            GlobalBatchProcessor,
             ModelConfig,
         )
         from ask_llm.utils.batch_exporter import BatchResultExporter
@@ -782,8 +787,7 @@ def batch(
             console.setup(quiet=False, debug=False)
 
         # Load configuration first (required for batch defaults)
-        load_result = ConfigLoader.load(config_path)
-        set_config(load_result)
+        load_result, config_manager = load_cli_session(config_path)
         batch_cfg = load_result.unified_config.batch
         pricing_map, pricing_source = load_providers_pricing(None)
         effective_threads = threads if threads is not None else batch_cfg.threads
@@ -821,12 +825,10 @@ def batch(
         # If no models specified, use interactive selection
         if not provider_models:
             console.print_info("No models specified in configuration. Using interactive selection.")
-            config_manager = ConfigManager(load_result.app_config)
             helper = InteractiveConfigHelper(config_manager)
             provider_models = helper.select_provider_and_models(allow_multiple=True)
 
         batch_mode = batch_config.get("mode", batch_cfg.mode)
-        config_manager = ConfigManager(load_result.app_config)
         app_config = load_result.app_config
 
         unique_providers = sorted({m.provider for m in provider_models})
@@ -950,17 +952,16 @@ def batch(
                 global_tasks.append(global_task)
                 task_id_counter += 1
 
-        # Step 3: Process all tasks concurrently using GlobalBatchProcessor
-        global_processor = GlobalBatchProcessor(
+        all_results_list, global_processor = run_global_batch_tasks(
+            global_tasks,
+            config_manager,
             max_workers=effective_threads,
             max_retries=effective_retries,
             retry_delay=batch_cfg.retry_delay,
             retry_delay_max=batch_cfg.retry_delay_max,
             verbose=verbose,
-        )
-
-        all_results_list = global_processor.process_global_tasks(
-            global_tasks, config_manager, show_progress=True
+            show_progress=True,
+            clamp_workers_to_task_count=False,
         )
 
         # Step 4: Group results by model and calculate statistics
@@ -1436,9 +1437,7 @@ def trans(
         ask-llm trans ./posts/ --max-parallel-files 5
     """
     try:
-        # Load configuration
-        load_result = ConfigLoader.load(config)
-        set_config(load_result)
+        load_result, config_manager = load_cli_session(config)
         app_config = load_result.app_config
         trans_cfg = load_result.unified_config.translation
 
@@ -1481,8 +1480,6 @@ def trans(
             recursive_dir=trans_cfg.recursive_dir,
         )
 
-        config_manager = ConfigManager(app_config)
-
         # Determine provider and model
         final_provider = trans_config.provider or app_config.default_provider
         final_model = trans_config.model or config_manager.get_default_model()
@@ -1497,20 +1494,13 @@ def trans(
             console.print_error("No model specified. Use --model or configure default model.")
             raise typer.Exit(1)
 
-        # Set provider in config manager
-        config_manager.set_provider(final_provider)
-        config_manager.apply_overrides(
+        apply_cli_overrides_and_gate_api_key(
+            config_manager,
+            provider=final_provider,
             model=final_model,
             temperature=trans_config.temperature,
-        )
-
-        strict_gate = ensure_api_key_for_provider(
-            config_manager,
-            final_provider,
             skip_api_key_check=skip_api_key_check,
         )
-        if strict_gate:
-            require_resolved_api_key(config_manager, final_provider)
 
         # Resolve file patterns (supports directory, glob, and file paths)
         resolved_files = _resolve_trans_input_paths(
@@ -1626,17 +1616,16 @@ def trans(
             # Create translation tasks
             tasks = translator.create_translation_tasks(chunks, model_config)
 
-            # Process tasks using GlobalBatchProcessor
-            processor = GlobalBatchProcessor(
-                max_workers=trans_config.threads,
-                max_retries=trans_config.retries,
-            )
-
             console.print_info(
                 f"Translating {len(tasks)} chunk(s) with {trans_config.threads} thread(s)..."
             )
-            results = processor.process_global_tasks(
-                tasks, config_manager, show_progress=not stream
+            results, processor = run_global_batch_tasks(
+                tasks,
+                config_manager,
+                max_workers=trans_config.threads,
+                max_retries=trans_config.retries,
+                show_progress=not stream,
+                clamp_workers_to_task_count=False,
             )
 
             # Check for failures
@@ -2182,27 +2171,15 @@ def paper(
         section_filter = {x.strip().lower() for x in sections.split(",") if x.strip()}
 
     try:
-        load_result = ConfigLoader.load(config_path)
-        set_config(load_result)
-        config_manager = ConfigManager(load_result.app_config)
-        if provider:
-            config_manager.set_provider(provider)
-        config_manager.apply_overrides(model=model, temperature=temperature)
-
-        strict_gate = ensure_api_key_for_provider(
+        load_result, config_manager = load_cli_session(config_path)
+        apply_cli_overrides_and_gate_api_key(
             config_manager,
-            config_manager.current_provider_name,
+            provider=provider,
+            model=model,
+            temperature=temperature,
             skip_api_key_check=skip_api_key_check,
         )
-        if strict_gate:
-            require_resolved_api_key(config_manager, config_manager.current_provider_name)
-
-        default_model = config_manager.get_model_override() or config_manager.get_default_model()
-        if not default_model:
-            console.print_error(
-                "No model specified. Use --model or set a default model for the provider."
-            )
-            raise typer.Exit(1)
+        default_model = resolve_default_model_or_exit(config_manager)
         paper_cfg = load_result.unified_config.paper
         prompt_dir = paper_cfg.prompt_dir
         out_sub = paper_cfg.output_subdir.strip() or "explain"
@@ -2299,33 +2276,32 @@ def paper(
             )
             idx_to_meta[idx] = (key, template)
             paper_tasks.append(
-                BatchTask(
-                    task_id=idx,
-                    prompt=full_prompt,
-                    content="",
-                    output_filename=f"paper:{key}",
+                build_paper_explain_task(
+                    idx,
+                    full_prompt,
                     task_model_config=ModelConfig(
                         provider=current_provider,
                         model=job_model,
                         temperature=temperature,
                         max_tokens=eff_max,
                     ),
-                    paper_mode=True,
+                    output_filename=f"paper:{key}",
                     return_reasoning=(key == "full"),
                 )
             )
 
         max_workers = max(1, min(workers, len(paper_tasks)))
-        global_processor = GlobalBatchProcessor(
-            max_workers=max_workers,
-            max_retries=3,
-        )
         console.print_info(
             f"Paper explain: {len(paper_tasks)} job(s), "
             f"up to {max_workers} concurrent worker(s) (GlobalBatchProcessor, same as trans)"
         )
-        results = global_processor.process_global_tasks(
-            paper_tasks, config_manager, show_progress=True
+        results, _global_processor = run_global_batch_tasks(
+            paper_tasks,
+            config_manager,
+            max_workers=workers,
+            max_retries=3,
+            show_progress=True,
+            clamp_workers_to_task_count=True,
         )
 
         failed = [r for r in results if r.status != TaskStatus.SUCCESS]
