@@ -105,6 +105,12 @@ _TEST_PROMPT_TEMPLATE = "Format headings:\n\n{content}"
 class TestHeadingFormatter:
     """Test HeadingFormatter."""
 
+    @pytest.fixture(autouse=True)
+    def _init_app_config(self, sample_config_file: Path) -> None:
+        """HeadingFormatter reads format_heading from unified config via get_config()."""
+        load_result = ConfigLoader.load(sample_config_file)
+        set_config(load_result)
+
     def _create_mock_processor(self, response: str) -> RequestProcessor:
         """Create a mock processor with predefined response."""
         mock_provider = MagicMock(spec=LLMProviderProtocol)

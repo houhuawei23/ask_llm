@@ -115,8 +115,8 @@ See [docs/BATCH_USAGE.md](docs/BATCH_USAGE.md) for detailed batch processing doc
 ask_llm/
 ├── prompts/              # Prompt templates (paper/, tech-paper-trans.md, …)
 ├── src/ask_llm/          # Main package (prompts → symlink to ../prompts)
-│   ├── cli.py            # CLI entry point
-│   ├── core/             # Core logic
+│   ├── cli/              # Typer CLI (app.py, commands/, common.py, errors.py)
+│   ├── core/             # Core logic (batch, processor, paper_explain, …)
 │   ├── config/           # Configuration
 │   └── utils/            # Utilities
 ├── tests/                # Tests
@@ -132,6 +132,19 @@ ask_llm/
 - `BatchTask.task_kind` — `translation_chunk` or `paper_explain`; legacy `paper_mode=True` still maps to `paper_explain`.
 
 ## Development
+
+### CLI package layout (`ask_llm/cli/`)
+
+The Typer entry point is `ask_llm.cli:run_cli` (see `pyproject.toml` scripts). The former monolithic `cli.py` is split as follows:
+
+| Module | Role |
+|--------|------|
+| `cli/app.py` | `Typer` app, global `--version` / `--debug` / `--quiet` callback, registers subcommands |
+| `cli/commands/` | One module per command: `ask`, `chat`, `config`, `batch`, `trans`, `format_cmd` (CLI name `format`), `paper` |
+| `cli/common.py` | Shared helpers (`_config_init`, `_resolve_trans_input_paths`, notebook translation helper) |
+| `cli/errors.py` | `raise_unexpected_cli_error`, optional `cli_errors` context manager for consistent exit codes and logging |
+
+Public imports from `ask_llm.cli` remain `app`, `run_cli`, and `_resolve_trans_input_paths` (for tests and tooling).
 
 ```bash
 # Run tests

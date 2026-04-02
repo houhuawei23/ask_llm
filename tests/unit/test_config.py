@@ -77,14 +77,14 @@ class TestKimiProviderConfig:
         load_result = ConfigLoader.load(pkg_path)
         config = load_result.app_config
 
-        # Check kimi provider exists
-        assert "kimi" in config.providers, "kimi provider should be in default config"
+        # Check kimi (Kimi Code) provider exists
+        assert "kimi-code" in config.providers, "kimi-code provider should be in default config"
 
-        kimi_config = config.providers["kimi"]
+        kimi_config = config.providers["kimi-code"]
 
         # Check required fields
-        assert kimi_config.api_provider == "kimi"
-        assert kimi_config.api_base == "https://api.kimi.com/coding"
+        assert kimi_config.api_provider == "kimi-code"
+        assert kimi_config.api_base == "https://api.kimi.com/coding/v1"
         assert "kimi-k2-0711-preview" in kimi_config.models
 
     def test_kimi_provider_config_structure(self):
@@ -95,7 +95,7 @@ class TestKimiProviderConfig:
         load_result = ConfigLoader.load(pkg_path)
         config = load_result.app_config
 
-        kimi_config = config.providers["kimi"]
+        kimi_config = config.providers["kimi-code"]
 
         # Validate ProviderConfig structure
         assert isinstance(kimi_config, ProviderConfig)
@@ -110,7 +110,7 @@ class TestKimiProviderConfig:
         load_result = ConfigLoader.load(pkg_path)
         config = load_result.app_config
 
-        kimi_config = config.providers["kimi"]
+        kimi_config = config.providers["kimi-code"]
         expected_models = [
             "kimi-k2-0711-preview",
             "kimi-k2-0711-preview-longcontext",
@@ -118,7 +118,7 @@ class TestKimiProviderConfig:
         ]
 
         for model in expected_models:
-            assert model in kimi_config.models, f"Model {model} should be in kimi provider"
+            assert model in kimi_config.models, f"Model {model} should be in kimi-code provider"
 
 
 class TestConfigManager:

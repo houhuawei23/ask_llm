@@ -97,6 +97,11 @@ ignore_missing_imports = true
 module = ["litellm.*", "tiktoken.*", "prompt_toolkit.*"]
 ignore_missing_imports = true
 
+# Typer commands: explicit return types on entrypoints; keep CLI surface typed.
+[[tool.mypy.overrides]]
+module = ["ask_llm.cli", "ask_llm.cli.*"]
+disallow_untyped_defs = true
+
 [tool.ruff]
 target-version = "py38"
 line-length = 100
@@ -138,6 +143,9 @@ line-ending = "auto"
 "src/ask_llm/core/md_heading_formatter.py" = [
     "RUF001",
 ] # Chinese prompts use fullwidth punctuation
+"src/ask_llm/cli/commands/paper.py" = [
+    "RUF001",
+] # Chinese user-facing CLI strings
 "tests/**/*.py" = [
     "ARG",
     "F401",
