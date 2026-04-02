@@ -24,15 +24,18 @@ from ask_llm.core.paper_explain import (
     build_bundle_from_directory,
     build_bundle_from_file,
     build_explain_preamble_text,
+    expand_appendices_into_h2_jobs,
     explain_output_filename,
     format_prompt,
     load_prompt_template,
+    normalize_paper_explain_response,
     resolve_prompt_key,
-    section_display_name,
+    section_label_for_job,
 )
 from ask_llm.core.tasks.builders import build_paper_explain_task
 from ask_llm.utils.console import console
 from ask_llm.utils.file_handler import FileHandler
+from ask_llm.utils.pricing import format_cost_estimate, load_providers_pricing
 from ask_llm.utils.provider_specs import (
     load_providers_model_limits,
     resolve_paper_max_tokens,
@@ -69,7 +72,7 @@ def paper(
         typer.Option(
             "--sections",
             "-s",
-            help="Comma-separated keys: meta,abstract,introduction,...,full (default: all available)",
+            help="Comma-separated keys: meta,abstract,...,appendices (split by ## into d-appendices-*.explain.md),full",
         ),
     ] = None,
     provider: Annotated[
@@ -100,6 +103,14 @@ def paper(
         bool,
         typer.Option("--skip-api-key-check", help="Skip API key check"),
     ] = False,
+    providers_pricing: Annotated[
+        str | None,
+        typer.Option(
+            "--providers-pricing",
+            help="Path to providers.yml (pricing_per_million_tokens). "
+            "Default search: ASK_LLM_PROVIDERS_YML, ./providers.yml, package root, ~/.config/ask_llm/providers.yml",
+        ),
+    ] = None,
     concurrency: Annotated[
         int | None,
         typer.Option(
@@ -137,6 +148,14 @@ def paper(
 
     try:
         load_result, config_manager = load_cli_session(config_path)
+        pricing_map, pricing_source = load_providers_pricing(providers_pricing)
+        if pricing_source:
+            console.print_info(f"API pricing loaded from: {pricing_source}")
+        else:
+            console.print_info(
+                "No providers.yml with pricing found; token counts will still be shown, "
+                "cost estimate unavailable (add pricing_per_million_tokens or use --providers-pricing)"
+            )
         apply_cli_overrides_and_gate_api_key(
             config_manager,
             provider=provider,
@@ -170,7 +189,7 @@ def paper(
         console.print_info(f"Output directory: {explain_root}")
         console.print_info(f"Paper title: {bundle.paper_title}")
 
-        jobs: list[tuple[str, str]] = []
+        jobs: list[tuple[str, str, str | None]] = []
 
         def want(key: str) -> bool:
             if section_filter is None:
@@ -179,7 +198,7 @@ def paper(
 
         if run_norm in ("sections", "all"):
             if want("meta"):
-                jobs.append(("meta", bundle.meta_text))
+                jobs.append(("meta", bundle.meta_text, None))
             for key in bundle.section_order:
                 if not want(key):
                     continue
@@ -187,20 +206,34 @@ def paper(
                 if not body or not str(body).strip():
                     logger.warning(f"Skipping empty section: {key}")
                     continue
-                jobs.append((key, body))
+                if key == "appendices":
+                    apx_jobs = expand_appendices_into_h2_jobs(body)
+                    if not apx_jobs:
+                        logger.warning("Skipping empty appendix expansion")
+                        continue
+                    n_h2 = sum(1 for jk, _, _ in apx_jobs if jk.startswith("appendices:h2:"))
+                    if n_h2 >= 1:
+                        console.print_info(
+                            f"Appendices: {n_h2} explain job(s) split by ## → "
+                            f"d-appendices-<slug>.explain.md"
+                        )
+                    for jk, jbody, h2 in apx_jobs:
+                        jobs.append((jk, jbody, h2 or None))
+                else:
+                    jobs.append((key, body, None))
 
         if run_norm in ("full", "all") and want("full"):
             ft = bundle.full_text.strip()
             if not ft:
                 console.print_error("Full text is empty; cannot run full analysis")
                 raise typer.Exit(1)
-            jobs.append(("full", ft))
+            jobs.append(("full", ft, None))
 
         if not jobs:
             console.print_error("No jobs to run (check --run and --sections, or empty sections)")
             raise typer.Exit(1)
 
-        for idx, (key, _) in enumerate(jobs):
+        for idx, (key, _, _) in enumerate(jobs):
             out_name = explain_output_filename(idx, key)
             out_file = explain_root / out_name
             if out_file.exists() and not force:
@@ -214,14 +247,18 @@ def paper(
         # None or resolve_paper_max_tokens skips per-model caps and sends paper.max_output_tokens raw).
         section_job_model = (model or default_model).strip()
 
-        idx_to_meta: dict[int, tuple[str, str]] = {}
+        idx_to_meta: dict[int, tuple[str, str, str | None]] = {}
         paper_tasks: list[BatchTask] = []
         current_provider = config_manager.current_provider_name
 
-        for idx, (key, body) in enumerate(jobs):
+        for idx, (key, body, appendix_h2) in enumerate(jobs):
             template = load_prompt_template(prompt_dir, key)
-            label = section_display_name(bundle, key)
-            heading = bundle.section_headings.get(key)
+            label = section_label_for_job(bundle, key, appendix_h2)
+            heading = (
+                appendix_h2
+                if appendix_h2 and key.startswith("appendices:h2:")
+                else bundle.section_headings.get(key)
+            )
             full_prompt = format_prompt(
                 template,
                 paper_title=bundle.paper_title,
@@ -235,7 +272,7 @@ def paper(
                 f"paper job: key={key!r} model={job_model!r} max_tokens={eff_max} "
                 f"(paper.max_output_tokens={paper_max_tokens})"
             )
-            idx_to_meta[idx] = (key, template)
+            idx_to_meta[idx] = (key, template, appendix_h2)
             paper_tasks.append(
                 build_paper_explain_task(
                     idx,
@@ -256,7 +293,7 @@ def paper(
             f"Paper explain: {len(paper_tasks)} job(s), "
             f"up to {max_workers} concurrent worker(s) (GlobalBatchProcessor, same as trans)"
         )
-        results, _global_processor = run_global_batch_tasks(
+        results, processor = run_global_batch_tasks(
             paper_tasks,
             config_manager,
             max_workers=workers,
@@ -271,9 +308,9 @@ def paper(
                 console.print_error(f"Paper job {r.task_id} failed: {r.error or 'unknown error'}")
             raise typer.Exit(1)
 
-        for result in results:
+        for result in sorted(results, key=lambda r: r.task_id):
             idx = result.task_id
-            key, template = idx_to_meta[idx]
+            key, template, appendix_h2 = idx_to_meta[idx]
             pk = resolve_prompt_key(key)
             out_name = explain_output_filename(idx, key)
             out_file = explain_root / out_name
@@ -286,9 +323,16 @@ def paper(
                 preamble = build_explain_preamble_text(
                     bundle, key, pk, template, source_override=src_full
                 )
+            elif key.startswith("appendices:h2:") and appendix_h2:
+                src_apx = (
+                    f"附录（侧车或正文中的 Appendices）按二级标题「##」切分后的「{appendix_h2}」小节。"
+                )
+                preamble = build_explain_preamble_text(
+                    bundle, key, pk, template, source_override=src_apx
+                )
             else:
                 preamble = build_explain_preamble_text(bundle, key, pk, template)
-            body_out = (result.response or "").strip()
+            body_out = normalize_paper_explain_response(result.response or "")
             if result.reasoning:
                 body_out = (
                     "## 推理过程（思维链）\n\n"
@@ -301,6 +345,27 @@ def paper(
             text_out = preamble + body_out
             FileHandler.write(str(out_file), text_out, force=force)
             console.print_success(f"Wrote {out_file}")
+
+        by_model = processor.calculate_statistics(results)
+        console.print()
+        if len(by_model) > 1:
+            console.print("[bold]Paper explain — usage by model[/bold]")
+        for model_key in sorted(by_model.keys()):
+            st = by_model[model_key]
+            parts = model_key.split("/", 1)
+            prov, mod = parts[0], parts[1] if len(parts) > 1 else ""
+            if len(by_model) > 1:
+                console.print(f"[bold]{model_key}[/bold]")
+            console.print(
+                format_cost_estimate(
+                    prov,
+                    mod,
+                    st.total_input_tokens,
+                    st.total_output_tokens,
+                    pricing_map,
+                    pricing_source=pricing_source,
+                )
+            )
 
     except FileNotFoundError as e:
         console.print_error(str(e))

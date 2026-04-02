@@ -4,6 +4,7 @@ A modern command-line tool for calling multiple LLM APIs (DeepSeek, Qwen, etc.) 
 
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![Code style: black](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
+[![zread](https://img.shields.io/badge/Ask_Zread-_.svg?style=flat&color=00b0aa&labelColor=000000&logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB3aWR0aD0iMTYiIGhlaWdodD0iMTYiIHZpZXdCb3g9IjAgMCAxNiAxNiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHBhdGggZD0iTTQuOTYxNTYgMS42MDAxSDIuMjQxNTZDMS44ODgxIDEuNjAwMSAxLjYwMTU2IDEuODg2NjQgMS42MDE1NiAyLjI0MDFWNC45NjAxQzEuNjAxNTYgNS4zMTM1NiAxLjg4ODEgNS42MDAxIDIuMjQxNTYgNS42MDAxSDQuOTYxNTZDNS4zMTUwMiA1LjYwMDEgNS42MDE1NiA1LjMxMzU2IDUuNjAxNTYgNC45NjAxVjIuMjQwMUM1LjYwMTU2IDEuODg2NjQgNS4zMTUwMiAxLjYwMDEgNC45NjE1NiAxLjYwMDFaIiBmaWxsPSIjZmZmIi8%2BCjxwYXRoIGQ9Ik00Ljk2MTU2IDEwLjM5OTlIMi4yNDE1NkMxLjg4ODEgMTAuMzk5OSAxLjYwMTU2IDEwLjY4NjQgMS42MDE1NiAxMS4wMzk5VjEzLjc1OTlDMS42MDE1NiAxNC4xMTM0IDEuODg4MSAxNC4zOTk5IDIuMjQxNTYgMTQuMzk5OUg0Ljk2MTU2QzUuMzE1MDIgMTQuMzk5OSA1LjYwMTU2IDE0LjExMzQgNS42MDE1NiAxMy43NTk5VjExLjAzOTlDNS42MDE1NiAxMC42ODY0IDUuMzE1MDIgMTAuMzk5OSA0Ljk2MTU2IDEwLjM5OTlaIiBmaWxsPSIjZmZmIi8%2BCjxwYXRoIGQ9Ik0xMy43NTg0IDEuNjAwMUgxMS4wMzg0QzEwLjY4NSAxLjYwMDEgMTAuMzk4NCAxLjg4NjY0IDEwLjM5ODQgMi4yNDAxVjQuOTYwMUMxMC4zOTg0IDUuMzEzNTYgMTAuNjg1IDUuNjAwMSAxMS4wMzg0IDUuNjAwMUgxMy43NTg0QzE0LjExMTkgNS42MDAxIDE0LjM5ODQgNS4zMTM1NiAxNC4zOTg0IDQuOTYwMVYyLjI0MDFDMTQuMzk4NCAxLjg4NjY0IDE0LjExMTkgMS42MDAxIDEzLjc1ODQgMS42MDAxWiIgZmlsbD0iI2ZmZiIvPgo8cGF0aCBkPSJNNCAxMkwxMiA0TDQgMTJaIiBmaWxsPSIjZmZmIi8%2BCjxwYXRoIGQ9Ik00IDEyTDEyIDQiIHN0cm9rZT0iI2ZmZiIgc3Ryb2tlLXdpZHRoPSIxLjUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIvPgo8L3N2Zz4K&logoColor=ffffff)](https://zread.ai/houhuawei23/ask_llm)
 
 ## Features
 
@@ -74,16 +75,16 @@ ask-llm paper -i path/to/arxiv-paper-dir --run sections
 
 ## Commands
 
-| Command | Description |
-|---------|-------------|
-| `ask-llm ask [INPUT]` | Process input with LLM |
-| `ask-llm chat` | Start interactive chat |
-| `ask-llm trans [FILES...]` | Translate files (supports directory and glob) |
-| `ask-llm paper -i PATH` | Explain a paper: outputs under `./explain/` next to the file or directory |
-| `ask-llm batch [CONFIG]` | Process batch tasks from YAML config |
-| `ask-llm config show` | Display configuration |
-| `ask-llm config test` | Test API connections |
-| `ask-llm config init` | Create example config |
+| Command                    | Description                                                               |
+| -------------------------- | ------------------------------------------------------------------------- |
+| `ask-llm ask [INPUT]`      | Process input with LLM                                                    |
+| `ask-llm chat`             | Start interactive chat                                                    |
+| `ask-llm trans [FILES...]` | Translate files (supports directory and glob)                             |
+| `ask-llm paper -i PATH`    | Explain a paper: outputs under `./explain/` next to the file or directory |
+| `ask-llm batch [CONFIG]`   | Process batch tasks from YAML config                                      |
+| `ask-llm config show`      | Display configuration                                                     |
+| `ask-llm config test`      | Test API connections                                                      |
+| `ask-llm config init`      | Create example config                                                     |
 
 ### Batch Processing
 
@@ -103,11 +104,11 @@ See [docs/BATCH_USAGE.md](docs/BATCH_USAGE.md) for detailed batch processing doc
 
 - **Input**: a single `.md` whose **level-2** headings (`## …`) delimit explain sections (subsections `###`+ stay inside the same job), **or** a directory produced by tools like arxiv2md-beta (`paper.yml`, main `*.md`, optional `*-References.md`, `*-Appendix.md`).
 - **Runs**: `--run sections` (meta + each recognized section), `--run full` (whole document), `--run all` (both).
-- **Output**: `<input_dir>/explain/` (or next to the `.md` file). Files are **numbered in document order**, e.g. `0-meta.explain.md`, `1-abstract.explain.md`, …, `full.explain.md` as `N-full.explain.md`. Headings that do not match standard chapter names (e.g. `3 Model Architecture`) become keys like `extra:…` and use `section-generic.md` with filenames such as `3-model-architecture.explain.md` (no `extra-` in the filename).
+- **Output**: `<input_dir>/explain/` (or next to the `.md` file). Files are **numbered in document order**, e.g. `0-meta.explain.md`, `1-abstract.explain.md`, …, `N-full.explain.md`. Recognized **CS/AI-oriented** section titles (among others) map to dedicated prompts: e.g. **Related Work** → `section-related-work.md`, **Model Architecture** → `section-model-architecture.md`. Headings that still do not match any canonical key use `section-generic.md` (`extra:…` keys, filenames like `3-model-architecture.explain.md`). Large **Appendix** sidecars split by `##` use `d-appendices-<slug>.explain.md`.
 - **Preamble**: each output file starts with a short **说明** block (source slice + prompt path + one-line summary of the analysis prompt).
 - **Length & models**: `paper.max_output_tokens` is the requested completion cap; the CLI sets API `max_tokens` to **min(requested, `max_output.maximum`)** from `providers.yml` for that model. **DeepSeek** HTTP caps differ by model: **`deepseek-chat`** ≤8192, **`deepseek-reasoner`** ≤65536 (then `min` with YAML). The **full-document** job (`full`) uses `paper.full_model` (default `deepseek-reasoner`). When the API returns reasoning content, it is written under **推理过程（思维链）** before **正文解析**. On API errors, the log includes **`model=`** and **`max_tokens=`** (from `llm_engine`).
 - **Concurrency**: section jobs use **`GlobalBatchProcessor.process_global_tasks`** (same pipeline as `ask-llm trans`): each job gets its own provider/HTTP client, with Rich per-task progress. Default `paper.concurrency` (e.g. `20`); override with `ask-llm paper -i ... -j 8`. Use `1` to force sequential calls.
-- **Prompts**: canonical tree is `prompts/paper/` at the **repository root** (`ask_llm/prompts/…`). Under `src/ask_llm/` the `prompts` entry is a **symlink** to that tree so setuptools package-data stays valid. Override directory via `paper.prompt_dir` in `default_config.yml`.
+- **Prompts**: canonical tree is `prompts/paper/` at the **repository root** (`ask_llm/prompts/…`). Templates default to **computer science / AI** papers (methodology, experiments, reproducibility, related-work positioning, multiview-style full-paper analysis). Under `src/ask_llm/` the `prompts` entry is a **symlink** to that tree so setuptools package-data stays valid. Override directory via `paper.prompt_dir` in `default_config.yml`.
 
 ## Project Structure
 
@@ -137,12 +138,12 @@ ask_llm/
 
 The Typer entry point is `ask_llm.cli:run_cli` (see `pyproject.toml` scripts). The former monolithic `cli.py` is split as follows:
 
-| Module | Role |
-|--------|------|
-| `cli/app.py` | `Typer` app, global `--version` / `--debug` / `--quiet` callback, registers subcommands |
+| Module          | Role                                                                                                         |
+| --------------- | ------------------------------------------------------------------------------------------------------------ |
+| `cli/app.py`    | `Typer` app, global `--version` / `--debug` / `--quiet` callback, registers subcommands                      |
 | `cli/commands/` | One module per command: `ask`, `chat`, `config`, `batch`, `trans`, `format_cmd` (CLI name `format`), `paper` |
-| `cli/common.py` | Shared helpers (`_config_init`, `_resolve_trans_input_paths`, notebook translation helper) |
-| `cli/errors.py` | `raise_unexpected_cli_error`, optional `cli_errors` context manager for consistent exit codes and logging |
+| `cli/common.py` | Shared helpers (`_config_init`, `_resolve_trans_input_paths`, notebook translation helper)                   |
+| `cli/errors.py` | `raise_unexpected_cli_error`, optional `cli_errors` context manager for consistent exit codes and logging    |
 
 Public imports from `ask_llm.cli` remain `app`, `run_cli`, and `_resolve_trans_input_paths` (for tests and tooling).
 

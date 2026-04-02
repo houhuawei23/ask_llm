@@ -9,8 +9,11 @@ from ask_llm.core.paper_explain import (
     _exclude_name,
     build_bundle_from_directory,
     build_bundle_from_file,
+    expand_appendices_into_h2_jobs,
     explain_output_filename,
     match_section_key,
+    normalize_paper_explain_response,
+    resolve_prompt_key,
     resolve_prompt_path,
     split_markdown_by_headings,
     split_markdown_ordered,
@@ -21,6 +24,8 @@ def test_match_section_key_typo():
     assert match_section_key("Abstrct") == "abstract"
     assert match_section_key("1. Introduction") == "introduction"
     assert match_section_key("Methods") == "methods"
+    assert match_section_key("Related Work") == "related_work"
+    assert match_section_key("Model Architecture") == "model_architecture"
 
 
 def test_split_markdown_by_headings():
@@ -71,11 +76,9 @@ def test_split_markdown_ordered_extra_sections():
     )
     sections, order, headings = split_markdown_ordered(md)
     assert sections["abstract"] == "Abs."
-    assert "extra:" in "".join(order)
-    arch_key = [k for k in order if "model" in k and k.startswith("extra:")]
-    assert arch_key, order
-    assert "Model text." in sections[arch_key[0]]
-    assert headings[arch_key[0]] == "3 Model Architecture"
+    assert "model_architecture" in order
+    assert "Model text." in sections["model_architecture"]
+    assert headings["model_architecture"] == "3 Model Architecture"
 
 
 def test_h2_split_keeps_h3_in_same_section():
@@ -120,6 +123,60 @@ def test_explain_output_filename():
         explain_output_filename(2, "extra:model-architecture")
         == "2-model-architecture.explain.md"
     )
+    assert (
+        explain_output_filename(99, "appendices:h2:proof-of-theorem-1")
+        == "d-appendices-proof-of-theorem-1.explain.md"
+    )
+
+
+def test_resolve_prompt_key_appendix_h2():
+    assert resolve_prompt_key("appendices:h2:foo-bar") == "appendices"
+
+
+def test_expand_appendices_into_h2_jobs_no_h2():
+    md = "Intro line.\n\nNo heading here."
+    jobs = expand_appendices_into_h2_jobs(md)
+    assert len(jobs) == 1
+    assert jobs[0][0] == "appendices"
+    assert "Intro line" in jobs[0][1]
+    assert jobs[0][2] == ""
+
+
+def test_normalize_paper_explain_response_json_to_markdown():
+    raw = '{"a": "hello", "b": {"c": "nested"}}'
+    out = normalize_paper_explain_response(raw)
+    assert "## a" in out
+    assert "hello" in out
+    assert "### c" in out or "## c" in out
+    assert "nested" in out
+    assert out == normalize_paper_explain_response("```json\n" + raw + "\n```")
+
+
+def test_normalize_paper_explain_response_plain_markdown_unchanged():
+    md = "## 小结\n\n正文 **粗体**。\n"
+    assert normalize_paper_explain_response(md) == md
+
+
+def test_expand_appendices_into_h2_jobs_multiple_h2():
+    md = textwrap.dedent(
+        """\
+        Preamble before first H2.
+
+        ## Part A
+
+        Body A.
+
+        ## Part B
+
+        Body B.
+        """
+    )
+    jobs = expand_appendices_into_h2_jobs(md)
+    assert len(jobs) == 2
+    assert jobs[0][0].startswith("appendices:h2:")
+    assert jobs[0][2] == "Part A"
+    assert "Preamble" in jobs[0][1] and "Body A." in jobs[0][1]
+    assert "Body B." in jobs[1][1]
 
 
 def test_exclude_name():
