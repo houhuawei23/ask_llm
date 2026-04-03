@@ -77,13 +77,28 @@ def _parse_env_value(value: str, key_path: Tuple[str, ...]) -> Any:
 
 def _deep_merge(base: Dict[str, Any], overlay: Dict[str, Any]) -> Dict[str, Any]:
     """Deep merge overlay into base. Overlay values take precedence.
-    For 'providers', user config replaces base entirely when provided.
+    For 'providers', individual provider settings are deep-merged instead of
+    replacing the entire providers dictionary.
     """
     result = copy.deepcopy(base)
-    replace_keys = {"providers"}  # These keys are replaced, not merged
     for key, overlay_val in overlay.items():
-        if key in replace_keys and isinstance(overlay_val, dict):
-            result[key] = copy.deepcopy(overlay_val)
+        if key == "providers" and isinstance(overlay_val, dict) and isinstance(result.get(key), dict):
+            if not overlay_val:
+                # Explicitly empty providers dict clears everything
+                result[key] = {}
+            else:
+                # Deep merge per-provider settings instead of replacing the whole dict
+                for provider_name, provider_overlay in overlay_val.items():
+                    if (
+                        provider_name in result[key]
+                        and isinstance(result[key][provider_name], dict)
+                        and isinstance(provider_overlay, dict)
+                    ):
+                        result[key][provider_name] = _deep_merge(
+                            result[key][provider_name], provider_overlay
+                        )
+                    else:
+                        result[key][provider_name] = copy.deepcopy(provider_overlay)
         elif key in result and isinstance(result[key], dict) and isinstance(overlay_val, dict):
             result[key] = _deep_merge(result[key], overlay_val)
         else:
@@ -264,7 +279,7 @@ class ConfigLoader:
             )
 
         # Parse unified config (with defaults for missing sections)
-        unified_config = UnifiedConfig.from_dict(data)
+        unified_config = UnifiedConfig.model_validate(data)
 
         # Convert providers to AppConfig format
         provider_data = cls._convert_providers_format(data)
@@ -352,7 +367,10 @@ class ConfigLoader:
                     pass
 
             if not base_url:
-                base_url = "https://api.example.com/v1"
+                raise ValueError(
+                    f"Provider '{name}' has no base_url configured and it cannot be resolved "
+                    f"from llm_engine. Please set base_url for provider '{name}' in your config."
+                )
 
             converted_config = {
                 "api_provider": name,

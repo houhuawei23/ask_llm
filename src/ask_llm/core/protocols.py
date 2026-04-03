@@ -1,6 +1,13 @@
 """Protocol definitions for type checking."""
 
-from typing import Dict, Generator, List, Optional, Protocol, Union
+from typing import Dict, Generator, List, NamedTuple, Optional, Protocol, Union
+
+
+class ReasoningChunk(NamedTuple):
+    """A streaming chunk that carries both content and reasoning tokens."""
+
+    content: str
+    reasoning: str
 
 
 class LLMProviderProtocol(Protocol):
@@ -19,6 +26,6 @@ class LLMProviderProtocol(Protocol):
         model: Optional[str] = None,
         stream: bool = False,
         **kwargs,
-    ) -> Union[str, Generator[str, None, None]]:
+    ) -> Union[str, Generator[Union[str, "ReasoningChunk"], None, None]]:
         """Call the LLM API."""
         ...

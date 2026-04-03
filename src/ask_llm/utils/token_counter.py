@@ -72,6 +72,26 @@ class TokenCounter:
         return len(text)
 
     @classmethod
+    def get_encoding(cls, model: Optional[str] = None):
+        """
+        Get tiktoken encoding object for a model.
+
+        Args:
+            model: Model name for encoding selection
+
+        Returns:
+            tiktoken.Encoding instance, or None if tiktoken unavailable / fails
+        """
+        if not TIKTOKEN_AVAILABLE:
+            return None
+        try:
+            encoding_name = cls._get_encoding(model)
+            return tiktoken.get_encoding(encoding_name)
+        except Exception as e:
+            logger.debug(f"Token encoding retrieval failed: {e}")
+            return None
+
+    @classmethod
     def count_tokens(cls, text: str, model: Optional[str] = None) -> int:
         """
         Count tokens in text using tiktoken.

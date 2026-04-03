@@ -1,9 +1,9 @@
 """Unified configuration model for default_config.yml."""
 
-from typing import Any, Dict, List, Optional
+from typing import Any, List, Optional
 
 from loguru import logger
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class GeneralConfig(BaseModel):
@@ -103,6 +103,18 @@ class TranslationConfig(BaseModel):
         default=False,
         description="When translating a directory, include files from subdirectories",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _warn_deprecated_max_chunk_size(cls, data: Any) -> Any:
+        if isinstance(data, dict) and data.get("max_chunk_size") is not None:
+            logger.warning(
+                "translation.max_chunk_size is deprecated and ignored; splitting uses "
+                "max_chunk_tokens (tiktoken). Remove max_chunk_size from your YAML."
+            )
+            data = {**data}
+            data.pop("max_chunk_size", None)
+        return data
 
 
 class BatchConfig(BaseModel):
@@ -273,38 +285,3 @@ class UnifiedConfig(BaseModel):
         default_factory=lambda: ["pyproject.toml", "setup.py", ".git", "default_config.yml"],
         description="Markers to detect project root for @ path resolution",
     )
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "UnifiedConfig":
-        """
-        Create UnifiedConfig from parsed YAML dictionary.
-
-        Args:
-            data: Configuration dictionary from YAML
-
-        Returns:
-            UnifiedConfig instance with defaults for missing sections
-        """
-        trans_raw = data.get("translation") or {}
-        if isinstance(trans_raw, dict) and trans_raw.get("max_chunk_size") is not None:
-            logger.warning(
-                "translation.max_chunk_size is deprecated and ignored; splitting uses "
-                "max_chunk_tokens (tiktoken). Remove max_chunk_size from your YAML."
-            )
-        return cls(
-            general=GeneralConfig(**(data.get("general") or {})),
-            translation=TranslationConfig(**trans_raw),
-            batch=BatchConfig(**(data.get("batch") or {})),
-            file=FileConfig(**(data.get("file") or {})),
-            format_heading=FormatHeadingConfig(**(data.get("format_heading") or {})),
-            text_splitter=TextSplitterConfig(**(data.get("text_splitter") or {})),
-            token=TokenConfig(**(data.get("token") or {})),
-            paper=PaperConfig(**(data.get("paper") or {})),
-            project_root_markers=data.get("project_root_markers")
-            or [
-                "pyproject.toml",
-                "setup.py",
-                ".git",
-                "default_config.yml",
-            ],
-        )

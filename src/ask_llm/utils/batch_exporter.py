@@ -2,6 +2,7 @@
 
 import csv
 import json
+import re
 from pathlib import Path
 from typing import Any, ClassVar, Dict, List, Optional
 
@@ -198,7 +199,7 @@ class BatchResultExporter:
         lines.append(f"- **Total Tasks:** {self.statistics.total_tasks}")
         lines.append(f"- **Successful:** {self.statistics.successful_tasks}")
         lines.append(f"- **Failed:** {self.statistics.failed_tasks}")
-        if self.statistics.successful_tasks > 0:
+        if self.statistics.total_tasks > 0:
             lines.append(
                 f"- **Success Rate:** {self.statistics.successful_tasks / self.statistics.total_tasks * 100:.1f}%"
             )
@@ -354,7 +355,7 @@ class BatchResultExporter:
                     "task_id": result.task_id,
                     "prompt": result.prompt,
                     "content": result.content,
-                    "model_config": {
+                    "model_settings": {
                         "provider": result.model_settings.provider,
                         "model": result.model_settings.model,
                         "temperature": result.model_settings.temperature,
@@ -453,8 +454,8 @@ class BatchResultExporter:
             if result.output_filename:
                 # Use configured output filename
                 filename = result.output_filename
-                # Sanitize filename: remove path separators and other dangerous characters
-                filename = filename.replace("/", "_").replace("\\", "_")
+                # Sanitize filename: replace dangerous characters with underscore
+                filename = re.sub(r"[^\w\-.]", "_", filename)
                 # Remove path traversal attempts (..)
                 filename = filename.replace("..", "_")
                 # Remove any leading/trailing dots and spaces

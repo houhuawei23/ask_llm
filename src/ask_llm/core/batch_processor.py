@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 from rich.progress import Progress, TaskID
@@ -25,7 +25,7 @@ from ask_llm.core.batch import (
 )
 from ask_llm.core.models import RequestMetadata
 from ask_llm.core.processor import RequestProcessor
-from ask_llm.core.protocols import LLMProviderProtocol
+from ask_llm.core.protocols import LLMProviderProtocol, ReasoningChunk
 from ask_llm.utils.token_counter import TokenCounter
 
 
@@ -109,6 +109,7 @@ class BatchProcessor:
                 )
 
             # Stream response
+            encoding = TokenCounter.get_encoding(self.model_config.model)
             for chunk in self.processor.process(
                 content=task.content,
                 prompt_template=task.prompt,
@@ -118,10 +119,11 @@ class BatchProcessor:
                 stream=True,
             ):
                 response_parts.append(chunk)
-                # Estimate output tokens incrementally
-                output_token_count = TokenCounter.count_tokens(
-                    "".join(response_parts), self.model_config.model
-                )
+                # Incremental token counting (avoid O(N^2) re-encode)
+                if encoding is not None:
+                    output_token_count += len(encoding.encode(chunk))
+                else:
+                    output_token_count += TokenCounter.count_words(chunk)
 
                 # Update progress with token count
                 if progress and progress_task_id is not None:
@@ -176,13 +178,16 @@ class BatchProcessor:
                     completed=100,
                 )
 
-        return result
+            return result
+        finally:
+            if progress and progress_task_id is not None:
+                progress.advance(progress_task_id)
 
     def process_tasks(
         self, tasks: list[BatchTask], show_progress: bool = True
     ) -> list[BatchResult]:
         """
-        Process multiple tasks concurrently with streaming and individual progress bars.
+        Process multiple tasks concurrently with streaming and a single overall progress bar.
 
         Args:
             tasks: List of batch tasks
@@ -193,9 +198,8 @@ class BatchProcessor:
         """
         pending_tasks = sort_batch_tasks_by_estimated_input(tasks.copy(), self.model_config.model)
 
-        # Create progress display with multiple tasks
+        # Use a single overall progress bar instead of one per task
         if show_progress:
-            # Get Rich console instance
             from rich.console import Console as RichConsole
             from rich.progress import (
                 BarColumn,
@@ -208,8 +212,6 @@ class BatchProcessor:
 
             rich_console = RichConsole()
 
-            # Note: Rich Progress doesn't support max_completed parameter
-            # Completed tasks will be shown, but terminal scrolling may be needed for many tasks
             progress = Progress(
                 SpinnerColumn(),
                 TextColumn("[progress.description]{task.description}"),
@@ -222,17 +224,13 @@ class BatchProcessor:
             )
             progress.start()
 
-            # Create a progress task for each batch task
-            task_to_progress_id: dict[int, TaskID] = {}
-            for task in pending_tasks:
-                progress_id = progress.add_task(
-                    f"Task {task.task_id}: Waiting...",
-                    total=100,  # Use 100 as total for percentage display
-                )
-                task_to_progress_id[task.task_id] = progress_id
+            main_task = progress.add_task(
+                "Batch processing...",
+                total=len(pending_tasks),
+            )
         else:
             progress = None
-            task_to_progress_id = {}
+            main_task = None
 
         try:
 
@@ -241,7 +239,7 @@ class BatchProcessor:
                     task,
                     retry_count,
                     progress,
-                    task_to_progress_id.get(task.task_id),
+                    main_task,
                 )
 
             def _on_retry_scheduled(task: BatchTask, failed_result: BatchResult) -> None:
@@ -252,11 +250,8 @@ class BatchProcessor:
 
             def _on_worker_exception(task: BatchTask, exc: BaseException) -> BatchResult:
                 logger.error(f"Unexpected error processing task {task.task_id}: {exc}")
-                if progress and task.task_id in task_to_progress_id:
-                    progress.update(
-                        task_to_progress_id[task.task_id],
-                        completed=100,
-                    )
+                if progress and main_task is not None:
+                    progress.advance(main_task)
                 return BatchResult(
                     task_id=task.task_id,
                     prompt=task.prompt,
@@ -401,46 +396,100 @@ class GlobalBatchProcessor:
         else:
             logger.error(f"Task {task_id} ({model_key}) failed: {error_msg}")
 
-    def _create_provider_for_task(
+    def _build_provider_cache(
         self,
-        model_config: ModelConfig,
+        tasks: list[BatchTask],
         config_manager: ConfigManager,
-        timeout_override: float | None = None,
-    ) -> tuple[LLMProviderProtocol, ModelConfig]:
+    ) -> dict[str, LLMProviderProtocol]:
         """
-        Create provider instance for a specific model configuration.
+        Pre-build provider adapter cache for all unique (provider, model, timeout) combos.
 
-        Args:
-            model_config: Model configuration
-            config_manager: Configuration manager instance
-
-        Returns:
-            Tuple of (provider instance, model_config)
+        This eliminates per-task adapter creation overhead and avoids mutating the
+        shared ConfigManager inside worker threads.
         """
-        # Set provider in config manager
-        config_manager.set_provider(model_config.provider)
+        cache: dict[str, LLMProviderProtocol] = {}
+        seen: set[str] = set()
+        for task in tasks:
+            if not task.task_model_config:
+                continue
+            mc = task.task_model_config
+            key = f"{mc.provider}/{mc.model}"
+            if task.task_kind == "paper_explain":
+                timeout = self._paper_request_timeout_seconds()
+                key += f" / timeout={timeout}"
+            if key in seen:
+                continue
+            seen.add(key)
 
-        # Apply model-specific overrides
-        config_manager.apply_overrides(
-            model=model_config.model,
-            temperature=model_config.temperature,
-        )
+            base_cfg = config_manager.config.get_provider_config(mc.provider)
+            overrides: dict[str, Any] = {}
+            if mc.temperature is not None:
+                overrides["api_temperature"] = mc.temperature
+            if mc.max_tokens is not None:
+                overrides["max_tokens"] = mc.max_tokens
+            if mc.top_p is not None:
+                overrides["api_top_p"] = mc.top_p
+            if task.task_kind == "paper_explain":
+                overrides["timeout"] = float(self._paper_request_timeout_seconds())
+            provider_cfg = base_cfg.model_copy(update=overrides)
+            default_model = mc.model
 
-        provider_config_with_overrides = config_manager.get_provider_config()
-        if timeout_override is not None:
-            provider_config_with_overrides = provider_config_with_overrides.model_copy(
-                update={"timeout": float(timeout_override)}
-            )
-        default_model = config_manager.get_model_override() or config_manager.get_default_model()
+            from llm_engine import create_provider_adapter
 
-        # Create provider adapter
-        from llm_engine import create_provider_adapter
+            provider = create_provider_adapter(provider_cfg, default_model=default_model)
+            cache[key] = provider
+        return cache
 
-        llm_provider = create_provider_adapter(
-            provider_config_with_overrides, default_model=default_model
-        )
+    def _stream_and_collect(
+        self,
+        stream_iter,
+        task: BatchTask,
+        model_config: ModelConfig,
+        progress: Progress | None,
+        progress_task_id: TaskID | None,
+        description_prefix: str,
+        return_reasoning: bool = False,
+    ) -> tuple[str, str | None, int, float]:
+        """Run a streaming iterator, counting tokens and updating progress."""
+        start_time = time.time()
+        response_parts: list[str] = []
+        reasoning_parts: list[str] = []
+        output_token_count = 0
 
-        return llm_provider, model_config
+        encoding = TokenCounter.get_encoding(model_config.model)
+        for chunk in stream_iter:
+            if return_reasoning:
+                assert isinstance(chunk, ReasoningChunk)
+                if chunk.content:
+                    response_parts.append(chunk.content)
+                    if encoding is not None:
+                        output_token_count += len(encoding.encode(chunk.content))
+                    else:
+                        output_token_count += TokenCounter.count_words(chunk.content)
+                if chunk.reasoning:
+                    reasoning_parts.append(chunk.reasoning)
+                    if encoding is not None:
+                        output_token_count += len(encoding.encode(chunk.reasoning))
+                    else:
+                        output_token_count += TokenCounter.count_words(chunk.reasoning)
+            else:
+                chunk_str = str(chunk)
+                response_parts.append(chunk_str)
+                if encoding is not None:
+                    output_token_count += len(encoding.encode(chunk_str))
+                else:
+                    output_token_count += TokenCounter.count_words(chunk_str)
+
+            if progress and progress_task_id is not None:
+                progress.update(
+                    progress_task_id,
+                    description=f"{description_prefix}: {output_token_count} out",
+                )
+
+        response = "".join(response_parts).strip()
+        reasoning = "".join(reasoning_parts).strip() if reasoning_parts else None
+        latency = time.time() - start_time
+        return response, reasoning, output_token_count, latency
 
     def _run_paper_explain_global_task(
         self,
@@ -482,42 +531,23 @@ class GlobalBatchProcessor:
             api_params.append(f"timeout={paper_timeout}s")
             logger.info(f"[Task {task.task_id}] Paper API: {', '.join(api_params)}")
 
-        start_time = time.time()
-        response_parts: list[str] = []
-        reasoning_parts: list[str] = []
-
-        for chunk in processor.iter_process_raw_stream(
+        stream_iter = processor.iter_process_raw_stream(
             task.prompt,
             temperature=model_config.temperature,
             model=model_config.model,
             max_tokens=model_config.max_tokens,
             return_reasoning=task.return_reasoning,
-        ):
-            if task.return_reasoning:
-                c, r = chunk  # type: ignore[misc]
-                if c:
-                    response_parts.append(c)
-                if r:
-                    reasoning_parts.append(r)
-                out_so_far = "".join(reasoning_parts) + "".join(response_parts)
-            else:
-                response_parts.append(str(chunk))
-                out_so_far = "".join(response_parts)
-
-            output_token_count = TokenCounter.count_tokens(out_so_far, model_config.model)
-            if progress and progress_task_id is not None:
-                progress.update(
-                    progress_task_id,
-                    description=(
-                        f"{model_key} paper task {task.task_id} ({progress_tokens} tokens): "
-                        f"{output_token_count} out"
-                    ),
-                )
-
-        response = "".join(response_parts).strip()
-        reasoning_joined = "".join(reasoning_parts).strip()
-        reasoning_out = reasoning_joined if reasoning_joined else None
-        latency = time.time() - start_time
+        )
+        description_prefix = f"{model_key} paper task {task.task_id} ({progress_tokens} tokens)"
+        response, reasoning_out, _output_token_count, latency = self._stream_and_collect(
+            stream_iter,
+            task,
+            model_config,
+            progress,
+            progress_task_id,
+            description_prefix,
+            return_reasoning=task.return_reasoning,
+        )
 
         out_for_count = response
         if reasoning_out:
@@ -588,10 +618,6 @@ class GlobalBatchProcessor:
             api_params.append(f"input_tokens={display_input_tokens}")
             logger.info(f"[Task {task.task_id}] API Call: {', '.join(api_params)}")
 
-        start_time = time.time()
-        response_parts: list[str] = []
-        output_token_count = 0
-
         if progress and progress_task_id is not None:
             progress.update(
                 progress_task_id,
@@ -600,27 +626,24 @@ class GlobalBatchProcessor:
         elif progress is None:
             logger.info(f"Translation chunk {task.task_id} start ({model_key}, {progress_tokens})")
 
-        for chunk in processor.process(
+        stream_iter = processor.process(
             content=task.content,
             prompt_template=task.prompt,
             temperature=model_config.temperature,
             model=model_config.model,
             max_tokens=model_config.max_tokens,
             stream=True,
-        ):
-            response_parts.append(chunk)
-            output_token_count = TokenCounter.count_tokens(
-                "".join(response_parts), model_config.model
-            )
-
-            if progress and progress_task_id is not None:
-                progress.update(
-                    progress_task_id,
-                    description=f"{model_key} Task {task.task_id} ({progress_tokens} tokens): {output_token_count} out",
-                )
-
-        response = "".join(response_parts)
-        latency = time.time() - start_time
+        )
+        description_prefix = f"{model_key} Task {task.task_id} ({progress_tokens} tokens)"
+        response, _, output_token_count, latency = self._stream_and_collect(
+            stream_iter,
+            task,
+            model_config,
+            progress,
+            progress_task_id,
+            description_prefix,
+            return_reasoning=False,
+        )
 
         metadata = RequestMetadata(
             provider=provider.name,
@@ -664,7 +687,7 @@ class GlobalBatchProcessor:
     def _process_single_global_task(
         self,
         task: BatchTask,
-        config_manager: ConfigManager,
+        provider_cache: dict[str, LLMProviderProtocol],
         retry_count: int = 0,
         progress: Progress | None = None,
         progress_task_id: TaskID | None = None,
@@ -675,7 +698,7 @@ class GlobalBatchProcessor:
 
         Args:
             task: Batch task with task_model_config
-            config_manager: Configuration manager instance
+            provider_cache: Pre-built provider adapter cache
             retry_count: Current retry count
             progress: Rich Progress object for updating progress
             progress_task_id: Task ID in progress bar
@@ -709,11 +732,12 @@ class GlobalBatchProcessor:
             if task.task_kind == "paper_explain":
                 paper_timeout = self._paper_request_timeout_seconds()
 
-            provider, _ = self._create_provider_for_task(
-                model_config,
-                config_manager,
-                timeout_override=paper_timeout if task.task_kind == "paper_explain" else None,
-            )
+            cache_key = model_key
+            if task.task_kind == "paper_explain":
+                cache_key += f" / timeout={paper_timeout}"
+            provider = provider_cache.get(cache_key)
+            if provider is None:
+                raise ValueError(f"Provider not found in cache for {cache_key}")
             processor = RequestProcessor(provider)
 
             if task.task_kind == "paper_explain":
@@ -764,7 +788,9 @@ class GlobalBatchProcessor:
                 progress, progress_task_id, model_key, task.task_id, progress_tokens
             )
 
-        return result
+        finally:
+            if progress and progress_task_id is not None:
+                progress.advance(progress_task_id)
 
     def process_global_tasks(
         self,
@@ -790,7 +816,10 @@ class GlobalBatchProcessor:
         )
         pending_tasks = sort_batch_tasks_by_estimated_input(tasks.copy(), default_model)
 
-        # Create progress display with multiple tasks
+        # Pre-build provider cache to avoid per-task adapter creation and ConfigManager mutation
+        provider_cache = self._build_provider_cache(pending_tasks, config_manager)
+
+        # Create a single overall progress bar instead of one per task
         if show_progress:
             from rich.console import Console as RichConsole
             from rich.progress import (
@@ -804,8 +833,6 @@ class GlobalBatchProcessor:
 
             rich_console = RichConsole()
 
-            # Note: Rich Progress doesn't support max_completed parameter
-            # Completed tasks will be shown, but terminal scrolling may be needed for many tasks
             progress = Progress(
                 SpinnerColumn(),
                 TextColumn("[progress.description]{task.description}"),
@@ -818,18 +845,13 @@ class GlobalBatchProcessor:
             )
             progress.start()
 
-            # Create a progress task for each batch task
-            task_to_progress_id: dict[int, TaskID] = {}
+            main_task = progress.add_task(
+                "Batch processing...",
+                total=len(pending_tasks),
+            )
             task_to_input_tokens: dict[int, int] = {}
             for task in pending_tasks:
-                model_key = (
-                    f"{task.task_model_config.provider}/{task.task_model_config.model}"
-                    if task.task_model_config
-                    else "unknown"
-                )
                 # Pre-calculate input tokens for display
-                # Simple estimation: combine prompt template and content
-                # Replace {content} placeholder if present, otherwise append content
                 estimated_prompt = (
                     task.prompt.replace("{content}", task.content)
                     if "{content}" in task.prompt
@@ -840,15 +862,9 @@ class GlobalBatchProcessor:
                     task.task_model_config.model if task.task_model_config else "gpt-3.5-turbo",
                 )["token_count"]
                 task_to_input_tokens[task.task_id] = input_token_estimate
-
-                progress_id = progress.add_task(
-                    f"{model_key} Task {task.task_id} ({input_token_estimate} tokens): Waiting...",
-                    total=100,  # Use 100 as total for percentage display
-                )
-                task_to_progress_id[task.task_id] = progress_id
         else:
             progress = None
-            task_to_progress_id = {}
+            main_task = None
             task_to_input_tokens = {}
 
         try:
@@ -856,10 +872,10 @@ class GlobalBatchProcessor:
             def _worker(task: BatchTask, retry_count: int) -> BatchResult:
                 return self._process_single_global_task(
                     task,
-                    config_manager,
+                    provider_cache,
                     retry_count,
                     progress,
-                    task_to_progress_id.get(task.task_id),
+                    main_task,
                     task_to_input_tokens.get(task.task_id),
                 )
 
@@ -871,11 +887,8 @@ class GlobalBatchProcessor:
 
             def _on_worker_exception(task: BatchTask, exc: BaseException) -> BatchResult:
                 logger.error(f"Unexpected error processing task {task.task_id}: {exc}")
-                if progress and task.task_id in task_to_progress_id:
-                    progress.update(
-                        task_to_progress_id[task.task_id],
-                        completed=100,
-                    )
+                if progress and main_task is not None:
+                    progress.advance(main_task)
                 return BatchResult(
                     task_id=task.task_id,
                     prompt=task.prompt,

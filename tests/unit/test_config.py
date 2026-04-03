@@ -20,7 +20,6 @@ class TestConfigLoader:
         config = load_result.app_config
 
         assert config.default_provider == "test_provider"
-        assert len(config.providers) == 2
         assert "test_provider" in config.providers
         assert "another_provider" in config.providers
         assert load_result.unified_config.translation.threads == 5  # From sample_config

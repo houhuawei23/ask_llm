@@ -204,6 +204,61 @@ class TestTranslationExporter:
         finally:
             Path(temp_path).unlink()
 
+    def test_unwrap_json_translation_with_trailing_text_after_brace(self):
+        """Models often append notes after the closing }; must still extract Markdown body."""
+        chunks = [TextChunk(content="Hello", chunk_id=0)]
+        model_config = ModelConfig(provider="test", model="test-model")
+        response = '{"translation": "你好"}\n\n(translation complete)'
+        results = [
+            BatchResult(
+                task_id=0,
+                prompt="T",
+                content="Hello",
+                model_settings=model_config,
+                response=response,
+                status=TaskStatus.SUCCESS,
+            )
+        ]
+        exporter = TranslationExporter(chunks, results)
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
+            temp_path = f.name
+        try:
+            exporter.export(temp_path, format_type="markdown")
+            content = Path(temp_path).read_text(encoding="utf-8")
+            assert content.strip() == "你好"
+            assert "translation" not in content
+            assert "complete" not in content
+        finally:
+            Path(temp_path).unlink()
+
+    def test_unwrap_json_translation_dict_keys(self):
+        """Accept common wrapper keys from API-style outputs."""
+        chunks = [TextChunk(content="x", chunk_id=0)]
+        model_config = ModelConfig(provider="test", model="test-model")
+        for response, expected in (
+            ('{"translated_text": "译文"}', "译文"),
+            ('{"content": "正文"}', "正文"),
+        ):
+            results = [
+                BatchResult(
+                    task_id=0,
+                    prompt="T",
+                    content="x",
+                    model_settings=model_config,
+                    response=response,
+                    status=TaskStatus.SUCCESS,
+                )
+            ]
+            exporter = TranslationExporter(chunks, results)
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
+                temp_path = f.name
+            try:
+                exporter.export(temp_path, format_type="markdown")
+                content = Path(temp_path).read_text(encoding="utf-8")
+                assert expected in content
+            finally:
+                Path(temp_path).unlink()
+
     def test_export_preserve_order(self):
         """Test that chunks are exported in correct order."""
         chunks = [

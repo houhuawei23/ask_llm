@@ -1,7 +1,7 @@
 """Request processing logic."""
 
 import time
-from typing import Generator, Iterator, Optional, Tuple, Union
+from typing import Generator, Iterator, Optional, Union
 
 from loguru import logger
 
@@ -12,7 +12,7 @@ from ask_llm.core.models import (
     ProcessingResult,
     RequestMetadata,
 )
-from ask_llm.core.protocols import LLMProviderProtocol
+from ask_llm.core.protocols import LLMProviderProtocol, ReasoningChunk
 from ask_llm.utils.token_counter import TokenCounter
 
 
@@ -54,8 +54,10 @@ class RequestProcessor:
         """
         template = prompt_template or self._get_default_prompt_template()
 
+        # Use replace, not str.format: prompts often contain literal ``{``/``}`` (LaTeX,
+        # JSON examples, ``{variable}`` in code samples). Only ``{content}`` is a placeholder.
         if "{content}" in template:
-            return template.format(content=content)
+            return template.replace("{content}", content)
         else:
             return f"{template}\n\n{content}"
 
@@ -108,12 +110,12 @@ class RequestProcessor:
         model: Optional[str] = None,
         max_tokens: Optional[int] = None,
         return_reasoning: bool = False,
-    ) -> Iterator[Union[str, Tuple[str, str]]]:
+    ) -> Iterator[Union[str, ReasoningChunk]]:
         """
         Stream a full user prompt (paper / raw mode) and yield chunks.
 
         When *return_reasoning* is False, yields content string fragments (same as ``process(..., stream=True)`` style).
-        When True (e.g. DeepSeek reasoner), yields ``(content_delta, reasoning_delta)`` pairs.
+        When True (e.g. DeepSeek reasoner), yields ReasoningChunk pairs.
         """
         prompt = (prompt_template or "").strip()
         logger.debug(f"Streaming raw prompt request with {len(prompt)} characters")
@@ -130,7 +132,11 @@ class RequestProcessor:
             call_kw["return_reasoning"] = True
 
         gen = self.provider.call(**call_kw)
-        yield from gen
+        for item in gen:
+            if isinstance(item, tuple) and len(item) == 2:
+                yield ReasoningChunk(content=item[0], reasoning=item[1])
+            else:
+                yield item
 
     def process_with_metadata(
         self,
@@ -181,8 +187,8 @@ class RequestProcessor:
 
         raw = self.provider.call(**call_kw)
         reasoning: Optional[str] = None
-        if isinstance(raw, tuple) and len(raw) == 2:
-            response, reasoning = raw[0], raw[1]
+        if isinstance(raw, ReasoningChunk):
+            response, reasoning = raw.content, raw.reasoning
         else:
             response = raw if isinstance(raw, str) else str(raw)
 

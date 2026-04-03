@@ -45,11 +45,20 @@ class TranslationExporter:
         Supports payloads like:
         - {"translation": "..."}
         - ```json {"translation":"..."} ```
+        - {"translation": "..."} plus trailing text (models often append notes after ``}``)
         Falls back to original text when parsing fails.
+
+        Note: Do not require ``raw.endswith("}")`` — that rejects valid JSON objects when
+        the model adds characters after the closing brace, which previously left the file
+        as raw JSON.
         """
+        original = text
         raw = text.strip()
         if not raw:
             return raw
+
+        if raw.startswith("\ufeff"):
+            raw = raw.lstrip("\ufeff").strip()
 
         # Strip optional fenced code block wrapper.
         if raw.startswith("```"):
@@ -57,20 +66,40 @@ class TranslationExporter:
             if len(lines) >= 3 and lines[0].startswith("```") and lines[-1].strip() == "```":
                 raw = "\n".join(lines[1:-1]).strip()
 
-        if not (raw.startswith("{") and raw.endswith("}")):
-            return text
+        brace = raw.find("{")
+        if brace < 0:
+            return original
 
+        obj = None
+
+        # 1) First JSON value from first ``{`` (handles trailing garbage after ``}``).
         try:
-            obj = json.loads(raw)
-        except Exception:
-            return text
+            obj, _end = json.JSONDecoder().raw_decode(raw, brace)
+        except json.JSONDecodeError:
+            pass
+
+        # 2) Slice from first ``{`` to last ``}`` (some models emit extra junk only at end).
+        if obj is None:
+            try:
+                last = raw.rfind("}")
+                if last > brace:
+                    obj = json.loads(raw[brace : last + 1])
+            except json.JSONDecodeError:
+                pass
+
+        # 3) Whole blob (e.g. already trimmed to a single object).
+        if obj is None and raw.startswith("{"):
+            try:
+                obj = json.loads(raw)
+            except json.JSONDecodeError:
+                pass
 
         if isinstance(obj, dict):
             for key in ("translation", "translated_text", "content", "text", "result"):
                 val = obj.get(key)
                 if isinstance(val, str) and val.strip():
                     return val.strip()
-        return text
+        return original
 
     def export(self, output_path: str, format_type: Optional[str] = None) -> str:
         """

@@ -47,11 +47,11 @@ class TestTranslationConfig:
 
 
 class TestUnifiedConfig:
-    """Test UnifiedConfig.from_dict."""
+    """Test UnifiedConfig.model_validate."""
 
-    def test_from_dict_empty(self):
-        """Test from_dict with empty data."""
-        config = UnifiedConfig.from_dict({})
+    def test_model_validate_empty(self):
+        """Test model_validate with empty data."""
+        config = UnifiedConfig.model_validate({})
         assert config.translation.target_language == "zh"
         assert config.general.default_output_filename == "output.txt"
         assert config.batch.threads == 5
@@ -73,8 +73,8 @@ class TestPaperConfig:
         assert p.max_output_tokens == 65536
         assert p.full_model == "deepseek-reasoner"
 
-    def test_from_dict_with_translation(self):
-        """Test from_dict with translation section."""
+    def test_model_validate_with_translation(self):
+        """Test model_validate with translation section."""
         data = {
             "translation": {
                 "target_language": "en",
@@ -85,7 +85,7 @@ class TestPaperConfig:
                 "max_chunk_size": 3000,
             }
         }
-        config = UnifiedConfig.from_dict(data)
+        config = UnifiedConfig.model_validate(data)
         assert config.translation.target_language == "en"
         assert config.translation.source_language == "zh"
         assert config.translation.style == "casual"
@@ -93,10 +93,10 @@ class TestPaperConfig:
         assert config.translation.retries == 5
         assert config.translation.max_chunk_tokens == 2400
 
-    def test_from_dict_with_project_root_markers(self):
-        """Test from_dict with project root markers."""
+    def test_model_validate_with_project_root_markers(self):
+        """Test model_validate with project root markers."""
         data = {
             "project_root_markers": ["custom.txt", "my.config"],
         }
-        config = UnifiedConfig.from_dict(data)
+        config = UnifiedConfig.model_validate(data)
         assert config.project_root_markers == ["custom.txt", "my.config"]
