@@ -1,4 +1,4 @@
-# Ask LLM v2.3.0
+# Ask LLM v2.4.0
 
 A modern command-line tool for calling multiple LLM APIs (DeepSeek, Qwen, etc.) with an elegant interface.
 
@@ -54,6 +54,15 @@ ask-llm ask input.txt
 # Direct text input
 ask-llm "Translate to Chinese: Hello world"
 
+# With system prompt for one-shot behavior control
+ask-llm ask "What are you?" --system "You are a pirate. Respond in pirate dialect."
+
+# Show reasoning from reasoner models
+ask-llm ask "Solve: 12*15" --include-reasoning -m deepseek-reasoner
+
+# Dry-run: preview prompt and token estimate (no API call)
+ask-llm ask input.md --dry-run
+
 # Interactive chat mode
 ask-llm chat
 
@@ -65,26 +74,43 @@ ask-llm trans document.md
 ask-llm trans /path/to/dir/ -o translated/
 ask-llm trans *.md --max-parallel-files 5
 
+# Translation with glossary for consistent terminology
+ask-llm trans paper.md --glossary glossary.yml
+
 # Batch processing
 ask-llm batch batch-examples/prompt-contents.yml -o results.json
 
 # Paper explanation (Markdown by headings, or arxiv2md-beta directory)
 ask-llm paper -i paper.md --run all
 ask-llm paper -i path/to/arxiv-paper-dir --run sections
+
+# Paper dry-run: preview sections and token estimates
+ask-llm paper -i paper.md --dry-run
+
+# Resume interrupted paper processing
+ask-llm paper -i paper.md --resume
 ```
 
 ## Commands
 
-| Command                    | Description                                                               |
-| -------------------------- | ------------------------------------------------------------------------- |
-| `ask-llm ask [INPUT]`      | Process input with LLM                                                    |
-| `ask-llm chat`             | Start interactive chat                                                    |
-| `ask-llm trans [FILES...]` | Translate files (supports directory and glob)                             |
-| `ask-llm paper -i PATH`    | Explain a paper: outputs under `./explain/` next to the file or directory |
-| `ask-llm batch [CONFIG]`   | Process batch tasks from YAML config                                      |
-| `ask-llm config show`      | Display configuration                                                     |
-| `ask-llm config test`      | Test API connections                                                      |
-| `ask-llm config init`      | Create example config                                                     |
+| Command                         | Description                                                               |
+| ------------------------------- | ------------------------------------------------------------------------- |
+| `ask-llm ask [INPUT]`           | Process input with LLM                                                    |
+| `ask-llm ask --system`          | Add system prompt for one-shot behavior control                           |
+| `ask-llm ask --include-reasoning` | Show chain-of-thought from reasoner models                              |
+| `ask-llm ask --dry-run`         | Preview prompt and token estimate (no API call)                           |
+| `ask-llm chat`                  | Start interactive chat                                                    |
+| `ask-llm chat /search`          | Search message history                                                    |
+| `ask-llm chat /export`          | Export conversation to JSON/Markdown/TXT                                  |
+| `ask-llm trans [FILES...]`      | Translate files (supports directory and glob)                             |
+| `ask-llm trans --glossary`      | Use terminology glossary for consistent translations                      |
+| `ask-llm paper -i PATH`         | Explain a paper: outputs under `./explain/` next to the file or directory |
+| `ask-llm paper --dry-run`       | Preview sections and token estimates                                      |
+| `ask-llm paper --resume`        | Skip completed sections when resuming                                     |
+| `ask-llm batch [CONFIG]`        | Process batch tasks from YAML config                                      |
+| `ask-llm config show`           | Display configuration                                                     |
+| `ask-llm config test`           | Test API connections                                                      |
+| `ask-llm config init`           | Create example config                                                     |
 
 ### Batch Processing
 

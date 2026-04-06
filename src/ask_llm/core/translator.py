@@ -51,6 +51,7 @@ class Translator:
         style: str = TranslationStyle.FORMAL,
         custom_prompt_template: Optional[str] = None,
         prompt_file: Optional[str] = None,
+        glossary_pairs: Optional[list[tuple[str, str]]] = None,
     ):
         """
         Initialize translator.
@@ -61,12 +62,14 @@ class Translator:
             style: Translation style (formal/casual/technical)
             custom_prompt_template: Custom prompt template (overrides style)
             prompt_file: Path to prompt template file (overrides custom_prompt_template and style)
+            glossary_pairs: Optional list of (source, target) terminology pairs
         """
         self.target_language = target_language
         self.source_language = source_language
         self.style = style
         self.custom_prompt_template = custom_prompt_template
         self.prompt_file = prompt_file
+        self.glossary_pairs = glossary_pairs or []
 
         # Load prompt from file if specified
         if prompt_file:
@@ -88,7 +91,21 @@ class Translator:
         source_lang = self._format_language_name(self.source_language)
         target_lang = self._format_language_name(self.target_language)
 
-        return template.replace("{source_lang}", source_lang).replace("{target_lang}", target_lang)
+        template = template.replace("{source_lang}", source_lang).replace("{target_lang}", target_lang)
+
+        # Inject glossary if provided
+        if self.glossary_pairs:
+            lines = ["\nGlossary (use these translations consistently):"]
+            for src, tgt in self.glossary_pairs:
+                lines.append(f"- {src} → {tgt}")
+            lines.append("")
+            glossary_block = "\n".join(lines) + "\n"
+            if "{content}" in template:
+                template = template.replace("{content}", glossary_block + "{content}")
+            else:
+                template = template + glossary_block
+
+        return template
 
     def generate_prompt(self, content: str) -> str:
         """
@@ -191,6 +208,69 @@ class Translator:
             return content.strip()
         except Exception as e:
             raise OSError(f"Failed to read prompt file {prompt_file}: {e}") from e
+
+    @staticmethod
+    def load_glossary(path: str) -> list[tuple[str, str]]:
+        """
+        Load glossary file with terminology pairs.
+
+        Supports:
+        - YAML (.yml, .yaml): flat dict {src: tgt} or list [{src: ..., tgt: ...}]
+        - JSONL (.jsonl): lines of {"src": ..., "tgt": ...} or {"source": ..., "target": ...}
+
+        Args:
+            path: Path to glossary file
+
+        Returns:
+            List of (source, target) tuples
+
+        Raises:
+            FileNotFoundError: If file not found
+            ValueError: If format is unrecognized
+        """
+        import json
+
+        import yaml
+
+        file_path = Path(path)
+        if not file_path.exists():
+            raise FileNotFoundError(f"Glossary file not found: {path}")
+
+        suffix = file_path.suffix.lower()
+        content = file_path.read_text(encoding="utf-8")
+
+        if suffix in (".yml", ".yaml"):
+            data = yaml.safe_load(content)
+            if isinstance(data, dict):
+                return [(str(k), str(v)) for k, v in data.items()]
+            elif isinstance(data, list):
+                pairs = []
+                for item in data:
+                    if isinstance(item, dict):
+                        src = item.get("src") or item.get("source")
+                        tgt = item.get("tgt") or item.get("target")
+                        if src and tgt:
+                            pairs.append((str(src), str(tgt)))
+                return pairs
+            else:
+                raise ValueError(f"Unrecognized YAML format in glossary: {path}")
+
+        elif suffix == ".jsonl":
+            pairs = []
+            for line in content.strip().split("\n"):
+                line = line.strip()
+                if not line:
+                    continue
+                item = json.loads(line)
+                if isinstance(item, dict):
+                    src = item.get("src") or item.get("source")
+                    tgt = item.get("tgt") or item.get("target")
+                    if src and tgt:
+                        pairs.append((str(src), str(tgt)))
+            return pairs
+
+        else:
+            raise ValueError(f"Unsupported glossary format: {suffix}. Use .yml, .yaml, or .jsonl")
 
     @staticmethod
     def _format_language_name(lang_code: str) -> str:

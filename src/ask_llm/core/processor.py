@@ -69,6 +69,7 @@ class RequestProcessor:
         model: Optional[str] = None,
         max_tokens: Optional[int] = None,
         stream: bool = False,
+        system_prompt: Optional[str] = None,
     ) -> Generator[str, None, None]:
         """
         Process content with LLM.
@@ -80,6 +81,8 @@ class RequestProcessor:
             model: Model name
             max_tokens: Maximum number of tokens to generate
             stream: Whether to stream response
+            system_prompt: Optional system prompt to prepend as a system message.
+                When set, the request uses messages format instead of prompt.
 
         Yields:
             Response text chunks (if streaming) or full response
@@ -88,17 +91,27 @@ class RequestProcessor:
         logger.debug(f"Processing request with {len(prompt)} characters")
 
         # Prepare kwargs for provider.call()
-        call_kwargs = {}
+        call_kwargs: dict = {}
         if max_tokens is not None:
             call_kwargs["max_tokens"] = max_tokens
 
+        # Use messages format if system_prompt is provided
+        if system_prompt:
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt},
+            ]
+            call_kwargs["messages"] = messages
+        else:
+            call_kwargs["prompt"] = prompt
+
         if stream:
             yield from self.provider.call(
-                prompt=prompt, temperature=temperature, model=model, stream=True, **call_kwargs
+                temperature=temperature, model=model, stream=True, **call_kwargs
             )
         else:
             response = self.provider.call(
-                prompt=prompt, temperature=temperature, model=model, stream=False, **call_kwargs
+                temperature=temperature, model=model, stream=False, **call_kwargs
             )
             yield response
 
@@ -110,6 +123,7 @@ class RequestProcessor:
         model: Optional[str] = None,
         max_tokens: Optional[int] = None,
         return_reasoning: bool = False,
+        system_prompt: Optional[str] = None,
     ) -> Iterator[Union[str, ReasoningChunk]]:
         """
         Stream a full user prompt (paper / raw mode) and yield chunks.
@@ -121,11 +135,21 @@ class RequestProcessor:
         logger.debug(f"Streaming raw prompt request with {len(prompt)} characters")
 
         call_kw: dict = {
-            "prompt": prompt,
             "temperature": temperature,
             "model": model,
             "stream": True,
         }
+
+        # Use messages format if system_prompt is provided
+        if system_prompt:
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt},
+            ]
+            call_kw["messages"] = messages
+        else:
+            call_kw["prompt"] = prompt
+
         if max_tokens is not None:
             call_kw["max_tokens"] = max_tokens
         if return_reasoning:
@@ -147,6 +171,7 @@ class RequestProcessor:
         max_tokens: Optional[int] = None,
         return_reasoning: bool = False,
         raw_prompt: bool = False,
+        system_prompt: Optional[str] = None,
     ) -> ProcessingResult:
         """
         Process content and return result with metadata.
@@ -160,6 +185,8 @@ class RequestProcessor:
             return_reasoning: If True, request ``reasoning_content`` (e.g. DeepSeek reasoner)
             raw_prompt: If True, ``prompt_template`` is sent as the full user message (no
                 ``{content}`` merge); ``content`` is ignored.
+            system_prompt: Optional system prompt to prepend as a system message.
+                When set, the request uses messages format instead of prompt.
 
         Returns:
             Processing result with metadata
@@ -175,11 +202,24 @@ class RequestProcessor:
         # Call API
         start_time = time.time()
         call_kw: dict = {
-            "prompt": prompt,
             "temperature": temperature,
             "model": model,
             "stream": False,
         }
+
+        # Use messages format if system_prompt is provided, otherwise use prompt
+        if system_prompt:
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt},
+            ]
+            call_kw["messages"] = messages
+            # Recalculate input tokens to include system prompt
+            full_input = f"{system_prompt}\n{prompt}"
+            input_stats = TokenCounter.estimate_tokens(full_input, model)
+        else:
+            call_kw["prompt"] = prompt
+
         if max_tokens is not None:
             call_kw["max_tokens"] = max_tokens
         if return_reasoning:

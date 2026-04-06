@@ -183,6 +183,14 @@ def trans(
             help="Skip API key presence check (not recommended)",
         ),
     ] = False,
+    glossary: Annotated[
+        str | None,
+        typer.Option(
+            "--glossary",
+            "-g",
+            help="Path to glossary file (YAML map or JSONL {src,tgt})",
+        ),
+    ] = None,
 ) -> None:
     """
     Translate text files using LLM API.
@@ -259,6 +267,12 @@ def trans(
         if not final_model:
             console.print_error("No model specified. Use --model or configure default model.")
             raise typer.Exit(1)
+
+        # Load glossary if provided
+        glossary_pairs: list[tuple[str, str]] = []
+        if glossary:
+            glossary_pairs = Translator.load_glossary(glossary)
+            console.print_info(f"Glossary: {len(glossary_pairs)} term pair(s) loaded from {glossary}")
 
         apply_cli_overrides_and_gate_api_key(
             config_manager,
@@ -369,6 +383,7 @@ def trans(
                 style=trans_config.style,
                 custom_prompt_template=trans_config.prompt_template,
                 prompt_file=trans_config.prompt_file,
+                glossary_pairs=glossary_pairs,
             )
 
             # Create model config
@@ -488,6 +503,7 @@ def trans(
             style=trans_config.style,
             custom_prompt_template=trans_config.prompt_template,
             prompt_file=trans_config.prompt_file,
+            glossary_pairs=glossary_pairs,
         )
         prompt_template_tokens = prompt_preview.count_prompt_template_tokens(final_model)
         pf = trans_config.prompt_file

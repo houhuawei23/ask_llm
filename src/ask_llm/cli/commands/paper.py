@@ -119,6 +119,21 @@ def paper(
             help="Parallel LLM calls (default: paper.concurrency in config; thread pool for I/O)",
         ),
     ] = None,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run",
+            "-n",
+            help="Show detected sections and token estimates without making API calls",
+        ),
+    ] = False,
+    resume: Annotated[
+        bool,
+        typer.Option(
+            "--resume",
+            help="Skip sections whose output already exists",
+        ),
+    ] = False,
 ) -> None:
     """
     Explain a paper: split Markdown by headings (or load arxiv2md-beta dir), call LLM per section,
@@ -233,12 +248,62 @@ def paper(
             console.print_error("No jobs to run (check --run and --sections, or empty sections)")
             raise typer.Exit(1)
 
-        for idx, (key, _, _) in enumerate(jobs):
-            out_name = explain_output_filename(idx, key)
-            out_file = explain_root / out_name
-            if out_file.exists() and not force:
-                console.print_error(f"Output exists: {out_file}. Use --force to overwrite.")
-                raise typer.Exit(1)
+        # Dry-run: preview sections and token estimates
+        if dry_run:
+            from ask_llm.utils.token_counter import TokenCounter
+
+            console.print(f"\n[bold]Dry Run — {len(jobs)} job(s) planned:[/bold]")
+            total_tokens = 0
+            for idx, (key, body, appendix_h2) in enumerate(jobs):
+                template = load_prompt_template(prompt_dir, key)
+                label = section_label_for_job(bundle, key, appendix_h2)
+                heading = (
+                    appendix_h2
+                    if appendix_h2 and key.startswith("appendices:h2:")
+                    else bundle.section_headings.get(key)
+                )
+                full_prompt = format_prompt(
+                    template,
+                    paper_title=bundle.paper_title,
+                    section_name=label,
+                    content=body,
+                    section_heading=heading,
+                )
+                job_model = full_model_name if key == "full" else section_job_model
+                tok = TokenCounter.count_tokens(full_prompt, job_model)
+                total_tokens += tok
+                out_name = explain_output_filename(idx, key)
+                out_file = explain_root / out_name
+                status = "[yellow]exists[/yellow]" if out_file.exists() else "[green]new[/green]"
+                console.print(f"  [{idx:2}] {key:<30} {tok:>6} tokens  {status}  → {out_name}")
+            console.print(f"\n  Total estimated input: {total_tokens:,} tokens across {len(jobs)} jobs")
+            if pricing_map:
+                console.print(format_cost_estimate(current_provider, section_job_model,
+                                                   total_tokens, total_tokens * 3,
+                                                   pricing_map, pricing_source=pricing_source))
+            raise typer.Exit(0)
+
+        # Conflict guard with --resume support
+        if resume:
+            original_jobs = list(enumerate(jobs))  # preserve (original_idx, job_tuple)
+            filtered = [(orig_idx, job) for orig_idx, job in original_jobs
+                        if not (explain_root / explain_output_filename(orig_idx, job[0])).exists()]
+            skipped = len(original_jobs) - len(filtered)
+            if skipped:
+                console.print_info(f"--resume: skipping {skipped} already-completed section(s)")
+            if not filtered:
+                console.print_info("All sections already completed. Nothing to do.")
+                raise typer.Exit(0)
+            # Replace jobs with filtered list; carry original indices forward
+            jobs_with_orig_idx: list[tuple[int, tuple[str, str, str | None]]] = filtered
+        else:
+            for idx, (key, _, _) in enumerate(jobs):
+                out_name = explain_output_filename(idx, key)
+                out_file = explain_root / out_name
+                if out_file.exists() and not force:
+                    console.print_error(f"Output exists: {out_file}. Use --force or --resume.")
+                    raise typer.Exit(1)
+            jobs_with_orig_idx = list(enumerate(jobs))
 
         paper_max_tokens = paper_cfg.max_output_tokens
         full_model_name = (paper_cfg.full_model or "").strip() or "deepseek-reasoner"
@@ -246,12 +311,12 @@ def paper(
         # Section/meta jobs use CLI --model if set; otherwise the provider default (must not be
         # None or resolve_paper_max_tokens skips per-model caps and sends paper.max_output_tokens raw).
         section_job_model = (model or default_model).strip()
+        current_provider = config_manager.current_provider_name
 
         idx_to_meta: dict[int, tuple[str, str, str | None]] = {}
         paper_tasks: list[BatchTask] = []
-        current_provider = config_manager.current_provider_name
 
-        for idx, (key, body, appendix_h2) in enumerate(jobs):
+        for orig_idx, (key, body, appendix_h2) in jobs_with_orig_idx:
             template = load_prompt_template(prompt_dir, key)
             label = section_label_for_job(bundle, key, appendix_h2)
             heading = (
@@ -272,10 +337,10 @@ def paper(
                 f"paper job: key={key!r} model={job_model!r} max_tokens={eff_max} "
                 f"(paper.max_output_tokens={paper_max_tokens})"
             )
-            idx_to_meta[idx] = (key, template, appendix_h2)
+            idx_to_meta[orig_idx] = (key, template, appendix_h2)
             paper_tasks.append(
                 build_paper_explain_task(
-                    idx,
+                    orig_idx,
                     full_prompt,
                     task_model_config=ModelConfig(
                         provider=current_provider,

@@ -1,5 +1,59 @@
 # Changelog
 
+## 2.4.0 (2026-04-06)
+
+### New Features
+
+- **`ask --system`** - Add system prompt support for one-shot queries. Inject a system message to guide LLM behavior.
+  ```bash
+  ask-llm ask "What are you?" --system "You are a pirate. Respond in pirate dialect."
+  ```
+
+- **`ask --include-reasoning`** - Surface chain-of-thought reasoning from reasoner models (e.g., DeepSeek).
+  ```bash
+  ask-llm ask "Solve: 12*15" --include-reasoning -m deepseek-reasoner
+  ```
+
+- **`ask --dry-run`** - Preview prompt and token/cost estimate without making API calls.
+  ```bash
+  ask-llm ask input.md --dry-run
+  ```
+
+- **`paper --dry-run`** - Preview detected sections with token counts before expensive multi-job runs.
+  ```bash
+  ask-llm paper -i paper.md --dry-run
+  ```
+
+- **`paper --resume`** - Skip already-completed sections when resuming interrupted runs.
+  ```bash
+  ask-llm paper -i paper.md --resume
+  ```
+
+- **`trans --glossary`** - Inject terminology pairs for domain-specific translations.
+  ```bash
+  ask-llm trans paper.md --glossary glossary.yml
+  ```
+  Supports YAML (`{src: tgt}` or `[{src: ..., tgt: ...}]`) and JSONL formats.
+
+- **`chat /search`** - Search message history with regex pattern.
+  ```
+  /search attention
+  ```
+
+- **`chat /export`** - Export conversation history to JSON, Markdown, or plain text.
+  ```
+  /export session.md
+  /export session.txt txt
+  /export session.json json
+  ```
+
+### Implementation Details
+
+- Added `system_prompt` parameter to `process_with_metadata()` and `process()` in `processor.py`
+- Added `return_reasoning` support for streaming responses via `iter_process_raw_stream()`
+- Added `glossary_pairs` support to `Translator` class with `load_glossary()` static method
+- Enhanced chat meta-commands with `/search` and `/export` functionality
+
 ## 2.3.0 (2026-04-04)
 
 ### Performance Improvements

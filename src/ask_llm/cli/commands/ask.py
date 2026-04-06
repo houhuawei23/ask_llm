@@ -123,6 +123,29 @@ def ask(
             help="Skip API key presence check (not recommended)",
         ),
     ] = False,
+    system: Annotated[
+        str | None,
+        typer.Option(
+            "--system",
+            "-s",
+            help="System prompt for the LLM",
+        ),
+    ] = None,
+    include_reasoning: Annotated[
+        bool,
+        typer.Option(
+            "--include-reasoning",
+            help="Include reasoning content from reasoner models (e.g., DeepSeek)",
+        ),
+    ] = False,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run",
+            "-n",
+            help="Preview prompt and token estimate without making API call",
+        ),
+    ] = False,
 ) -> None:
     """
     Send a request to LLM API with input content.
@@ -154,24 +177,10 @@ def ask(
             temperature=temperature,
         )
 
-        strict_gate = ensure_api_key_for_provider(
-            config_manager,
-            config_manager.current_provider_name,
-            skip_api_key_check=skip_api_key_check,
-        )
-        if strict_gate:
-            require_resolved_api_key(config_manager, config_manager.current_provider_name)
-
-        provider_config = config_manager.get_provider_config()
-
         # Get default model (use override if set, otherwise use default from config)
         default_model = config_manager.get_model_override() or config_manager.get_default_model()
 
-        # Initialize provider using llm_engine factory
-        llm_provider = create_provider_adapter(provider_config, default_model=default_model)
-        processor = RequestProcessor(llm_provider)
-
-        # Get input content
+        # Get input content (needed for dry-run before API key check)
         input_path = Path(source)
         if input_path.exists() and input_path.is_file():
             content = FileHandler.read(source, show_progress=not stream)
@@ -197,6 +206,40 @@ def ask(
             if "{content}" not in prompt_template:
                 prompt_template = prompt_template + "\n\n{content}"
 
+        # Dry-run: preview prompt and token estimate (no API key required)
+        if dry_run:
+            from ask_llm.utils.token_counter import TokenCounter
+
+            template = prompt_template or load_result.unified_config.general.default_prompt_template
+            if "{content}" in template:
+                final_prompt = template.replace("{content}", content)
+            else:
+                final_prompt = f"{template}\n\n{content}"
+            stats = TokenCounter.estimate_tokens(final_prompt, default_model)
+            console.print("[bold]--- Dry Run Preview ---[/bold]")
+            console.print(f"Model: {default_model}")
+            console.print(f"Estimated input: {stats['token_count']} tokens ({stats['word_count']} words)")
+            if system:
+                system_stats = TokenCounter.estimate_tokens(system, default_model)
+                console.print(f"System prompt: {system_stats['token_count']} tokens")
+            console.print(f"\nPrompt (first 500 chars):\n{final_prompt[:500]}{'...' if len(final_prompt) > 500 else ''}")
+            raise typer.Exit(0)
+
+        # API key check and provider initialization (after dry-run)
+        strict_gate = ensure_api_key_for_provider(
+            config_manager,
+            config_manager.current_provider_name,
+            skip_api_key_check=skip_api_key_check,
+        )
+        if strict_gate:
+            require_resolved_api_key(config_manager, config_manager.current_provider_name)
+
+        provider_config = config_manager.get_provider_config()
+
+        # Initialize provider using llm_engine factory
+        llm_provider = create_provider_adapter(provider_config, default_model=default_model)
+        processor = RequestProcessor(llm_provider)
+
         # Determine output mode
         output_to_file = input_is_file or output
 
@@ -207,6 +250,8 @@ def ask(
                 prompt_template=prompt_template,
                 temperature=temperature,
                 model=model,
+                system_prompt=system,
+                return_reasoning=include_reasoning,
             )
 
             # Generate output path
@@ -232,23 +277,54 @@ def ask(
         else:
             # Output to console
             if stream:
-                console.print("[bold blue]Response:[/bold blue] ", end="")
-                for chunk in processor.process(
-                    content=content,
-                    prompt_template=prompt_template,
-                    temperature=temperature,
-                    model=model,
-                    stream=True,
-                ):
-                    console.print_stream(chunk, end="")
-                console.print()
+                if include_reasoning:
+                    # Use raw stream to capture reasoning
+                    from ask_llm.core.protocols import ReasoningChunk
+
+                    final_prompt = processor._format_prompt(content, prompt_template)
+                    console.print("[bold blue]Response:[/bold blue] ", end="")
+                    reasoning_parts = []
+                    for chunk in processor.iter_process_raw_stream(
+                        final_prompt,
+                        temperature=temperature,
+                        model=model,
+                        return_reasoning=True,
+                        system_prompt=system,
+                    ):
+                        if isinstance(chunk, ReasoningChunk):
+                            reasoning_parts.append(chunk.reasoning)
+                        else:
+                            console.print_stream(chunk, end="")
+                    console.print()
+                    if reasoning_parts:
+                        console.print("[bold yellow]Reasoning:[/bold yellow]")
+                        console.print("".join(reasoning_parts), style="dim")
+                        console.print()
+                else:
+                    console.print("[bold blue]Response:[/bold blue] ", end="")
+                    for chunk in processor.process(
+                        content=content,
+                        prompt_template=prompt_template,
+                        temperature=temperature,
+                        model=model,
+                        stream=True,
+                        system_prompt=system,
+                    ):
+                        console.print_stream(chunk, end="")
+                    console.print()
             else:
                 result = processor.process_with_metadata(
                     content=content,
                     prompt_template=prompt_template,
                     temperature=temperature,
                     model=model,
+                    system_prompt=system,
+                    return_reasoning=include_reasoning,
                 )
+                if result.reasoning:
+                    console.print("[bold yellow]Reasoning:[/bold yellow]")
+                    console.print(result.reasoning, style="dim")
+                    console.print()
                 console.print(result.content)
 
                 if metadata and result.metadata:

@@ -28,6 +28,8 @@ class ChatSession:
         "/model": "Show or switch model (usage: /model <name>)",
         "/history": "Show conversation history summary",
         "/save": "Save conversation history to file (usage: /save <file>)",
+        "/search": "Search message history (usage: /search <pattern>)",
+        "/export": "Export history (usage: /export <file> [json|md|txt])",
         "/clear": "Clear conversation history",
         "/system": "Show or set system prompt (usage: /system <text>)",
         "/clear-system": "Clear system prompt",
@@ -348,6 +350,85 @@ class ChatSession:
         """Clear system prompt."""
         self.history.messages = [m for m in self.history.messages if m.role != MessageRole.SYSTEM]
         console.print_success("System prompt cleared")
+
+    def _cmd_search(self, args: str) -> None:
+        """Search message history."""
+        import re
+
+        pattern = args.strip()
+        if not pattern:
+            console.print_warning("Usage: /search <pattern>")
+            return
+
+        matches = [(i, m) for i, m in enumerate(self.history.messages)
+                   if re.search(pattern, m.content, re.IGNORECASE)]
+
+        if not matches:
+            console.print_info(f"No messages matching: {pattern!r}")
+            return
+
+        console.print(f"\n[bold]{len(matches)} match(es) for {pattern!r}:[/bold]")
+        for i, msg in matches:
+            preview = msg.content[:120].replace('\n', ' ')
+            if len(msg.content) > 120:
+                preview += "..."
+            console.print(f"  [{i}] [cyan]{msg.role.value}[/cyan]: {preview}")
+        console.print()
+
+    def _cmd_export(self, args: str) -> None:
+        """Export history to file."""
+        if not args:
+            console.print_warning("Usage: /export <file> [json|md|txt]")
+            return
+
+        parts = args.strip().split(maxsplit=1)
+        filename = parts[0]
+        fmt = parts[1].lower() if len(parts) > 1 else None
+
+        # Detect format from extension if not specified
+        if not fmt:
+            if filename.endswith('.md'):
+                fmt = 'md'
+            elif filename.endswith('.txt'):
+                fmt = 'txt'
+            else:
+                fmt = 'json'
+
+        try:
+            if fmt == 'json':
+                # Same as /save
+                data = self.history.to_dict()
+                data["saved_at"] = datetime.now().isoformat()
+                with open(filename, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=2, ensure_ascii=False)
+            elif fmt in ('md', 'markdown'):
+                # Markdown format with alternating sections
+                lines = []
+                for msg in self.history.messages:
+                    if msg.role == MessageRole.SYSTEM:
+                        lines.append(f"## System\n\n{msg.content}\n")
+                    elif msg.role == MessageRole.USER:
+                        lines.append(f"## User\n\n{msg.content}\n")
+                    elif msg.role == MessageRole.ASSISTANT:
+                        lines.append(f"## Assistant\n\n{msg.content}\n")
+                with open(filename, "w", encoding="utf-8") as f:
+                    f.write("\n".join(lines))
+            elif fmt in ('txt', 'text'):
+                # Plain text format
+                lines = []
+                for msg in self.history.messages:
+                    lines.append(f"--- {msg.role.value.upper()} ---")
+                    lines.append(msg.content)
+                    lines.append("")
+                with open(filename, "w", encoding="utf-8") as f:
+                    f.write("\n".join(lines))
+            else:
+                console.print_warning(f"Unknown format: {fmt}. Use json, md, or txt.")
+                return
+
+            console.print_success(f"History exported to: {filename}")
+        except Exception as e:
+            console.print_error(f"Failed to export: {e}")
 
     def _handle_shell_command(self, cmd: str) -> bool:
         """
