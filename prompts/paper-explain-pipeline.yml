@@ -1,0 +1,21 @@
+# Paper explain pipeline — project overrides merged on top of bundled defaults.
+#
+# Bundled defaults (prompt_files, heading_match, labels, full_prompts, key_resolution):
+#   paper-explain-pipeline.defaults.yml (same directory; shipped with the package).
+#
+# Omit any key here to inherit from defaults. Add or override only what you need.
+
+version: 1
+
+# Examples (uncomment to use):
+# section_prompts:
+#   abstract:
+#     - file: section-abstract.md
+#       label_zh: Abstract（默认）
+# section_combos:
+#   - id: abstract_intro
+#     keys: [abstract, introduction]
+#     output_stem: Abstract-Introduction
+#     prompts:
+#       - file: section-combo-abstract-intro.md
+#         label_zh: Abstract + Introduction 合并解读

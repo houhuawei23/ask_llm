@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from ask_llm.config.paper_explain_pipeline import PaperExplainPipelineConfig
 from ask_llm.core.paper_explain import (
     _exclude_name,
     build_bundle_from_directory,
@@ -118,6 +119,7 @@ def test_h2_split_keeps_h3_in_same_section():
 def test_explain_output_filename():
     assert explain_output_filename(0, "meta") == "0-meta.explain.md"
     assert explain_output_filename(9, "full") == "9-full.explain.md"
+    assert explain_output_filename(3, "full:outlines") == "3-full-outlines.explain.md"
     assert explain_output_filename(1, "abstract") == "1-abstract.explain.md"
     assert (
         explain_output_filename(2, "extra:model-architecture")
@@ -131,6 +133,12 @@ def test_explain_output_filename():
 
 def test_resolve_prompt_key_appendix_h2():
     assert resolve_prompt_key("appendices:h2:foo-bar") == "appendices"
+
+
+def test_resolve_prompt_key_with_pipeline_config():
+    pl = PaperExplainPipelineConfig.builtin()
+    assert resolve_prompt_key("appendices:h2:foo-bar", pl) == "appendices"
+    assert resolve_prompt_key("extra:x", pl) == "generic"
 
 
 def test_expand_appendices_into_h2_jobs_no_h2():

@@ -241,6 +241,13 @@ class PaperConfig(BaseModel):
         default="@prompts/paper",
         description="Base directory for paper prompt templates (@ prefix resolves to package root)",
     )
+    pipeline_config: str = Field(
+        default="@prompts/paper-explain-pipeline.yml",
+        description=(
+            "YAML mapping job keys to prompt filenames (paper-explain-pipeline); "
+            "@ prefix resolves like prompt_dir"
+        ),
+    )
     concurrency: int = Field(
         default=5,
         ge=1,

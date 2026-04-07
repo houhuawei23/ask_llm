@@ -69,6 +69,7 @@ class TestPaperConfig:
         assert p.default_run == "all"
         assert p.output_subdir == "explain"
         assert "prompts/paper" in p.prompt_dir
+        assert "paper-explain-pipeline.yml" in p.pipeline_config
         assert p.concurrency == 5
         assert p.max_output_tokens == 65536
         assert p.full_model == "deepseek-reasoner"

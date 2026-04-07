@@ -14,6 +14,10 @@ from ask_llm.config.cli_session import (
     load_cli_session,
     resolve_default_model_or_exit,
 )
+from ask_llm.config.paper_explain_pipeline import (
+    load_paper_explain_pipeline,
+    parse_section_job_key,
+)
 from ask_llm.core.batch import (
     BatchTask,
     ModelConfig,
@@ -23,6 +27,7 @@ from ask_llm.core.global_batch_runner import run_global_batch_tasks
 from ask_llm.core.paper_explain import (
     build_bundle_from_directory,
     build_bundle_from_file,
+    build_combo_section_body,
     build_explain_preamble_text,
     expand_appendices_into_h2_jobs,
     explain_output_filename,
@@ -72,7 +77,8 @@ def paper(
         typer.Option(
             "--sections",
             "-s",
-            help="Comma-separated keys: meta,abstract,...,appendices (split by ## into d-appendices-*.explain.md),full",
+            help="Comma-separated keys: meta,abstract,...,appendices,full, combo:<id>, "
+            "abstract:tpl-stem, combo:abstract_intro:tpl-stem, ...",
         ),
     ] = None,
     provider: Annotated[
@@ -134,10 +140,19 @@ def paper(
             help="Skip sections whose output already exists",
         ),
     ] = False,
+    pipeline: Annotated[
+        str | None,
+        typer.Option(
+            "--pipeline",
+            help="Path to paper-explain-pipeline.yml (overrides paper.pipeline_config in config)",
+        ),
+    ] = None,
 ) -> None:
     """
     Explain a paper: split Markdown by headings (or load arxiv2md-beta dir), call LLM per section,
     write results to ./explain/ next to the input file or directory.
+
+    Prompt templates and job-key mapping are loaded from paper-explain-pipeline.yml (see paper.pipeline_config).
 
     Multiple sections run in parallel via GlobalBatchProcessor (same pipeline as ``trans``) when concurrency > 1.
 
@@ -181,6 +196,9 @@ def paper(
         default_model = resolve_default_model_or_exit(config_manager)
         paper_cfg = load_result.unified_config.paper
         prompt_dir = paper_cfg.prompt_dir
+        pipeline_yaml = (pipeline or "").strip() or paper_cfg.pipeline_config
+        explain_pipeline = load_paper_explain_pipeline(pipeline_yaml)
+        console.print_info(f"Paper pipeline config: {pipeline_yaml}")
         out_sub = paper_cfg.output_subdir.strip() or "explain"
         workers = concurrency if concurrency is not None else paper_cfg.concurrency
         if workers < 1 or workers > 64:
@@ -191,10 +209,10 @@ def paper(
             if path.suffix.lower() not in (".md", ".markdown"):
                 console.print_error("Paper file must be .md or .markdown")
                 raise typer.Exit(1)
-            bundle = build_bundle_from_file(path)
+            bundle = build_bundle_from_file(path, pipeline=explain_pipeline)
             explain_root = path.parent / out_sub
         elif path.is_dir():
-            bundle = build_bundle_from_directory(path)
+            bundle = build_bundle_from_directory(path, pipeline=explain_pipeline)
             explain_root = path / out_sub
         else:
             console.print_error(f"Not a file or directory: {path}")
@@ -209,13 +227,39 @@ def paper(
         def want(key: str) -> bool:
             if section_filter is None:
                 return True
-            return key in section_filter
+            lk = key.lower()
+            for f in section_filter:
+                fl = f.lower()
+                if fl == lk:
+                    return True
+                if fl == "full" and lk.startswith("full:"):
+                    return True
+                if fl == "combo" and lk.startswith("combo:"):
+                    return True
+                if lk.startswith("combo:") and fl.startswith("combo:") and (
+                    lk == fl or lk.startswith(fl + ":")
+                ):
+                    return True
+                base, stem = parse_section_job_key(key, explain_pipeline)
+                if base is not None and stem is not None:
+                    if fl == base:
+                        return True
+                    if fl == f"{base}:{stem}":
+                        return True
+            return False
+
+        combo_consumed = explain_pipeline.combo_consumed_keys()
 
         if run_norm in ("sections", "all"):
             if want("meta"):
                 jobs.append(("meta", bundle.meta_text, None))
             for key in bundle.section_order:
                 if not want(key):
+                    continue
+                # Keys merged into section_combos: skip standalone unless user explicitly named this section.
+                if key in combo_consumed and (
+                    section_filter is None or key.lower() not in section_filter
+                ):
                     continue
                 body = bundle.sections.get(key)
                 if not body or not str(body).strip():
@@ -235,18 +279,54 @@ def paper(
                     for jk, jbody, h2 in apx_jobs:
                         jobs.append((jk, jbody, h2 or None))
                 else:
-                    jobs.append((key, body, None))
+                    entries = explain_pipeline.resolved_section_prompts(key)
+                    if len(entries) == 1:
+                        jobs.append((key, body, None))
+                    else:
+                        for e in entries:
+                            stem = Path(e.file).stem
+                            jobs.append((f"{key}:{stem}", body, None))
+
+            if explain_pipeline.section_combos:
+                for combo in explain_pipeline.section_combos:
+                    merged = build_combo_section_body(bundle, combo.keys)
+                    if not merged:
+                        logger.warning(f"Skipping empty section combo: {combo.id}")
+                        continue
+                    for e in combo.prompts:
+                        stem = Path(e.file).stem
+                        jk = f"combo:{combo.id}:{stem}"
+                        if not want(jk):
+                            continue
+                        jobs.append((jk, merged, None))
 
         if run_norm in ("full", "all") and want("full"):
             ft = bundle.full_text.strip()
             if not ft:
                 console.print_error("Full text is empty; cannot run full analysis")
                 raise typer.Exit(1)
-            jobs.append(("full", ft, None))
+            full_entries = explain_pipeline.resolved_full_prompts()
+            if len(full_entries) > 1:
+                console.print_info(
+                    "Full paper: "
+                    f"{len(full_entries)} separate LLM call(s) on the same body — "
+                    + ", ".join(e.file for e in full_entries)
+                )
+                for fp in full_entries:
+                    stem = Path(fp.file).stem
+                    jobs.append((f"full:{stem}", ft, None))
+            else:
+                jobs.append(("full", ft, None))
 
         if not jobs:
             console.print_error("No jobs to run (check --run and --sections, or empty sections)")
             raise typer.Exit(1)
+
+        paper_max_tokens = paper_cfg.max_output_tokens
+        full_model_name = (paper_cfg.full_model or "").strip() or "deepseek-reasoner"
+        model_limits_map, _providers_spec_path = load_providers_model_limits()
+        section_job_model = (model or default_model).strip()
+        current_provider = config_manager.current_provider_name
 
         # Dry-run: preview sections and token estimates
         if dry_run:
@@ -255,13 +335,29 @@ def paper(
             console.print(f"\n[bold]Dry Run — {len(jobs)} job(s) planned:[/bold]")
             total_tokens = 0
             for idx, (key, body, appendix_h2) in enumerate(jobs):
-                template = load_prompt_template(prompt_dir, key)
-                label = section_label_for_job(bundle, key, appendix_h2)
-                heading = (
-                    appendix_h2
-                    if appendix_h2 and key.startswith("appendices:h2:")
-                    else bundle.section_headings.get(key)
+                template = load_prompt_template(
+                    prompt_dir, key, pipeline=explain_pipeline
                 )
+                label = section_label_for_job(
+                    bundle, key, appendix_h2, pipeline=explain_pipeline
+                )
+                if key.startswith("combo:"):
+                    parts = key.split(":")
+                    cid = parts[1] if len(parts) >= 2 else ""
+                    combo = explain_pipeline.combo_by_id(cid)
+                    if combo:
+                        hp = [bundle.section_headings.get(k, "") for k in combo.keys]
+                        heading = " + ".join(h for h in hp if h)
+                    else:
+                        heading = bundle.section_headings.get(key)
+                else:
+                    heading = (
+                        appendix_h2
+                        if appendix_h2 and key.startswith("appendices:h2:")
+                        else bundle.section_headings.get(
+                            parse_section_job_key(key, explain_pipeline)[0] or key
+                        )
+                    )
                 full_prompt = format_prompt(
                     template,
                     paper_title=bundle.paper_title,
@@ -269,10 +365,10 @@ def paper(
                     content=body,
                     section_heading=heading,
                 )
-                job_model = full_model_name if key == "full" else section_job_model
+                job_model = full_model_name if key.startswith("full") else section_job_model
                 tok = TokenCounter.count_tokens(full_prompt, job_model)
                 total_tokens += tok
-                out_name = explain_output_filename(idx, key)
+                out_name = explain_output_filename(idx, key, explain_pipeline)
                 out_file = explain_root / out_name
                 status = "[yellow]exists[/yellow]" if out_file.exists() else "[green]new[/green]"
                 console.print(f"  [{idx:2}] {key:<30} {tok:>6} tokens  {status}  → {out_name}")
@@ -286,8 +382,11 @@ def paper(
         # Conflict guard with --resume support
         if resume:
             original_jobs = list(enumerate(jobs))  # preserve (original_idx, job_tuple)
-            filtered = [(orig_idx, job) for orig_idx, job in original_jobs
-                        if not (explain_root / explain_output_filename(orig_idx, job[0])).exists()]
+            filtered = [
+                (orig_idx, job)
+                for orig_idx, job in original_jobs
+                if not (explain_root / explain_output_filename(orig_idx, job[0], explain_pipeline)).exists()
+            ]
             skipped = len(original_jobs) - len(filtered)
             if skipped:
                 console.print_info(f"--resume: skipping {skipped} already-completed section(s)")
@@ -298,32 +397,38 @@ def paper(
             jobs_with_orig_idx: list[tuple[int, tuple[str, str, str | None]]] = filtered
         else:
             for idx, (key, _, _) in enumerate(jobs):
-                out_name = explain_output_filename(idx, key)
+                out_name = explain_output_filename(idx, key, explain_pipeline)
                 out_file = explain_root / out_name
                 if out_file.exists() and not force:
                     console.print_error(f"Output exists: {out_file}. Use --force or --resume.")
                     raise typer.Exit(1)
             jobs_with_orig_idx = list(enumerate(jobs))
 
-        paper_max_tokens = paper_cfg.max_output_tokens
-        full_model_name = (paper_cfg.full_model or "").strip() or "deepseek-reasoner"
-        model_limits_map, _providers_spec_path = load_providers_model_limits()
-        # Section/meta jobs use CLI --model if set; otherwise the provider default (must not be
-        # None or resolve_paper_max_tokens skips per-model caps and sends paper.max_output_tokens raw).
-        section_job_model = (model or default_model).strip()
-        current_provider = config_manager.current_provider_name
-
         idx_to_meta: dict[int, tuple[str, str, str | None]] = {}
         paper_tasks: list[BatchTask] = []
 
         for orig_idx, (key, body, appendix_h2) in jobs_with_orig_idx:
-            template = load_prompt_template(prompt_dir, key)
-            label = section_label_for_job(bundle, key, appendix_h2)
-            heading = (
-                appendix_h2
-                if appendix_h2 and key.startswith("appendices:h2:")
-                else bundle.section_headings.get(key)
+            template = load_prompt_template(prompt_dir, key, pipeline=explain_pipeline)
+            label = section_label_for_job(
+                bundle, key, appendix_h2, pipeline=explain_pipeline
             )
+            if key.startswith("combo:"):
+                parts = key.split(":")
+                cid = parts[1] if len(parts) >= 2 else ""
+                combo = explain_pipeline.combo_by_id(cid)
+                if combo:
+                    hp = [bundle.section_headings.get(k, "") for k in combo.keys]
+                    heading = " + ".join(h for h in hp if h)
+                else:
+                    heading = bundle.section_headings.get(key)
+            else:
+                heading = (
+                    appendix_h2
+                    if appendix_h2 and key.startswith("appendices:h2:")
+                    else bundle.section_headings.get(
+                        parse_section_job_key(key, explain_pipeline)[0] or key
+                    )
+                )
             full_prompt = format_prompt(
                 template,
                 paper_title=bundle.paper_title,
@@ -331,7 +436,7 @@ def paper(
                 content=body,
                 section_heading=heading,
             )
-            job_model = full_model_name if key == "full" else section_job_model
+            job_model = full_model_name if key.startswith("full") else section_job_model
             eff_max = resolve_paper_max_tokens(job_model, paper_max_tokens, model_limits_map)
             logger.debug(
                 f"paper job: key={key!r} model={job_model!r} max_tokens={eff_max} "
@@ -349,7 +454,7 @@ def paper(
                         max_tokens=eff_max,
                     ),
                     output_filename=f"paper:{key}",
-                    return_reasoning=(key == "full"),
+                    return_reasoning=(key.startswith("full")),
                 )
             )
 
@@ -376,27 +481,46 @@ def paper(
         for result in sorted(results, key=lambda r: r.task_id):
             idx = result.task_id
             key, template, appendix_h2 = idx_to_meta[idx]
-            pk = resolve_prompt_key(key)
-            out_name = explain_output_filename(idx, key)
+            pk = resolve_prompt_key(key, explain_pipeline)
+            out_name = explain_output_filename(idx, key, explain_pipeline)
             out_file = explain_root / out_name
             main_name = bundle.main_path.name if bundle.main_path else "主 Markdown"
-            if key == "full":
+            if key == "full" or key.startswith("full:"):
                 src_full = (
                     f"论文全文拼接（主文件：{main_name}；若存在侧车则含参考文献与附录）。"
                     f"全文解读使用模型 `{full_model_name}`，并写入 API 返回的推理内容（若存在）。"
                 )
                 preamble = build_explain_preamble_text(
-                    bundle, key, pk, template, source_override=src_full
+                    bundle,
+                    key,
+                    pk,
+                    template,
+                    source_override=src_full,
+                    pipeline=explain_pipeline,
+                    prompt_dir=prompt_dir,
                 )
             elif key.startswith("appendices:h2:") and appendix_h2:
                 src_apx = (
                     f"附录（侧车或正文中的 Appendices）按二级标题「##」切分后的「{appendix_h2}」小节。"
                 )
                 preamble = build_explain_preamble_text(
-                    bundle, key, pk, template, source_override=src_apx
+                    bundle,
+                    key,
+                    pk,
+                    template,
+                    source_override=src_apx,
+                    pipeline=explain_pipeline,
+                    prompt_dir=prompt_dir,
                 )
             else:
-                preamble = build_explain_preamble_text(bundle, key, pk, template)
+                preamble = build_explain_preamble_text(
+                    bundle,
+                    key,
+                    pk,
+                    template,
+                    pipeline=explain_pipeline,
+                    prompt_dir=prompt_dir,
+                )
             body_out = normalize_paper_explain_response(result.response or "")
             if result.reasoning:
                 body_out = (

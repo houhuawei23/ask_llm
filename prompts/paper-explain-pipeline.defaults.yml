@@ -1,0 +1,87 @@
+# Bundled default pipeline (single source of truth for Python fallbacks).
+# Project overrides: edit paper-explain-pipeline.yml in the same directory (merged on top).
+
+version: 1
+
+# Registry key -> template filename under paper.prompt_dir.
+prompt_files:
+  meta: meta.md
+  abstract: section-abstract.md
+  introduction: section-introduction.md
+  related_work: section-related-work.md
+  model_architecture: section-model-architecture.md
+  methods: section-methods.md
+  results: section-results.md
+  discussion: section-discussion.md
+  conclusion: section-conclusion.md
+  references: section-references.md
+  appendices: section-appendices.md
+  full: section-full.md
+  generic: section-generic.md
+
+# Ordered rules for ## heading → canonical key (first match wins; fuzzy match in paper_explain).
+heading_match:
+  - key: abstract
+    aliases: [abstract, abstrct, summary]
+  - key: related_work
+    aliases:
+      - related work
+      - related works
+      - prior work
+      - literature review
+      - background and related work
+      - literature
+  - key: introduction
+    aliases: [introduction, introducution, intro, background]
+  - key: model_architecture
+    aliases:
+      - model architecture
+      - network architecture
+      - architecture
+      - overview of the model
+      - model design
+      - proposed architecture
+      - proposed model
+      - system architecture
+      - the proposed method
+  - key: methods
+    aliases: [methods, method, methodology, approach, experimental setup]
+  - key: results
+    aliases: [results, experiments, evaluation, empirical]
+  - key: discussion
+    aliases: [discussion, analysis, limitations]
+  - key: conclusion
+    aliases: [conclusion, conclusions, concluding, concluding remarks]
+  - key: references
+    aliases: [references, reference, bibliography, literature cited]
+  - key: appendices
+    aliases: [appendix, appendices, supplementary, supplemental, appendix a]
+
+section_labels_zh:
+  meta: 元信息
+  abstract: Abstract (摘要)
+  introduction: Introduction (引言)
+  related_work: Related Work (相关工作)
+  model_architecture: Model Architecture (模型架构)
+  methods: Methods (方法)
+  results: Results (结果)
+  discussion: Discussion (讨论)
+  conclusion: Conclusion (结论)
+  references: References (参考文献)
+  appendices: Appendices (附录)
+  full: 全文总体分析
+
+full_prompts:
+  - file: section-full.md
+    label_zh: 全文总体分析
+  - file: outlines.md
+    label_zh: 概念、公式与符号梳理（术语·公式·符号表）
+
+key_resolution:
+  - kind: prefix
+    prefix: "extra:"
+    prompt_key: generic
+  - kind: prefix
+    prefix: "appendices:h2:"
+    prompt_key: appendices
+  - kind: identity

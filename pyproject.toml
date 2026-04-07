@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ask-llm"
-version = "2.4.0"
+version = "2.5.0"
 description = "A flexible command-line tool for calling multiple LLM APIs"
 readme = "README.md"
 requires-python = ">=3.8"
@@ -74,7 +74,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "ask_llm.config" = ["default_config.yml"]
-"ask_llm" = ["prompts/**/*.md"]
+"ask_llm" = ["prompts/**/*.md", "prompts/**/*.yml"]
 
 [tool.mypy]
 python_version = "3.8"
@@ -146,6 +146,10 @@ line-ending = "auto"
 "src/ask_llm/cli/commands/paper.py" = [
     "RUF001",
 ] # Chinese user-facing CLI strings
+"src/ask_llm/cli/commands/format_cmd.py" = [
+    "RUF001",
+    "RUF002",
+] # Chinese user-facing CLI strings and docstrings
 "tests/**/*.py" = [
     "ARG",
     "F401",

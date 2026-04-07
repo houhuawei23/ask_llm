@@ -2,25 +2,30 @@
 
 from __future__ import annotations
 
-import glob
+import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import typer
 from loguru import logger
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    TimeElapsedColumn,
+)
 from typing_extensions import Annotated
 
 from ask_llm.cli.errors import raise_unexpected_cli_error
-from ask_llm.config.context import get_config, set_config
+from ask_llm.config.context import set_config
 from ask_llm.config.loader import ConfigLoader
 from ask_llm.config.manager import ConfigManager
-from ask_llm.core.md_heading_formatter import (
-    HeadingApplier,
-    HeadingExtractor,
-    HeadingFormatter,
-)
+from ask_llm.core.format_markdown_file import format_one_markdown_file
 from ask_llm.core.processor import RequestProcessor
 from ask_llm.utils.console import console
-from ask_llm.utils.file_handler import FileHandler
+from ask_llm.utils.md_path_discovery import discover_markdown_files
 
 try:
     from llm_engine import create_provider_adapter
@@ -31,17 +36,44 @@ except ImportError:
     raise
 
 
+def _default_file_workers() -> int:
+    """Default parallel file workers for I/O-bound LLM calls."""
+    cpu = os.cpu_count() or 4
+    return max(1, min(16, cpu * 2))
+
+
+def _output_is_single_file_path(output: str) -> bool:
+    """True if ``-o`` clearly targets one file (not a directory)."""
+    p = Path(output)
+    if p.exists():
+        return p.is_file()
+    # Non-existent path: treat as file if it looks like a single markdown file
+    suf = p.suffix.lower()
+    return suf in (".md", ".markdown") and not output.endswith(os.sep)
+
+
+def _validate_batch_output(output: str | None, file_count: int, inplace: bool) -> None:
+    if inplace or file_count <= 1 or not output:
+        return
+    if _output_is_single_file_path(output):
+        raise typer.BadParameter(
+            "多个输入文件不能使用单个 Markdown 文件作为 -o/--output；请指定目录或省略 -o 使用默认命名。"
+        )
+
+
 def format_cmd(
     files: Annotated[
         list[str],
-        typer.Argument(help="Input markdown file(s) to format (supports glob patterns)"),
+        typer.Argument(
+            help="Markdown 文件、目录或 glob（目录下递归处理所有 .md / .markdown）",
+        ),
     ],
     output: Annotated[
         str | None,
         typer.Option(
             "--output",
             "-o",
-            help="Output file or directory path (default: auto-generated)",
+            help="输出文件或目录（默认按配置生成带后缀的新文件）",
         ),
     ] = None,
     config_path: Annotated[
@@ -49,7 +81,7 @@ def format_cmd(
         typer.Option(
             "--config",
             "-c",
-            help="Configuration file path",
+            help="配置文件路径",
         ),
     ] = None,
     provider: Annotated[
@@ -57,7 +89,7 @@ def format_cmd(
         typer.Option(
             "--provider",
             "-a",
-            help="API provider to use",
+            help="API 服务商",
         ),
     ] = None,
     model: Annotated[
@@ -65,7 +97,7 @@ def format_cmd(
         typer.Option(
             "--model",
             "-m",
-            help="Model name to use",
+            help="模型名称",
         ),
     ] = None,
     temperature: Annotated[
@@ -73,7 +105,7 @@ def format_cmd(
         typer.Option(
             "--temperature",
             "-t",
-            help="Sampling temperature (0.0-2.0)",
+            help="采样温度 (0.0–2.0)",
             min=0.0,
             max=2.0,
         ),
@@ -83,7 +115,7 @@ def format_cmd(
         typer.Option(
             "--force",
             "-f",
-            help="Overwrite existing output file",
+            help="覆盖已存在的输出文件",
         ),
     ] = False,
     inplace: Annotated[
@@ -91,21 +123,21 @@ def format_cmd(
         typer.Option(
             "--inplace",
             "-i",
-            help="Overwrite original file(s) in place instead of creating new file(s)",
+            help="原地覆盖源文件",
         ),
     ] = False,
     heading_batch_size: Annotated[
         int | None,
         typer.Option(
             "--heading-batch-size",
-            help="Max headings per LLM API call (default 80). Reduce if output is truncated.",
+            help="单次 API 调用最多格式化的标题数（默认见配置，过大可能截断）",
         ),
     ] = None,
     heading_concurrency: Annotated[
         int | None,
         typer.Option(
             "--heading-concurrency",
-            help="Max concurrent API calls for heading batches (default 4). Set 1 to disable.",
+            help="单文件内标题批次的并发 API 数（默认见配置，1 为串行）",
         ),
     ] = None,
     prompt_file: Annotated[
@@ -113,33 +145,44 @@ def format_cmd(
         typer.Option(
             "--prompt",
             "-p",
-            help="Path to prompt template file (supports @ prefix for project-relative paths, e.g., @prompts/md-heading-format.md)",
+            help="提示词模板文件（支持 @ 项目相对路径，如 @prompts/md-heading-format.md）",
+        ),
+    ] = None,
+    recursive: Annotated[
+        bool,
+        typer.Option(
+            "--recursive/--no-recursive",
+            help="目录参数是否递归包含子目录中的 Markdown（默认：递归）",
+        ),
+    ] = True,
+    workers: Annotated[
+        int | None,
+        typer.Option(
+            "--workers",
+            "-j",
+            min=1,
+            help="并行处理文件数（多文件/目录批处理时生效；默认随 CPU 调整）",
         ),
     ] = None,
 ) -> None:
     """
-    Format markdown heading hierarchy using LLM API.
+    使用 LLM 规范化 Markdown 标题层级。
 
-    Extracts all headings from markdown files, uses LLM to infer proper heading
-    levels based on numbering (1, 1.1, 1.1.1) or context, and applies the
-    formatted headings back to the original text.
+    支持传入文件、glob、**目录**（将并发处理目录内全部 Markdown）。
 
-    Currently supports markdown (.md, .markdown) files only.
+    示例::
 
-    Examples:
         ask-llm format document.md
-        ask-llm format *.md -o formatted/
+        ask-llm format ./notes_dir
+        ask-llm format ./notes_dir -j 8 -o ./formatted_out/
+        ask-llm format *.md --no-recursive
         ask-llm format doc.md --inplace
-        ask-llm format doc.md -m gpt-4 -o formatted.md
-        ask-llm format paper.md -p @prompts/md-heading-format.md
     """
     try:
-        # Load configuration
         load_result = ConfigLoader.load(config_path)
         set_config(load_result)
         config_manager = ConfigManager(load_result.app_config)
 
-        # Set provider and apply overrides
         if provider:
             config_manager.set_provider(provider)
 
@@ -149,160 +192,59 @@ def format_cmd(
         )
 
         provider_config = config_manager.get_provider_config()
-
-        # Get default model
         default_model = config_manager.get_model_override() or config_manager.get_default_model()
 
         if not default_model:
-            console.print_error("No model specified. Use --model or configure default model.")
+            console.print_error("未指定模型。请使用 --model 或在配置中设置默认模型。")
             raise typer.Exit(1)
 
-        # Initialize provider
         llm_provider = create_provider_adapter(provider_config, default_model=default_model)
         processor = RequestProcessor(llm_provider)
 
-        # Resolve file patterns
-        resolved_files = []
-        for file_pattern in files:
-            matched_files = glob.glob(file_pattern)
-            if not matched_files:
-                # If no match, treat as literal file path
-                if Path(file_pattern).exists():
-                    resolved_files.append(file_pattern)
-                else:
-                    console.print_warning(f"File not found: {file_pattern}")
-            else:
-                resolved_files.extend(matched_files)
+        resolved_paths = discover_markdown_files(files, recursive=recursive)
+        resolved_files: list[str] = [str(p) for p in resolved_paths]
 
         if not resolved_files:
-            console.print_error("No files found to format")
+            console.print_error("未找到可格式化的 Markdown 文件")
             raise typer.Exit(1)
 
-        # Remove duplicates and sort
-        resolved_files = sorted(set(resolved_files))
+        _validate_batch_output(output, len(resolved_files), inplace)
 
-        console.print_info(f"Found {len(resolved_files)} file(s) to format")
+        fh_config = load_result.unified_config.format_heading
+        prompt_resolved = prompt_file or fh_config.default_prompt_file
 
-        # Process each file
-        successful_count = 0
-        failed_count = 0
+        file_workers = workers if workers is not None else _default_file_workers()
 
-        for file_path in resolved_files:
-            console.print()
-            console.print(f"[bold]Processing: {file_path}[/bold]")
+        console.print_info(
+            f"待处理 {len(resolved_files)} 个 Markdown 文件"
+            f"（目录递归={recursive}，并行数={file_workers}）"
+        )
 
-            # Check file type
-            file_ext = Path(file_path).suffix.lower()
-            if file_ext not in (".md", ".markdown"):
-                console.print_warning(
-                    f"Unsupported file type: {file_ext}. "
-                    f"Only .md and .markdown files are supported. Skipping."
-                )
-                failed_count += 1
-                continue
+        use_parallel = len(resolved_files) > 1 and file_workers > 1
 
-            # Read file content
-            try:
-                content = FileHandler.read(file_path, show_progress=False)
-            except Exception as e:
-                console.print_error(f"Failed to read file {file_path}: {e}")
-                failed_count += 1
-                continue
-
-            if not content.strip():
-                console.print_warning(f"File {file_path} is empty. Skipping.")
-                failed_count += 1
-                continue
-
-            # Extract headings
-            headings = HeadingExtractor.extract(content)
-
-            if not headings:
-                console.print_warning(f"No headings found in {file_path}. Skipping.")
-                failed_count += 1
-                continue
-
-            console.print_info(f"Found {len(headings)} heading(s)")
-
-            # Format headings using LLM
-            try:
-                # Use custom prompt file or default from config
-                fh_config = load_result.unified_config.format_heading
-                default_prompt = prompt_file or fh_config.default_prompt_file
-                formatter = HeadingFormatter(
-                    processor=processor,
-                    prompt_file=default_prompt,
-                    batch_size=heading_batch_size,
-                    concurrency=heading_concurrency,
-                )
-
-                formatted_headings = formatter.format_headings(headings)
-            except Exception as e:
-                console.print_error(f"Failed to format headings: {e}")
-                logger.exception("Heading formatting error")
-                failed_count += 1
-                continue
-
-            # Apply formatted headings
-            try:
-                applier = HeadingApplier()
-                formatted_content = applier.apply(content, headings, formatted_headings)
-            except Exception as e:
-                console.print_error(f"Failed to apply formatted headings: {e}")
-                logger.exception("Heading application error")
-                failed_count += 1
-                continue
-
-            # Determine output path
-            if inplace:
-                output_path = file_path
-            elif output:
-                output_path = output
-                # If output is a directory, create file-specific name
-                if Path(output).is_dir():
-                    input_file = Path(file_path)
-                    formatted_suffix = get_config().unified_config.file.formatted_suffix
-                    output_name = f"{input_file.stem}{formatted_suffix}{input_file.suffix}"
-                    output_path = str(Path(output) / output_name)
-            else:
-                # Auto-generate output path
-                output_path = FileHandler.generate_output_path(
-                    file_path, suffix=get_config().unified_config.file.formatted_suffix
-                )
-
-            # Write output
-            try:
-                output_file = Path(output_path)
-                # When inplace, always overwrite; otherwise check force
-                if output_file.exists() and not force and not inplace:
-                    raise FileExistsError(
-                        f"Output file already exists: {output_path}. Use --force to overwrite."
-                    )
-
-                FileHandler.write(output_path, formatted_content, force=force or inplace)
-                if inplace:
-                    console.print_success(f"Formatted in place: {output_path}")
-                else:
-                    console.print_success(f"Formatted markdown saved to: {output_path}")
-                console.print(f"  Formatted {len(headings)} heading(s)")
-                successful_count += 1
-
-            except FileExistsError:
-                console.print_error(
-                    f"Output file already exists: {output_path}. Use --force to overwrite."
-                )
-                failed_count += 1
-            except Exception as e:
-                console.print_error(f"Failed to write output file: {e}")
-                logger.exception("File write error")
-                failed_count += 1
-
-        # Summary
-        console.print()
-        if successful_count > 0:
-            console.print_success(f"Successfully formatted {successful_count} file(s)")
-        if failed_count > 0:
-            console.print_warning(f"Failed to format {failed_count} file(s)")
+        if use_parallel:
+            _run_parallel_format(
+                resolved_files,
+                processor=processor,
+                prompt_file_resolved=prompt_resolved,
+                heading_batch_size=heading_batch_size,
+                heading_concurrency=heading_concurrency,
+                output=output,
+                inplace=inplace,
+                force=force,
+                max_workers=file_workers,
+            )
+        else:
+            _run_sequential_format(
+                resolved_files,
+                processor=processor,
+                prompt_file_resolved=prompt_resolved,
+                heading_batch_size=heading_batch_size,
+                heading_concurrency=heading_concurrency,
+                output=output,
+                inplace=inplace,
+                force=force,
+            )
 
     except FileNotFoundError as e:
         console.print_error(str(e))
@@ -311,10 +253,141 @@ def format_cmd(
         console.print_error(str(e))
         raise typer.Exit(1) from e
     except RuntimeError as e:
-        console.print_error(f"API error: {e}")
+        console.print_error(f"API 错误: {e}")
         raise typer.Exit(1) from e
     except KeyboardInterrupt:
-        console.print("\nFormatting interrupted by user")
+        console.print("\n用户中断")
         raise typer.Exit(1) from None
     except Exception as e:
         raise_unexpected_cli_error("format", e)
+
+
+def _run_sequential_format(
+    resolved_files: list[str],
+    *,
+    processor: RequestProcessor,
+    prompt_file_resolved: str,
+    heading_batch_size: int | None,
+    heading_concurrency: int | None,
+    output: str | None,
+    inplace: bool,
+    force: bool,
+) -> None:
+    """Single-worker path: verbose per-file logging (legacy UX)."""
+    successful_count = 0
+    failed_count = 0
+    skipped_count = 0
+
+    for file_path in resolved_files:
+        console.print()
+        console.print(f"[bold]处理: {file_path}[/bold]")
+        outcome = format_one_markdown_file(
+            file_path,
+            processor=processor,
+            prompt_file_resolved=prompt_file_resolved,
+            heading_batch_size=heading_batch_size,
+            heading_concurrency=heading_concurrency,
+            output=output,
+            inplace=inplace,
+            force=force,
+        )
+        if outcome.ok:
+            successful_count += 1
+            if inplace:
+                console.print_success(f"已原地写入: {outcome.output_path}")
+            else:
+                console.print_success(f"已保存: {outcome.output_path}")
+            console.print(f"  共格式化 {outcome.heading_count} 个标题")
+        elif outcome.skipped:
+            skipped_count += 1
+            console.print_warning(f"跳过 {file_path}: {outcome.message}")
+        else:
+            failed_count += 1
+            console.print_error(f"{file_path}: {outcome.message}")
+
+    _print_format_summary(successful_count, failed_count, skipped_count)
+
+
+def _run_parallel_format(
+    resolved_files: list[str],
+    *,
+    processor: RequestProcessor,
+    prompt_file_resolved: str,
+    heading_batch_size: int | None,
+    heading_concurrency: int | None,
+    output: str | None,
+    inplace: bool,
+    force: bool,
+    max_workers: int,
+) -> None:
+    """Process many files with a thread pool and a Rich progress bar."""
+    successful_count = 0
+    failed_count = 0
+    skipped_count = 0
+
+    workers = min(max_workers, len(resolved_files))
+
+    progress_columns = (
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+    )
+
+    with Progress(*progress_columns, console=console.rich_console, transient=False) as progress:
+        task_id = progress.add_task(
+            "[cyan]格式化 Markdown[/cyan]",
+            total=len(resolved_files),
+        )
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="format-md") as pool:
+            future_map = {
+                pool.submit(
+                    format_one_markdown_file,
+                    fp,
+                    processor=processor,
+                    prompt_file_resolved=prompt_file_resolved,
+                    heading_batch_size=heading_batch_size,
+                    heading_concurrency=heading_concurrency,
+                    output=output,
+                    inplace=inplace,
+                    force=force,
+                ): fp
+                for fp in resolved_files
+            }
+            for fut in as_completed(future_map):
+                fp = future_map[fut]
+                try:
+                    outcome = fut.result()
+                except Exception as exc:
+                    logger.exception("未捕获异常: {}", fp)
+                    failed_count += 1
+                    console.print_error(f"{fp}: {exc}")
+                else:
+                    if outcome.ok:
+                        successful_count += 1
+                        logger.info(
+                            "完成 [{}] -> {} ({} 标题)",
+                            fp,
+                            outcome.output_path,
+                            outcome.heading_count,
+                        )
+                    elif outcome.skipped:
+                        skipped_count += 1
+                        logger.warning("跳过 [{}]: {}", fp, outcome.message)
+                    else:
+                        failed_count += 1
+                        logger.error("{}: {}", fp, outcome.message)
+                progress.advance(task_id)
+
+    _print_format_summary(successful_count, failed_count, skipped_count)
+
+
+def _print_format_summary(successful: int, failed: int, skipped: int) -> None:
+    console.print()
+    if successful:
+        console.print_success(f"成功: {successful} 个文件")
+    if skipped:
+        console.print_warning(f"跳过: {skipped} 个文件")
+    if failed:
+        console.print_warning(f"失败: {failed} 个文件")

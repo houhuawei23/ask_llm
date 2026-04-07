@@ -279,6 +279,11 @@ class Console:
         """Check if output is a terminal."""
         return self._console.is_terminal
 
+    @property
+    def rich_console(self) -> RichConsole:
+        """Underlying Rich console (e.g. for Progress bars)."""
+        return self._console
+
 
 # Global console instance
 console = Console()

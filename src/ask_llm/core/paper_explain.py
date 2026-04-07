@@ -10,6 +10,14 @@ from pathlib import Path
 import yaml
 from loguru import logger
 
+from ask_llm.config.paper_explain_pipeline import (
+    PaperExplainPipelineConfig,
+    merged_section_labels_zh,
+    parse_section_job_key,
+    resolve_job_key_to_prompt_key,
+    slugify_output_stem,
+)
+
 # Standard section keys (order for section runs)
 SECTION_ORDER: list[str] = [
     "abstract",
@@ -22,100 +30,23 @@ SECTION_ORDER: list[str] = [
     "appendices",
 ]
 
-# Heading text (normalized) -> canonical key; values are substrings or regex-friendly tokens
-# More specific keys first (insertion order) to avoid e.g. "related work" matching introduction.
-_HEADING_ALIASES: dict[str, list[str]] = {
-    "abstract": ["abstract", "abstrct", "summary"],
-    "related_work": [
-        "related work",
-        "related works",
-        "prior work",
-        "literature review",
-        "background and related work",
-        "literature",
-    ],
-    "introduction": [
-        "introduction",
-        "introducution",
-        "intro",
-        "background",
-    ],
-    "model_architecture": [
-        "model architecture",
-        "network architecture",
-        "architecture",
-        "overview of the model",
-        "model design",
-        "proposed architecture",
-        "proposed model",
-        "system architecture",
-        "the proposed method",
-    ],
-    "methods": [
-        "methods",
-        "method",
-        "methodology",
-        "approach",
-        "experimental setup",
-    ],
-    "results": [
-        "results",
-        "experiments",
-        "evaluation",
-        "empirical",
-    ],
-    "discussion": ["discussion", "analysis", "limitations"],
-    "conclusion": [
-        "conclusion",
-        "conclusions",
-        "concluding",
-        "concluding remarks",
-    ],
-    "references": [
-        "references",
-        "reference",
-        "bibliography",
-        "literature cited",
-    ],
-    "appendices": [
-        "appendix",
-        "appendices",
-        "supplementary",
-        "supplemental",
-        "appendix a",
-    ],
-}
+# Backward-compatible alias (bundled defaults from paper-explain-pipeline.defaults.yml).
+SECTION_LABELS_ZH: dict[str, str] = dict(PaperExplainPipelineConfig.builtin().section_labels_zh)
 
-_PROMPT_FILES: dict[str, str] = {
-    "meta": "meta.md",
-    "abstract": "section-abstract.md",
-    "introduction": "section-introduction.md",
-    "related_work": "section-related-work.md",
-    "model_architecture": "section-model-architecture.md",
-    "methods": "section-methods.md",
-    "results": "section-results.md",
-    "discussion": "section-discussion.md",
-    "conclusion": "section-conclusion.md",
-    "references": "section-references.md",
-    "appendices": "section-appendices.md",
-    "full": "section-full.md",
-    "generic": "section-generic.md",
-}
 
-SECTION_LABELS_ZH: dict[str, str] = {
-    "meta": "元信息",
-    "abstract": "Abstract (摘要)",
-    "introduction": "Introduction (引言)",
-    "related_work": "Related Work (相关工作)",
-    "model_architecture": "Model Architecture (模型架构)",
-    "methods": "Methods (方法)",
-    "results": "Results (结果)",
-    "discussion": "Discussion (讨论)",
-    "conclusion": "Conclusion (结论)",
-    "references": "References (参考文献)",
-    "appendices": "Appendices (附录)",
-    "full": "全文总体分析",
-}
+def _section_labels_zh(pipeline: PaperExplainPipelineConfig | None) -> dict[str, str]:
+    if pipeline is None:
+        return SECTION_LABELS_ZH
+    return merged_section_labels_zh(pipeline)
+
+
+def paper_prompt_dir_docs_relpath(prompt_dir: str) -> str:
+    """Project-relative path for user-facing docs (e.g. ``prompts/paper`` from ``@prompts/paper``)."""
+    p = prompt_dir.strip()
+    if p.startswith("@"):
+        return p[1:].lstrip("/")
+    name = Path(p).name
+    return name or "paper"
 
 
 def _normalize_heading_text(s: str) -> str:
@@ -126,12 +57,23 @@ def _normalize_heading_text(s: str) -> str:
     return s.strip()
 
 
-def match_section_key(heading_text: str) -> str | None:
-    """Map a markdown heading line (without #) to a canonical section key."""
+def match_section_key(
+    heading_text: str, pipeline: PaperExplainPipelineConfig | None = None
+) -> str | None:
+    """Map a markdown heading line (without #) to a canonical section key.
+
+    When ``pipeline`` is set, uses ``heading_match`` from paper-explain-pipeline.yml (ordered rules).
+    Otherwise uses the same built-in rules as the pipeline defaults.
+    """
     norm = _normalize_heading_text(heading_text)
     if not norm:
         return None
-    for key, aliases in _HEADING_ALIASES.items():
+    rules = (
+        pipeline.resolved_heading_match_rules()
+        if pipeline is not None
+        else PaperExplainPipelineConfig.builtin().resolved_heading_match_rules()
+    )
+    for key, aliases in rules:
         for a in aliases:
             if norm == a or norm.startswith(a + " ") or norm.endswith(" " + a):
                 return key
@@ -199,7 +141,9 @@ def _parse_markdown_heading_blocks(text: str) -> list[tuple[str, str]]:
     return out
 
 
-def split_markdown_ordered(text: str) -> tuple[dict[str, str], list[str], dict[str, str]]:
+def split_markdown_ordered(
+    text: str, pipeline: PaperExplainPipelineConfig | None = None
+) -> tuple[dict[str, str], list[str], dict[str, str]]:
     """
     Split markdown into sections by **``##`` (level-2) headings only**, preserving order.
 
@@ -218,7 +162,7 @@ def split_markdown_ordered(text: str) -> tuple[dict[str, str], list[str], dict[s
     used_extra: set[str] = set()
 
     for heading, body in _parse_markdown_heading_blocks(text):
-        mk = match_section_key(heading)
+        mk = match_section_key(heading, pipeline=pipeline)
         if mk:
             key = mk
         else:
@@ -234,12 +178,14 @@ def split_markdown_ordered(text: str) -> tuple[dict[str, str], list[str], dict[s
     return sections, section_order, section_headings
 
 
-def split_markdown_by_headings(text: str) -> tuple[dict[str, str], list[str]]:
+def split_markdown_by_headings(
+    text: str, pipeline: PaperExplainPipelineConfig | None = None
+) -> tuple[dict[str, str], list[str]]:
     """
     Backward-compatible wrapper: same sections dict, ``unmatched`` is always empty
     (non-standard headings are stored under ``extra:*`` keys).
     """
-    sections, _, _ = split_markdown_ordered(text)
+    sections, _, _ = split_markdown_ordered(text, pipeline=pipeline)
     return sections, []
 
 
@@ -349,7 +295,9 @@ def load_paper_yml_meta(yml_path: Path) -> tuple[str, str]:
     return title, meta_block
 
 
-def build_bundle_from_directory(directory: Path) -> PaperBundle:
+def build_bundle_from_directory(
+    directory: Path, pipeline: PaperExplainPipelineConfig | None = None
+) -> PaperBundle:
     """Load arxiv2md-beta style directory: paper.yml + main md + optional refs/appendix."""
     directory = directory.resolve()
     yml_path = directory / "paper.yml"
@@ -366,7 +314,9 @@ def build_bundle_from_directory(directory: Path) -> PaperBundle:
     if not title or title == directory.name:
         title = _first_heading_or_title(main_body, main_path.stem)
 
-    sections, section_order, section_headings = split_markdown_ordered(main_body)
+    sections, section_order, section_headings = split_markdown_ordered(
+        main_body, pipeline=pipeline
+    )
     extra_keys = [k for k in section_order if k.startswith("extra:")]
     if extra_keys:
         logger.info(f"Non-standard headings → generic prompt: {extra_keys[:12]}")
@@ -414,12 +364,14 @@ def build_bundle_from_directory(directory: Path) -> PaperBundle:
     )
 
 
-def build_bundle_from_file(md_path: Path) -> PaperBundle:
+def build_bundle_from_file(
+    md_path: Path, pipeline: PaperExplainPipelineConfig | None = None
+) -> PaperBundle:
     """Load a single paper markdown file and split by headings."""
     md_path = md_path.resolve()
     text = md_path.read_text(encoding="utf-8")
     title = _first_heading_or_title(text, md_path.stem)
-    sections, section_order, section_headings = split_markdown_ordered(text)
+    sections, section_order, section_headings = split_markdown_ordered(text, pipeline=pipeline)
     extra_keys = [k for k in section_order if k.startswith("extra:")]
     if extra_keys:
         logger.info(f"Non-standard headings → generic prompt: {extra_keys[:12]}")
@@ -483,8 +435,22 @@ def resolve_prompt_path(prompt_dir: str, prompt_filename: str, project_root: Pat
     )
 
 
-def resolve_prompt_key(key: str) -> str:
-    """Map job key (e.g. ``extra:foo``) to template registry key."""
+def resolve_prompt_key(
+    key: str, pipeline: PaperExplainPipelineConfig | None = None
+) -> str:
+    """Map job key (e.g. ``extra:foo``) to template registry key.
+
+    With ``pipeline`` (from paper-explain-pipeline.yml), uses configured prefix rules;
+    otherwise uses legacy built-in rules (for tests and callers without config).
+
+    ``canonical:prompt_stem`` multi-template jobs map to the canonical section key
+    (e.g. ``abstract:section-abstract`` → ``abstract``).
+    """
+    base, stem = parse_section_job_key(key, pipeline)
+    if base is not None and stem is not None:
+        key = base
+    if pipeline is not None:
+        return resolve_job_key_to_prompt_key(key, pipeline)
     if key.startswith("extra:"):
         return "generic"
     if key.startswith("appendices:h2:"):
@@ -593,10 +559,40 @@ def expand_appendices_into_h2_jobs(body: str) -> list[tuple[str, str, str]]:
     return out
 
 
-def load_prompt_template(prompt_dir: str, key: str, project_root: Path | None = None) -> str:
+def load_prompt_template(
+    prompt_dir: str,
+    key: str,
+    project_root: Path | None = None,
+    *,
+    pipeline: PaperExplainPipelineConfig | None = None,
+) -> str:
     """Load prompt file for meta | section key | full | generic (via ``extra:*``)."""
-    pk = resolve_prompt_key(key)
-    fname = _PROMPT_FILES.get(pk)
+    if pipeline is not None:
+        fn = pipeline.resolve_template_filename_for_job(key)
+        if fn:
+            path = resolve_prompt_path(prompt_dir, fn, project_root=project_root)
+            return path.read_text(encoding="utf-8").strip()
+    else:
+        if key == "full" or key.startswith("full:"):
+            stem = key.split(":", 1)[1] if key.startswith("full:") else None
+            legacy = PaperExplainPipelineConfig.builtin().prompt_files.get("full", "section-full.md")
+            fname = legacy
+            if stem:
+                for cand in ("section-full.md", "outlines.md"):
+                    if Path(cand).stem == stem:
+                        fname = cand
+                        break
+                else:
+                    fname = f"{stem}.md"
+            path = resolve_prompt_path(prompt_dir, fname, project_root=project_root)
+            return path.read_text(encoding="utf-8").strip()
+    pk = resolve_prompt_key(key, pipeline)
+    prompt_files = (
+        pipeline.prompt_files
+        if pipeline is not None
+        else PaperExplainPipelineConfig.builtin().prompt_files
+    )
+    fname = prompt_files.get(pk)
     if not fname:
         raise KeyError(f"Unknown prompt key: {key}")
     path = resolve_prompt_path(prompt_dir, fname, project_root=project_root)
@@ -620,20 +616,47 @@ def format_prompt(
     )
 
 
-def section_display_name(bundle: PaperBundle, key: str) -> str:
+def section_display_name(
+    bundle: PaperBundle,
+    key: str,
+    pipeline: PaperExplainPipelineConfig | None = None,
+) -> str:
     """Human-readable section label for prompts (ZH + original heading for extras)."""
+    labels = _section_labels_zh(pipeline)
     if key.startswith("extra:"):
         return bundle.section_headings.get(key, key)
-    return SECTION_LABELS_ZH.get(key, key)
+    if key == "full" or key.startswith("full:"):
+        if pipeline is not None:
+            lab = pipeline.label_zh_for_full_job_key(key)
+            if lab:
+                return lab
+        return labels.get("full", key)
+    if key.startswith("combo:"):
+        if pipeline is not None:
+            lab = pipeline.label_zh_for_combo_job_key(key)
+            if lab:
+                return lab
+        return key
+    base, stem = parse_section_job_key(key, pipeline)
+    if base is not None and stem is not None and pipeline is not None:
+        lab = pipeline.label_zh_for_section_job_key(key)
+        if lab:
+            return lab
+        return f"{labels.get(base, base)} — {stem}"
+    return labels.get(key, key)
 
 
 def section_label_for_job(
-    bundle: PaperBundle, key: str, appendix_h2_heading: str | None = None
+    bundle: PaperBundle,
+    key: str,
+    appendix_h2_heading: str | None = None,
+    pipeline: PaperExplainPipelineConfig | None = None,
 ) -> str:
     """Like ``section_display_name`` but includes appendix ``##`` subsection title when split."""
+    labels = _section_labels_zh(pipeline)
     if appendix_h2_heading and key.startswith("appendices:h2:"):
-        return f"{SECTION_LABELS_ZH['appendices']} — {appendix_h2_heading}"
-    return section_display_name(bundle, key)
+        return f"{labels['appendices']} — {appendix_h2_heading}"
+    return section_display_name(bundle, key, pipeline=pipeline)
 
 
 def prompt_template_summary(template: str, max_len: int = 220) -> str:
@@ -645,19 +668,42 @@ def prompt_template_summary(template: str, max_len: int = 220) -> str:
     return template[:max_len].strip()
 
 
-def explain_source_line(bundle: PaperBundle, key: str) -> str:
+def explain_source_line(
+    bundle: PaperBundle,
+    key: str,
+    pipeline: PaperExplainPipelineConfig | None = None,
+) -> str:
     """One-line Chinese description of which part of the paper the job uses."""
+    labels = _section_labels_zh(pipeline)
     if key == "meta":
         return "来自 `paper.yml` 等元数据（目录模式）或单文件输入说明；非正文切片。"
-    if key == "full":
+    if key == "full" or key.startswith("full:"):
         main = bundle.main_path.name if bundle.main_path else "主 Markdown"
         return f"论文全文拼接（主文件：{main}；若存在侧车则含参考文献与附录）。"
+    if key.startswith("combo:") and pipeline is not None:
+        parts = key.split(":")
+        if len(parts) >= 3:
+            combo_id = parts[1]
+            c = pipeline.combo_by_id(combo_id)
+            if c:
+                parts_zh = [labels.get(k, k) for k in c.keys]
+                return "合并小节：" + " + ".join(parts_zh) + "（按文档顺序拼接正文）。"
+        return "合并多个标准章节后的正文（见 pipeline section_combos）。"
+    base, stem = parse_section_job_key(key, pipeline)
+    if base is not None and stem is not None:
+        raw = bundle.section_headings.get(base, "")
+        if raw:
+            return (
+                f"原论文 Markdown 中标题为「{raw}」的小节（对应标准章节：{labels.get(base, base)}；"
+                f"模板变体：{stem}）。"
+            )
+        return f"原论文对应小节（{labels.get(base, base)}；模板变体：{stem}）。"
     raw = bundle.section_headings.get(key, "")
     if key.startswith("extra:"):
         return (
             f"原论文 Markdown 中标题为「{raw}」的小节（非标准章节名，使用通用解析模板）。"
         )
-    label = SECTION_LABELS_ZH.get(key, key)
+    label = labels.get(key, key)
     if raw:
         return f"原论文 Markdown 中标题为「{raw}」的小节（对应标准章节：{label}）。"
     return f"原论文对应小节（{label}）。"
@@ -669,12 +715,29 @@ def build_explain_preamble_text(
     prompt_key: str,
     template_text: str,
     source_override: str | None = None,
+    *,
+    pipeline: PaperExplainPipelineConfig | None = None,
+    prompt_dir: str = "@prompts/paper",
 ) -> str:
     """Markdown block prepended to each ``*.explain.md`` output."""
-    fname = _PROMPT_FILES.get(prompt_key, f"{prompt_key}.md")
-    relpath = f"prompts/paper/{fname}"
+    fname: str | None = None
+    if pipeline is not None:
+        fname = pipeline.resolve_template_filename_for_job(key)
+    prompt_files = (
+        pipeline.prompt_files
+        if pipeline is not None
+        else PaperExplainPipelineConfig.builtin().prompt_files
+    )
+    if fname is None:
+        fname = prompt_files.get(prompt_key, f"{prompt_key}.md")
+    base = paper_prompt_dir_docs_relpath(prompt_dir)
+    relpath = f"{base}/{fname}"
     summary = prompt_template_summary(template_text)
-    src = source_override if source_override is not None else explain_source_line(bundle, key)
+    src = (
+        source_override
+        if source_override is not None
+        else explain_source_line(bundle, key, pipeline=pipeline)
+    )
     return (
         "## 说明\n\n"
         f"- **来源**：{src}\n"
@@ -764,12 +827,32 @@ def normalize_paper_explain_response(text: str) -> str:
     return original
 
 
-def explain_output_filename(index: int, key: str) -> str:
+def explain_output_filename(
+    index: int,
+    key: str,
+    pipeline: PaperExplainPipelineConfig | None = None,
+) -> str:
     """Target filename under explain/ with stable numeric prefix (document order)."""
     if key == "meta":
         return f"{index}-meta.explain.md"
+    if key.startswith("full:"):
+        stem = key.split(":", 1)[1]
+        return f"{index}-full-{stem}.explain.md"
     if key == "full":
         return f"{index}-full.explain.md"
+    if key.startswith("combo:") and pipeline is not None:
+        parts = key.split(":")
+        if len(parts) >= 3:
+            combo_id, tpl_stem = parts[1], parts[2]
+            c = pipeline.combo_by_id(combo_id)
+            if c and c.output_stem and len(c.prompts) == 1:
+                slug = slugify_output_stem(c.output_stem)
+                return f"{index}-{slug}.explain.md"
+            return f"{index}-combo-{combo_id}-{tpl_stem}.explain.md"
+        return f"{index}-combo-{key.replace(':', '-')}.explain.md"
+    base, stem = parse_section_job_key(key, pipeline)
+    if base is not None and stem is not None:
+        return f"{index}-{base}-{stem}.explain.md"
     if key.startswith("appendices:h2:"):
         slug = key.split(":", 2)[2]
         return f"d-appendices-{slug}.explain.md"
@@ -777,3 +860,13 @@ def explain_output_filename(index: int, key: str) -> str:
         slug = key.split(":", 1)[1]
         return f"{index}-{slug}.explain.md"
     return f"{index}-{key}.explain.md"
+
+
+def build_combo_section_body(bundle: PaperBundle, combo_keys: list[str]) -> str:
+    """Concatenate section bodies in ``combo_keys`` order with blank lines between."""
+    parts: list[str] = []
+    for k in combo_keys:
+        t = (bundle.sections.get(k) or "").strip()
+        if t:
+            parts.append(t)
+    return "\n\n".join(parts).strip()

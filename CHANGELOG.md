@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.5.0 (2026-04-07)
+
+### Paper explain pipeline
+
+- **Configurable pipeline** (`paper-explain-pipeline.yml` + bundled `paper-explain-pipeline.defaults.yml`): project file is **merged** with defaults; omit keys to inherit. Single source of truth for `prompt_files`, `section_labels_zh`, `heading_match`, `full_prompts`, and `key_resolution`.
+- **Multi-template sections** via `section_prompts` (job keys `section:tpl-stem`) and **merged sections** via `section_combos` (job keys `combo:id:tpl-stem`, optional `output_stem` for filenames).
+- **CLI** `--pipeline` and `paper.pipeline_config`; `--sections` filters extended for `combo:` and multi-template keys.
+- **`src/ask_llm/prompts`** symlink to repo `prompts/` so packaged defaults resolve in dev and wheels.
+
+### Other
+
+- Markdown formatting and path discovery utilities (`format` command-related); tests and config wiring as in repository history for this release.
+
 ## 2.4.0 (2026-04-06)
 
 ### New Features
