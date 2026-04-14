@@ -69,7 +69,8 @@ def test_merge_project_yaml_with_defaults(tmp_path: Path):
     f.write_text("version: 1\n", encoding="utf-8")
     cfg = load_paper_explain_pipeline(str(f))
     assert cfg.prompt_files["meta"] == "meta.md"
-    assert cfg.heading_match and len(cfg.heading_match) >= 5
+    assert cfg.heading_match is not None
+    assert len(cfg.heading_match) >= 5
 
 
 def test_missing_pipeline_file_falls_back_to_builtin(monkeypatch, tmp_path: Path):
@@ -111,6 +112,18 @@ def test_resolve_template_filename_section_and_combo():
     assert p.resolve_template_filename_for_job("combo:ab_in:combo") == "combo.md"
 
 
+def test_resolved_section_prompts_for_extra_sections():
+    """Regression: extra:* keys must resolve through key_resolution to generic."""
+    p = PaperExplainPipelineConfig.builtin()
+    entries = p.resolved_section_prompts("extra:contents")
+    assert len(entries) == 1
+    assert entries[0].file == "section-generic.md"
+
+    entries2 = p.resolved_section_prompts("appendices:h2:proofs")
+    assert len(entries2) == 1
+    assert entries2[0].file == "section-appendices.md"
+
+
 def test_explain_output_filename_combo_slug():
     from ask_llm.core.paper_explain import explain_output_filename
 
@@ -127,4 +140,6 @@ def test_explain_output_filename_combo_slug():
             ],
         }
     )
-    assert explain_output_filename(3, "combo:ab_in:combo", p) == "3-abstract-introduction.explain.md"
+    assert (
+        explain_output_filename(3, "combo:ab_in:combo", p) == "3-abstract-introduction.explain.md"
+    )

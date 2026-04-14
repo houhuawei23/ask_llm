@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.5.1 (2026-04-14)
+
+### Fixes
+
+- **paper explain**: `resolved_section_prompts` now applies `key_resolution` rules before looking up `prompt_files`. This fixes `KeyError: 'No prompt_files entry for section: extra:contents'` (and similar `extra:*` / `appendices:h2:*` keys) when non-standard headings are processed.
+
 ## 2.5.0 (2026-04-07)
 
 ### Paper explain pipeline

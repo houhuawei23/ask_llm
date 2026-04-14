@@ -161,7 +161,9 @@ class PaperExplainPipelineConfig(BaseModel):
 
     @field_validator("full_prompts")
     @classmethod
-    def _unique_full_template_stems(cls, v: list[FullPromptEntry] | None) -> list[FullPromptEntry] | None:
+    def _unique_full_template_stems(
+        cls, v: list[FullPromptEntry] | None
+    ) -> list[FullPromptEntry] | None:
         if not v:
             return v
         stems = [Path(e.file).stem for e in v]
@@ -204,12 +206,13 @@ class PaperExplainPipelineConfig(BaseModel):
     def resolved_section_prompts(self, section_key: str) -> list[FullPromptEntry]:
         if self.section_prompts and section_key in self.section_prompts:
             return self.section_prompts[section_key]
-        fn = self.prompt_files.get(section_key)
+        resolved_key = resolve_job_key_to_prompt_key(section_key, self)
+        fn = self.prompt_files.get(resolved_key)
         if not fn:
             raise KeyError(f"No prompt_files entry for section: {section_key}")
-        lab = self.section_labels_zh.get(section_key) or PaperExplainPipelineConfig.builtin().section_labels_zh.get(
+        lab = self.section_labels_zh.get(
             section_key
-        )
+        ) or PaperExplainPipelineConfig.builtin().section_labels_zh.get(section_key)
         return [FullPromptEntry(file=fn, label_zh=lab)]
 
     def combo_by_id(self, combo_id: str) -> SectionCombo | None:
@@ -233,7 +236,9 @@ class PaperExplainPipelineConfig(BaseModel):
         if self.full_prompts:
             return self.full_prompts
         main = self.prompt_files.get("full", "section-full.md")
-        lab = self.section_labels_zh.get("full") or PaperExplainPipelineConfig.builtin().section_labels_zh.get("full")
+        lab = self.section_labels_zh.get(
+            "full"
+        ) or PaperExplainPipelineConfig.builtin().section_labels_zh.get("full")
         return [FullPromptEntry(file=main, label_zh=lab)]
 
     def filename_for_full_job_key(self, job_key: str) -> str | None:
