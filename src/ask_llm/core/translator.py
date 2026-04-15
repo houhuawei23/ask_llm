@@ -25,24 +25,41 @@ class Translator:
     """Translation processor that generates prompts and handles translation."""
 
     # Base prompt templates for different styles
+    # The "no-omit / LaTeX-preserve" instructions are critical: LLMs frequently
+    # drop or garble $...$ and $$...$$ expressions during translation, especially
+    # when they appear at chunk boundaries.  The explicit instruction prevents this.
+    _PRESERVE_INSTRUCTION = (
+        "保持原文的格式和结构，"
+        "所有LaTeX数学公式（$...$和$$...$$）必须原样保留，不得省略、修改或重写。"
+        "不得省略原文中的任何内容，包括标题、公式、图片链接等。"  # noqa: RUF001
+    )
+
     PROMPT_TEMPLATES: ClassVar[dict[TranslationStyle, tuple[str, str]]] = {
         TranslationStyle.FORMAL: (
-            "请将以下{source_lang}文本翻译成{target_lang}，使用正式、专业的语言风格，"  # noqa: RUF001
-            "保持原文的格式和结构：\n\n{content}"  # noqa: RUF001
+            "请将以下{source_lang}文本翻译成{target_lang}，使用正式、专业的语言风格，"
+            + _PRESERVE_INSTRUCTION
+            + "：\n\n{content}"  # noqa: RUF001
         ),
         TranslationStyle.CASUAL: (
-            "请将以下{source_lang}文本翻译成{target_lang}，使用自然、口语化的语言风格，"  # noqa: RUF001
-            "保持原文的格式和结构：\n\n{content}"  # noqa: RUF001
+            "请将以下{source_lang}文本翻译成{target_lang}，使用自然、口语化的语言风格，"
+            + _PRESERVE_INSTRUCTION
+            + "：\n\n{content}"  # noqa: RUF001
         ),
         TranslationStyle.TECHNICAL: (
-            "请将以下{source_lang}文本翻译成{target_lang}，使用技术性、准确的语言风格，"  # noqa: RUF001
-            "保持专业术语的准确性，保持原文的格式和结构：\n\n{content}"  # noqa: RUF001
+            "请将以下{source_lang}文本翻译成{target_lang}，使用技术性、准确的语言风格，"
+            "保持专业术语的准确性，"
+            + _PRESERVE_INSTRUCTION
+            + "：\n\n{content}"  # noqa: RUF001
         ),
     }
 
     DEFAULT_TEMPLATE: ClassVar[
         str
-    ] = "请将以下{source_lang}文本翻译成{target_lang}，保持格式和风格：\n\n{content}"  # noqa: RUF001
+    ] = (
+        "请将以下{source_lang}文本翻译成{target_lang}，"
+        + _PRESERVE_INSTRUCTION
+        + "：\n\n{content}"  # noqa: RUF001
+    )
 
     def __init__(
         self,

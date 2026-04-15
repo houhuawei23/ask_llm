@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.5.2 (2026-04-15)
+
+### Fixes
+
+- **trans**: Fix missing/corrupted content in translated markdown files with LaTeX.
+  - **Root cause 1**: Translation prompt templates did not instruct LLMs to preserve LaTeX `$...$`/`$$...$$` delimiters or to never omit content. LLMs frequently dropped section headers, image link `!` prefixes, and `$` delimiters from math expressions (e.g. `$\mathcal{V}$` → `{V}$`).
+  - **Root cause 2**: Markdown splitter and chunk balancer could split at `$$` display-math boundaries, leaving orphaned equations at the start of chunks that LLMs then garbled.
+  - **Root cause 3**: When LLMs ignored "no JSON" instructions and wrapped output in `{"translation": "..."}`, the JSON unwrapper failed to parse it because LaTeX backslashes (`\mathcal`, `\beta`) are invalid JSON escapes — raw JSON leaked into the output file.
+  - Added `_PRESERVE_INSTRUCTION` to all built-in prompt templates: explicit LaTeX preservation and no-omission rules.
+  - Updated `tech-paper-trans-compact.md` and `tech-paper-trans.md` prompt files with same instructions.
+  - `MarkdownTokenSplitter._split_by_paragraphs_binary()`: merge `$$` display-math blocks with their preceding paragraph.
+  - `chunk_balance._split_by_token_budget()`: same `$$` merge logic.
+  - `translation_exporter._unwrap_translation_payload()`: new fallback `_try_parse_json_with_latex_escapes()` that fixes invalid backslash escapes and literal control characters in JSON string values before re-parsing.
+
 ## 2.5.1 (2026-04-14)
 
 ### Fixes

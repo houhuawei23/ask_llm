@@ -14,6 +14,8 @@ class MarkdownTokenSplitter(TextSplitter):
     """Split Markdown using heading/paragraph binary strategy with a token cap."""
 
     HEADING_PATTERN = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
+    # Matches a display-math block: $$ ... $$ potentially spanning multiple lines.
+    DISPLAY_MATH_PATTERN = re.compile(r"^\$\$[\s\S]*?\$\$", re.MULTILINE)
 
     def __init__(self, model: str, max_chunk_tokens: int):
         super().__init__(max_chunk_size=max_chunk_tokens)
@@ -157,6 +159,17 @@ class MarkdownTokenSplitter(TextSplitter):
 
         if not paragraphs:
             return self._split_long_paragraph(text, start_pos, start_chunk_id)
+
+        # Merge display-math blocks ($$...$$) with their preceding paragraph so
+        # that a $$ block never starts a chunk on its own (which causes LLMs to
+        # drop or garble the equation).
+        merged_paragraphs: list[str] = []
+        for p in paragraphs:
+            if p.startswith("$$") and merged_paragraphs:
+                merged_paragraphs[-1] = merged_paragraphs[-1] + "\n\n" + p
+            else:
+                merged_paragraphs.append(p)
+        paragraphs = merged_paragraphs
 
         mid_idx = len(paragraphs) // 2
         if mid_idx == 0:

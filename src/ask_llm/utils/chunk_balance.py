@@ -22,6 +22,18 @@ def _split_by_token_budget(text: str, model: str, max_tokens: int) -> list[str]:
 
     paras = re.split(r"\n\s*\n", text)
     paras = [p.strip() for p in paras if p.strip()]
+
+    # Merge display-math blocks ($$...$$) with their preceding paragraph so that
+    # a $$ block never starts a chunk on its own (which causes LLMs to drop or
+    # garble the equation).
+    merged: list[str] = []
+    for p in paras:
+        if p.startswith("$$") and merged:
+            merged[-1] = merged[-1] + "\n\n" + p
+        else:
+            merged.append(p)
+    paras = merged
+
     if len(paras) > 1:
         result: list[str] = []
         buf = ""

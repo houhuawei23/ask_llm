@@ -10,6 +10,86 @@ from ask_llm.core.batch import BatchResult
 from ask_llm.core.text_splitter import TextChunk
 
 
+def _try_parse_json_with_latex_escapes(raw: str, brace: int) -> dict | None:
+    """Attempt to parse a JSON-like blob that contains invalid LaTeX escapes.
+
+    LLMs sometimes emit ``{"translation": "text with $\\mathcal{V}$"}`` where
+    ``\\mathcal`` is not a valid JSON escape.  They may also include literal
+    newlines inside JSON strings.  This function:
+
+    1. Extracts the JSON-like substring from *brace* to the last ``}``.
+    2. Within string values, fixes two classes of problems:
+       a. Doubles backslashes before non-JSON-escape characters
+          (e.g. ``\\mathcal`` → ``\\\\mathcal``).
+       b. Replaces literal control characters (newlines, tabs, etc.)
+          with their JSON escape equivalents (``\\n``, ``\\t``, etc.).
+    3. Parses the fixed string.
+    """
+    last = raw.rfind("}")
+    if last <= brace:
+        return None
+    blob = raw[brace : last + 1]
+
+    # Valid single-char JSON escapes after backslash
+    _valid_escape_chars = set('"\\bfnrt/')
+    _control_replace = {
+        "\n": "\\n",
+        "\r": "\\r",
+        "\t": "\\t",
+    }
+
+    fixed_parts: list[str] = []
+    i = 0
+    in_string = False
+    while i < len(blob):
+        ch = blob[i]
+
+        # Track string boundaries (respect already-escaped quotes)
+        if ch == '"' and (i == 0 or blob[i - 1] != "\\"):
+            in_string = not in_string
+            fixed_parts.append(ch)
+            i += 1
+        elif in_string and ch == "\\":
+            # Check if this is already a valid JSON escape
+            if i + 1 < len(blob) and blob[i + 1] in _valid_escape_chars:
+                # Already valid — keep as-is
+                fixed_parts.append(blob[i : i + 2])
+                i += 2
+            elif i + 1 < len(blob) and blob[i + 1] == "u":
+                # Possible \uXXXX — keep as-is if valid hex
+                if i + 5 < len(blob) and all(
+                    c in "0123456789abcdefABCDEF" for c in blob[i + 2 : i + 6]
+                ):
+                    fixed_parts.append(blob[i : i + 6])
+                    i += 6
+                else:
+                    # Invalid \u — double the backslash
+                    fixed_parts.append("\\\\")
+                    i += 1
+            else:
+                # Invalid escape (like \m in \mathcal) — double the backslash
+                # so JSON sees \\m which decodes to \m
+                fixed_parts.append("\\\\")
+                i += 1
+        elif in_string and ch in _control_replace:
+            # Literal control character inside string — replace with JSON escape
+            fixed_parts.append(_control_replace[ch])
+            i += 1
+        else:
+            fixed_parts.append(ch)
+            i += 1
+
+    fixed = "".join(fixed_parts)
+    try:
+        obj = json.loads(fixed)
+        if isinstance(obj, dict):
+            return obj
+    except json.JSONDecodeError:
+        pass
+
+    return None
+
+
 class TranslationExporter:
     """Export translation results to various formats."""
 
@@ -46,6 +126,8 @@ class TranslationExporter:
         - {"translation": "..."}
         - ```json {"translation":"..."} ```
         - {"translation": "..."} plus trailing text (models often append notes after ``}``)
+        - JSON with invalid escape sequences (e.g. ``\\mathcal`` inside string values)
+
         Falls back to original text when parsing fails.
 
         Note: Do not require ``raw.endswith("}")`` — that rejects valid JSON objects when
@@ -93,6 +175,13 @@ class TranslationExporter:
                 obj = json.loads(raw)
             except json.JSONDecodeError:
                 pass
+
+        # 4) JSON with invalid escape sequences (e.g. \mathcal, \beta in LaTeX).
+        #    LLMs sometimes wrap translations in {"translation": "..."} even when
+        #    instructed not to, and the content contains raw LaTeX whose backslashes
+        #    are not valid JSON escapes.  Try to fix the escapes and re-parse.
+        if obj is None:
+            obj = _try_parse_json_with_latex_escapes(raw, brace)
 
         if isinstance(obj, dict):
             for key in ("translation", "translated_text", "content", "text", "result"):
