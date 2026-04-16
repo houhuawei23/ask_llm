@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.6.0 (2026-04-16)
+
+### Fixes
+
+- **progress bar**: Fix overlapping/conflicting progress display when multiple API calls run concurrently.
+  - **Root cause**: All concurrent workers shared a single `main_task` progress bar ID. When workers called `progress.update(main_task, description=...)` simultaneously, their updates raced and overwrote each other, causing garbled/overlapping display.
+  - **Fix**: Each worker now gets its own progress task ID via `task_to_progress_id` dict mapping. Each concurrent task has a separate progress bar row that updates independently without conflicts.
+  - Added `estimate_output_tokens()` helper function to estimate expected output tokens based on task type and input tokens (`paper_explain` → 2x input, `translation` → 1.1x input).
+  - Progress bars now show meaningful percentage based on actual output tokens vs estimated total, with Rich `BarColumn`, `TimeElapsedColumn`, and `TimeRemainingColumn`.
+
+### Contributors
+
+- Fix implemented with assistance from Claude Code (Anthropic).
+
 ## 2.5.2 (2026-04-15)
 
 ### Fixes

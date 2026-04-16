@@ -29,6 +29,28 @@ from ask_llm.core.protocols import LLMProviderProtocol, ReasoningChunk
 from ask_llm.utils.token_counter import TokenCounter
 
 
+def estimate_output_tokens(task_kind: str, input_tokens: int) -> int:
+    """
+    Estimate expected output tokens based on task type and input tokens.
+
+    Args:
+        task_kind: Type of task (e.g., 'paper_explain', 'translation')
+        input_tokens: Estimated input token count
+
+    Returns:
+        Estimated output token count
+    """
+    if input_tokens <= 0:
+        return 100  # Default minimum estimate
+
+    if task_kind == "paper_explain":
+        # Explanations tend to be longer than input
+        return int(input_tokens * 2.0)
+    else:
+        # Translations typically similar length or slightly shorter
+        return int(input_tokens * 1.1)
+
+
 class BatchProcessor:
     """Process batch tasks with multi-threading and retry support."""
 
@@ -129,7 +151,8 @@ class BatchProcessor:
                 if progress and progress_task_id is not None:
                     progress.update(
                         progress_task_id,
-                        description=f"Task {task.task_id}: {output_token_count} tokens",
+                        completed=output_token_count,
+                        description=f"Task {task.task_id}: {output_token_count} tok",
                     )
 
             response = "".join(response_parts)
@@ -157,8 +180,8 @@ class BatchProcessor:
             if progress and progress_task_id is not None:
                 progress.update(
                     progress_task_id,
-                    description=f"Task {task.task_id}: ✓ Complete ({output_token_count} tokens)",
-                    completed=100,
+                    completed=output_token_count,
+                    description=f"Task {task.task_id}: ✓ Complete ({output_token_count} tok)",
                 )
 
             logger.debug(f"Task {task.task_id} completed successfully")
@@ -179,9 +202,6 @@ class BatchProcessor:
                 )
 
             return result
-        finally:
-            if progress and progress_task_id is not None:
-                progress.advance(progress_task_id)
 
     def process_tasks(
         self, tasks: list[BatchTask], show_progress: bool = True
@@ -198,39 +218,61 @@ class BatchProcessor:
         """
         pending_tasks = sort_batch_tasks_by_estimated_input(tasks.copy(), self.model_config.model)
 
-        # Use a single overall progress bar instead of one per task
+        # Create per-task progress bars (one per concurrent worker)
         if show_progress:
             from rich.console import Console as RichConsole
             from rich.progress import (
                 BarColumn,
-                MofNCompleteColumn,
                 Progress,
-                SpinnerColumn,
+                TaskID,
                 TextColumn,
                 TimeElapsedColumn,
+                TimeRemainingColumn,
             )
 
             rich_console = RichConsole()
 
             progress = Progress(
-                SpinnerColumn(),
                 TextColumn("[progress.description]{task.description}"),
                 BarColumn(),
-                MofNCompleteColumn(),
+                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
                 TextColumn("•"),
                 TimeElapsedColumn(),
+                TextColumn("<"),
+                TimeRemainingColumn(),
                 console=rich_console,
                 transient=False,
             )
             progress.start()
 
-            main_task = progress.add_task(
-                "Batch processing...",
-                total=len(pending_tasks),
-            )
+            # Create per-task progress tracking with estimated output tokens as total
+            task_to_progress_id: dict[int, TaskID] = {}
+            for task in pending_tasks:
+                # Estimate input tokens for this task
+                estimated_prompt = (
+                    task.prompt.replace("{content}", task.content)
+                    if "{content}" in task.prompt
+                    else f"{task.prompt}\n\n{task.content}"
+                )
+                input_token_estimate = TokenCounter.estimate_tokens(
+                    estimated_prompt,
+                    self.model_config.model,
+                )["token_count"]
+
+                # Estimate output tokens for progress calculation
+                estimated_output = estimate_output_tokens(
+                    task.task_kind if hasattr(task, "task_kind") else "translation",
+                    input_token_estimate,
+                )
+
+                task_id = progress.add_task(
+                    f"[cyan]{self.model_config.model}[/cyan] Task {task.task_id} ({input_token_estimate} tok in)",
+                    total=estimated_output,
+                )
+                task_to_progress_id[task.task_id] = task_id
         else:
             progress = None
-            main_task = None
+            task_to_progress_id = {}
 
         try:
 
@@ -239,7 +281,7 @@ class BatchProcessor:
                     task,
                     retry_count,
                     progress,
-                    main_task,
+                    task_to_progress_id.get(task.task_id),
                 )
 
             def _on_retry_scheduled(task: BatchTask, failed_result: BatchResult) -> None:
@@ -250,8 +292,8 @@ class BatchProcessor:
 
             def _on_worker_exception(task: BatchTask, exc: BaseException) -> BatchResult:
                 logger.error(f"Unexpected error processing task {task.task_id}: {exc}")
-                if progress and main_task is not None:
-                    progress.advance(main_task)
+                # Note: progress update is handled by _process_single_task/_process_single_global_task exception handler
+                # This callback is for exceptions that escape before any progress is set
                 return BatchResult(
                     task_id=task.task_id,
                     prompt=task.prompt,
@@ -483,7 +525,8 @@ class GlobalBatchProcessor:
             if progress and progress_task_id is not None:
                 progress.update(
                     progress_task_id,
-                    description=f"{description_prefix}: {output_token_count} out",
+                    completed=output_token_count,
+                    description=f"{description_prefix}: {output_token_count} tok",
                 )
 
         response = "".join(response_parts).strip()
@@ -788,10 +831,6 @@ class GlobalBatchProcessor:
                 progress, progress_task_id, model_key, task.task_id, progress_tokens
             )
 
-        finally:
-            if progress and progress_task_id is not None:
-                progress.advance(progress_task_id)
-
     def process_global_tasks(
         self,
         tasks: list[BatchTask],
@@ -819,37 +858,36 @@ class GlobalBatchProcessor:
         # Pre-build provider cache to avoid per-task adapter creation and ConfigManager mutation
         provider_cache = self._build_provider_cache(pending_tasks, config_manager)
 
-        # Create a single overall progress bar instead of one per task
+        # Create per-task progress bars (one per concurrent worker)
         if show_progress:
             from rich.console import Console as RichConsole
             from rich.progress import (
                 BarColumn,
-                MofNCompleteColumn,
                 Progress,
-                SpinnerColumn,
+                TaskID,
                 TextColumn,
                 TimeElapsedColumn,
+                TimeRemainingColumn,
             )
 
             rich_console = RichConsole()
 
             progress = Progress(
-                SpinnerColumn(),
                 TextColumn("[progress.description]{task.description}"),
                 BarColumn(),
-                MofNCompleteColumn(),
+                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
                 TextColumn("•"),
                 TimeElapsedColumn(),
+                TextColumn("<"),
+                TimeRemainingColumn(),
                 console=rich_console,
                 transient=False,
             )
             progress.start()
 
-            main_task = progress.add_task(
-                "Batch processing...",
-                total=len(pending_tasks),
-            )
+            # Pre-calculate input tokens and create per-task progress tracking
             task_to_input_tokens: dict[int, int] = {}
+            task_to_progress_id: dict[int, TaskID] = {}
             for task in pending_tasks:
                 # Pre-calculate input tokens for display
                 estimated_prompt = (
@@ -862,10 +900,28 @@ class GlobalBatchProcessor:
                     task.task_model_config.model if task.task_model_config else "gpt-3.5-turbo",
                 )["token_count"]
                 task_to_input_tokens[task.task_id] = input_token_estimate
+
+                # Estimate output tokens for progress calculation
+                estimated_output = estimate_output_tokens(
+                    task.task_kind if hasattr(task, "task_kind") else "translation",
+                    input_token_estimate,
+                )
+
+                # Create a per-task progress bar with estimated output tokens as total
+                model_key = (
+                    f"{task.task_model_config.provider}/{task.task_model_config.model}"
+                    if task.task_model_config
+                    else "unknown/model"
+                )
+                task_id = progress.add_task(
+                    f"[cyan]{model_key}[/cyan] Task {task.task_id} ({input_token_estimate} tok in)",
+                    total=estimated_output,
+                )
+                task_to_progress_id[task.task_id] = task_id
         else:
             progress = None
-            main_task = None
             task_to_input_tokens = {}
+            task_to_progress_id = {}
 
         try:
 
@@ -875,7 +931,7 @@ class GlobalBatchProcessor:
                     provider_cache,
                     retry_count,
                     progress,
-                    main_task,
+                    task_to_progress_id.get(task.task_id),
                     task_to_input_tokens.get(task.task_id),
                 )
 
@@ -887,8 +943,8 @@ class GlobalBatchProcessor:
 
             def _on_worker_exception(task: BatchTask, exc: BaseException) -> BatchResult:
                 logger.error(f"Unexpected error processing task {task.task_id}: {exc}")
-                if progress and main_task is not None:
-                    progress.advance(main_task)
+                # Note: progress update is handled by _process_single_task/_process_single_global_task exception handler
+                # This callback is for exceptions that escape before any progress is set
                 return BatchResult(
                     task_id=task.task_id,
                     prompt=task.prompt,
