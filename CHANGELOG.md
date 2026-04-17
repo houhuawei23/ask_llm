@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.6.1 (2026-04-17)
+
+### Fixes
+
+- **DeepSeek JSON mode detection**: Fix incorrect `response_format` injection when prompts contain "JSON" in a negative context (e.g., "不允许直接以整段 JSON 呈现主体内容"). The naive `"json" in content.lower()` check matched any mention of JSON, causing DeepSeek Reasoner models to emit raw JSON with chain-of-thought text instead of Markdown. Fixed in `llm-engine` (v0.2.1) by using explicit pattern matching with negation guards and positive request patterns.
+
+- **translation prompt**: Simplify `tech-paper-trans-compact.md` output format instruction by removing verbose JSON prohibition text.
+
+### Contributors
+
+- Fix implemented with assistance from Claude Code (Anthropic).
+
 ## 2.6.0 (2026-04-16)
 
 ### Fixes
