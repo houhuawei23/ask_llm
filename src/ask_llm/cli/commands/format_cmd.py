@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from typing import Any
 
 import typer
 from loguru import logger
@@ -22,7 +23,7 @@ from ask_llm.cli.errors import raise_unexpected_cli_error
 from ask_llm.config.context import set_config
 from ask_llm.config.loader import ConfigLoader
 from ask_llm.config.manager import ConfigManager
-from ask_llm.core.format_markdown_file import format_one_markdown_file
+from ask_llm.core.format_markdown_file import format_body_markdown_file, format_one_markdown_file
 from ask_llm.core.processor import RequestProcessor
 from ask_llm.utils.console import console
 from ask_llm.utils.md_path_discovery import discover_markdown_files
@@ -68,6 +69,14 @@ def format_cmd(
             help="Markdown 文件、目录或 glob（目录下递归处理所有 .md / .markdown）",
         ),
     ],
+    type_: Annotated[
+        str,
+        typer.Option(
+            "--type",
+            "-T",
+            help="格式化类型: title (标题层级) 或 body (正文排版)",
+        ),
+    ] = "title",
     output: Annotated[
         str | None,
         typer.Option(
@@ -137,7 +146,21 @@ def format_cmd(
         int | None,
         typer.Option(
             "--heading-concurrency",
-            help="单文件内标题批次的并发 API 数（默认见配置，1 为串行）",
+            help="单文件内标题批次的并发 API 数（默认见配置，1 为串行；仅 title 模式生效）",
+        ),
+    ] = None,
+    body_max_chunk_tokens: Annotated[
+        int | None,
+        typer.Option(
+            "--body-max-chunk-tokens",
+            help="正文格式化时每块最大 token 数（默认见配置；仅 body 模式生效）",
+        ),
+    ] = None,
+    body_concurrency: Annotated[
+        int | None,
+        typer.Option(
+            "--body-concurrency",
+            help="单文件内正文 chunk 的并发 API 数（默认见配置，1 为串行；仅 body 模式生效）",
         ),
     ] = None,
     prompt_file: Annotated[
@@ -166,13 +189,19 @@ def format_cmd(
     ] = None,
 ) -> None:
     """
-    使用 LLM 规范化 Markdown 标题层级。
+    使用 LLM 格式化 Markdown 文档。
+
+    支持两种格式化模式：
+    - title: 规范化标题层级（默认）
+    - body: 优化正文排版
 
     支持传入文件、glob、**目录**（将并发处理目录内全部 Markdown）。
 
     示例::
 
         ask-llm format document.md
+        ask-llm format document.md --type title
+        ask-llm format document.md --type body
         ask-llm format ./notes_dir
         ask-llm format ./notes_dir -j 8 -o ./formatted_out/
         ask-llm format *.md --no-recursive
@@ -190,6 +219,11 @@ def format_cmd(
             model=model,
             temperature=temperature,
         )
+
+        type_lower = type_.lower()
+        if type_lower not in ("title", "body"):
+            console.print_error(f"不支持的格式化类型: {type_}。请使用 title 或 body。")
+            raise typer.Exit(1)
 
         provider_config = config_manager.get_provider_config()
         default_model = config_manager.get_model_override() or config_manager.get_default_model()
@@ -210,14 +244,18 @@ def format_cmd(
 
         _validate_batch_output(output, len(resolved_files), inplace)
 
-        fh_config = load_result.unified_config.format_heading
-        prompt_resolved = prompt_file or fh_config.default_prompt_file
+        if type_lower == "title":
+            fh_config = load_result.unified_config.format_heading
+            prompt_resolved = prompt_file or fh_config.default_prompt_file
+        else:
+            fb_config = load_result.unified_config.format_body
+            prompt_resolved = prompt_file or fb_config.default_prompt_file
 
         file_workers = workers if workers is not None else _default_file_workers()
 
         console.print_info(
             f"待处理 {len(resolved_files)} 个 Markdown 文件"
-            f"（目录递归={recursive}，并行数={file_workers}）"
+            f"（类型={type_lower}，目录递归={recursive}，并行数={file_workers}）"
         )
 
         use_parallel = len(resolved_files) > 1 and file_workers > 1
@@ -225,10 +263,14 @@ def format_cmd(
         if use_parallel:
             _run_parallel_format(
                 resolved_files,
+                format_type=type_lower,
                 processor=processor,
+                model=default_model,
                 prompt_file_resolved=prompt_resolved,
                 heading_batch_size=heading_batch_size,
                 heading_concurrency=heading_concurrency,
+                body_max_chunk_tokens=body_max_chunk_tokens,
+                body_concurrency=body_concurrency,
                 output=output,
                 inplace=inplace,
                 force=force,
@@ -237,10 +279,14 @@ def format_cmd(
         else:
             _run_sequential_format(
                 resolved_files,
+                format_type=type_lower,
                 processor=processor,
+                model=default_model,
                 prompt_file_resolved=prompt_resolved,
                 heading_batch_size=heading_batch_size,
                 heading_concurrency=heading_concurrency,
+                body_max_chunk_tokens=body_max_chunk_tokens,
+                body_concurrency=body_concurrency,
                 output=output,
                 inplace=inplace,
                 force=force,
@@ -265,10 +311,14 @@ def format_cmd(
 def _run_sequential_format(
     resolved_files: list[str],
     *,
+    format_type: str,
     processor: RequestProcessor,
+    model: str,
     prompt_file_resolved: str,
     heading_batch_size: int | None,
     heading_concurrency: int | None,
+    body_max_chunk_tokens: int | None,
+    body_concurrency: int | None,
     output: str | None,
     inplace: bool,
     force: bool,
@@ -281,23 +331,39 @@ def _run_sequential_format(
     for file_path in resolved_files:
         console.print()
         console.print(f"[bold]处理: {file_path}[/bold]")
-        outcome = format_one_markdown_file(
-            file_path,
-            processor=processor,
-            prompt_file_resolved=prompt_file_resolved,
-            heading_batch_size=heading_batch_size,
-            heading_concurrency=heading_concurrency,
-            output=output,
-            inplace=inplace,
-            force=force,
-        )
+
+        if format_type == "title":
+            outcome = format_one_markdown_file(
+                file_path,
+                processor=processor,
+                prompt_file_resolved=prompt_file_resolved,
+                heading_batch_size=heading_batch_size,
+                heading_concurrency=heading_concurrency,
+                output=output,
+                inplace=inplace,
+                force=force,
+            )
+        else:
+            outcome = format_body_markdown_file(
+                file_path,
+                processor=processor,
+                model=model,
+                prompt_file_resolved=prompt_file_resolved,
+                body_max_chunk_tokens=body_max_chunk_tokens,
+                body_concurrency=body_concurrency,
+                output=output,
+                inplace=inplace,
+                force=force,
+            )
+
         if outcome.ok:
             successful_count += 1
             if inplace:
                 console.print_success(f"已原地写入: {outcome.output_path}")
             else:
                 console.print_success(f"已保存: {outcome.output_path}")
-            console.print(f"  共格式化 {outcome.heading_count} 个标题")
+            if format_type == "title":
+                console.print(f"  共格式化 {outcome.heading_count} 个标题")
         elif outcome.skipped:
             skipped_count += 1
             console.print_warning(f"跳过 {file_path}: {outcome.message}")
@@ -311,10 +377,14 @@ def _run_sequential_format(
 def _run_parallel_format(
     resolved_files: list[str],
     *,
+    format_type: str,
     processor: RequestProcessor,
+    model: str,
     prompt_file_resolved: str,
     heading_batch_size: int | None,
     heading_concurrency: int | None,
+    body_max_chunk_tokens: int | None,
+    body_concurrency: int | None,
     output: str | None,
     inplace: bool,
     force: bool,
@@ -335,6 +405,33 @@ def _run_parallel_format(
         TimeElapsedColumn(),
     )
 
+    def _submit_file(pool: ThreadPoolExecutor, fp: str) -> Any:
+        if format_type == "title":
+            return pool.submit(
+                format_one_markdown_file,
+                fp,
+                processor=processor,
+                prompt_file_resolved=prompt_file_resolved,
+                heading_batch_size=heading_batch_size,
+                heading_concurrency=heading_concurrency,
+                output=output,
+                inplace=inplace,
+                force=force,
+            )
+        else:
+            return pool.submit(
+                format_body_markdown_file,
+                fp,
+                processor=processor,
+                model=model,
+                prompt_file_resolved=prompt_file_resolved,
+                body_max_chunk_tokens=body_max_chunk_tokens,
+                body_concurrency=body_concurrency,
+                output=output,
+                inplace=inplace,
+                force=force,
+            )
+
     with Progress(*progress_columns, console=console.rich_console, transient=False) as progress:
         task_id = progress.add_task(
             "[cyan]格式化 Markdown[/cyan]",
@@ -342,17 +439,7 @@ def _run_parallel_format(
         )
         with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="format-md") as pool:
             future_map = {
-                pool.submit(
-                    format_one_markdown_file,
-                    fp,
-                    processor=processor,
-                    prompt_file_resolved=prompt_file_resolved,
-                    heading_batch_size=heading_batch_size,
-                    heading_concurrency=heading_concurrency,
-                    output=output,
-                    inplace=inplace,
-                    force=force,
-                ): fp
+                _submit_file(pool, fp): fp
                 for fp in resolved_files
             }
             for fut in as_completed(future_map):
@@ -366,12 +453,19 @@ def _run_parallel_format(
                 else:
                     if outcome.ok:
                         successful_count += 1
-                        logger.info(
-                            "完成 [{}] -> {} ({} 标题)",
-                            fp,
-                            outcome.output_path,
-                            outcome.heading_count,
-                        )
+                        if format_type == "title":
+                            logger.info(
+                                "完成 [{}] -> {} ({} 标题)",
+                                fp,
+                                outcome.output_path,
+                                outcome.heading_count,
+                            )
+                        else:
+                            logger.info(
+                                "完成 [{}] -> {}",
+                                fp,
+                                outcome.output_path,
+                            )
                     elif outcome.skipped:
                         skipped_count += 1
                         logger.warning("跳过 [{}]: {}", fp, outcome.message)

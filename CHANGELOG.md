@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.6.2 (2026-05-19)
+
+### Features
+
+- **`ask-llm format --type body`**: Add markdown body formatting support via LLM. Splits large markdown files into heading-aware chunks, formats each chunk concurrently, and merges results. Supports configurable `max_chunk_tokens` and `concurrency`.
+
+### Fixes
+
+- **body format chunk merging**: Fix markdown elements (headings, images, blockquotes) being glued to preceding content when multiple chunks are merged. The root cause was a combination of paragraph-splitter boundary stripping, per-chunk `.strip()` on LLM output, and empty-separator join. Fixed by:
+  - Replacing `.strip()` with `.rstrip()` in `_process_chunk` to preserve leading whitespace (e.g., code block indentation).
+  - Introducing `_join_chunks()` which normalizes newlines and ensures a blank line (`\n\n`) between adjacent chunks.
+
+### Contributors
+
+- Feature designed and bug fixed with assistance from **Kimi CLI** (agent) and **kimi-k2.6** (model).
+
 ## 2.6.1 (2026-04-17)
 
 ### Fixes

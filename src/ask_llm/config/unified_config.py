@@ -205,6 +205,26 @@ class FormatHeadingConfig(BaseModel):
     )
 
 
+class FormatBodyConfig(BaseModel):
+    """Markdown body formatter configuration."""
+
+    default_prompt_file: str = Field(
+        default="@prompts/md-body-format.md",
+        description="Default prompt file path for body formatting",
+    )
+    max_chunk_tokens: int = Field(
+        default=2400,
+        gt=256,
+        le=128000,
+        description="Target max tokens per chunk for body formatting (tiktoken estimate)",
+    )
+    concurrency: int = Field(
+        default=4,
+        gt=0,
+        description="Max concurrent API calls for body chunks",
+    )
+
+
 class TextSplitterConfig(BaseModel):
     """Text splitter configuration."""
 
@@ -285,6 +305,7 @@ class UnifiedConfig(BaseModel):
     batch: BatchConfig = Field(default_factory=BatchConfig)
     file: FileConfig = Field(default_factory=FileConfig)
     format_heading: FormatHeadingConfig = Field(default_factory=FormatHeadingConfig)
+    format_body: FormatBodyConfig = Field(default_factory=FormatBodyConfig)
     text_splitter: TextSplitterConfig = Field(default_factory=TextSplitterConfig)
     token: TokenConfig = Field(default_factory=TokenConfig)
     paper: PaperConfig = Field(default_factory=PaperConfig)

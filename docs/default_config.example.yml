@@ -73,15 +73,21 @@ format_heading:
   concurrency: 4
   context_heading_count: 5
 
-# === 7. Text Splitter ===
+# === 7. Markdown Body Formatting ===
+format_body:
+  default_prompt_file: "@prompts/md-body-format.md"
+  max_chunk_tokens: 2400
+  concurrency: 4
+
+# === 8. Text Splitter ===
 text_splitter:
   max_chunk_size: 2000
 
-# === 8. Token Counting ===
+# === 9. Token Counting ===
 token:
   default_encoding: cl100k_base
 
-# === 9. Project Root Markers (for @ path resolution) ===
+# === 10. Project Root Markers (for @ path resolution) ===
 project_root_markers:
   - pyproject.toml
   - setup.py
