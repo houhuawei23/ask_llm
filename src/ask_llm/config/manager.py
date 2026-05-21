@@ -118,20 +118,25 @@ class ConfigManager:
         """
         Get default model for a provider.
 
+        Priority:
+            1. Provider's own models[0] (which is its default_model set during config load)
+            2. Global default_model from AppConfig
+            3. Raise error if neither is available
+
         Args:
             provider_name: Provider name (uses current if None)
 
         Returns:
             Default model name
         """
-        # First check if there's a global default_model
-        if self._base_config.default_model:
-            return self._base_config.default_model
-
-        # Otherwise use first model from provider's models list
         config = self.get_provider_config(provider_name)
+        # First use provider's own default_model (models[0] after config load reordering)
         if config.models:
             return config.models[0]
+
+        # Fallback to global default_model
+        if self._base_config.default_model:
+            return self._base_config.default_model
 
         raise ValueError(
             f"No default model available for provider '{provider_name or self._current_provider}'"

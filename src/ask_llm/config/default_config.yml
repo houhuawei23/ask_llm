@@ -1,53 +1,22 @@
 # Ask LLM - Built-in Default Configuration (package fallback)
+#
+# NOTE: Provider runtime configuration (base_url, api_key, models, etc.)
+# is now auto-loaded from providers.yml in your project root.
+# This file only needs to contain overrides or non-provider settings.
+#
+# Search order for default_config.yml:
+#   --config > ./default_config.yml > ~/.config/ask_llm/ > /etc/ask_llm/ > package built-in
+#
+# Search order for providers.yml:
+#   ASK_LLM_PROVIDERS_YML > ./providers.yml > package root > ~/.config/ask_llm/
 
-# === 1. Provider/API Configuration ===
-default_provider: deepseek
-default_model: deepseek-chat
-providers:
-  deepseek:
-    base_url: "https://api.deepseek.com/v1"
-    api_key: ${DEEPSEEK_API_KEY}
-    default_model: deepseek-chat
-    models:
-      - name: deepseek-chat
-      - name: deepseek-reasoner
-    api_temperature: 0.7
-    api_top_p: null
-    max_tokens: null
-    timeout: 60.0
-
-  kimi-code:
-    base_url: "https://api.kimi.com/coding/v1"
-    api_key: ${KIMI_CODE_API_KEY}
-    default_model: kimi-k2-0711-preview
-    models:
-      - name: kimi-k2-0711-preview
-      - name: kimi-k2-0711-preview-longcontext
-      - name: kimi-k2.5-preview
-    api_temperature: 0.7
-    api_top_p: null
-    max_tokens: null
-    timeout: 120.0
-
-  ollama:
-    base_url: "http://localhost:11434/v1"
-    api_key: ollama
-    default_model: qwen3.6
-    models:
-      - name: qwen3.6
-      - name: qwen3.5
-    api_temperature: 0.7
-    api_top_p: null
-    max_tokens: null
-    timeout: 60.0
-
-# === 2. General/Global Defaults ===
+# === 1. General/Global Defaults ===
 general:
   default_prompt_template: "Please process the following text:\n\n{content}"
   default_output_filename: output.txt
   stream_default: true
 
-# === 3. Translation Defaults ===
+# === 2. Translation Defaults ===
 translation:
   target_language: zh
   source_language: auto
@@ -71,7 +40,7 @@ translation:
     - ".ipynb"
   recursive_dir: false          # Include subdirectories when translating a directory
 
-# === 4. Batch Processing Defaults ===
+# === 3. Batch Processing Defaults ===
 batch:
   mode: prompt-content-pairs
   threads: 20
@@ -83,7 +52,7 @@ batch:
   batch_results_dir: batch_results
   output_suffix: _results
 
-# === 5. File Handling ===
+# === 4. File Handling ===
 file:
   chunk_size: 8192
   default_output_suffix: _output
@@ -91,12 +60,18 @@ file:
   formatted_suffix: _formatted
   tqdm_ncols: 80
 
-# === 6. Markdown Heading Formatting ===
+# === 5. Markdown Heading Formatting ===
 format_heading:
   default_prompt_file: "@prompts/md-heading-format.md"
   batch_size: 80
   concurrency: 4
   context_heading_count: 5
+
+# === 6. Markdown Body Formatting ===
+format_body:
+  default_prompt_file: "@prompts/md-body-format.md"
+  max_chunk_tokens: 2400
+  concurrency: 4
 
 # === 7. Text Splitter ===
 text_splitter:

@@ -35,6 +35,51 @@ providers:
         functions:
           json_output: true
 
+  siliconflow:
+    base_url: "https://api.siliconflow.cn/v1/"
+    api_key: ${SILICONFLOW_API_KEY}
+    default_model: "deepseek-ai/DeepSeek-V4-Flash"
+    models:
+      - name: "Pro/deepseek-ai/DeepSeek-V3.2"
+      - name: "deepseek-ai/DeepSeek-V4-Flash"
+        context_length: 128000
+        max_output:
+          default: 4096
+          maximum: 8192
+        speed_tokens_per_second: 30
+        token_per_character:
+          english: 0.3
+          chinese: 0.6
+        pricing_per_million_tokens: # 人民币/元
+          input: 2 # ￥/百万，cache miss
+          input_cache_hit: 0.2 # ￥/百万
+          output: 3 # ￥/百万
+        functions:
+          json_output: true
+
+  aliyun:
+    base_url: "https://api.siliconflow.cn/v1/"
+    api_key: ${SILICONFLOW_API_KEY}
+    default_model: "deepseek-ai/DeepSeek-V4-Flash"
+    models:
+      - name: "Pro/deepseek-ai/DeepSeek-V3.2"
+      - name: "deepseek-ai/DeepSeek-V4-Flash"
+        context_length: 128000
+        max_output:
+          default: 4096
+          maximum: 8192
+        speed_tokens_per_second: 30
+        token_per_character:
+          english: 0.3
+          chinese: 0.6
+        pricing_per_million_tokens: # 人民币/元
+          input: 2 # ￥/百万，cache miss
+          input_cache_hit: 0.2 # ￥/百万
+          output: 3 # ￥/百万
+        functions:
+          json_output: true
+
+
   ollama:
     base_url: "http://localhost:11434/v1"
     api_key: null
@@ -65,10 +110,11 @@ providers:
           input: 0
           output: 0
 
-  kimi:
+  kimi-code:
     base_url: "https://api.kimi.com/coding/v1"
     api_key: ${KIMI_CODE_API_KEY}
     default_model: "kimi-k2-0711-preview"
+    timeout: 120.0
     models:
       - name: "kimi-k2-0711-preview"
         context_length: 256000

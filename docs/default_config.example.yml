@@ -1,30 +1,35 @@
 # Ask LLM - Configuration Example
 # Copy to default_config.yml or run: ask-llm config init
-# Search order: --config > ./default_config.yml > ~/.config/ask_llm/ > /etc/ask_llm/
+#
+# NOTE: Provider runtime configuration (base_url, api_key, models, etc.)
+# is now auto-loaded from providers.yml in your project root.
+# You only need to add providers here if you want to override providers.yml
+# settings or add providers not listed in providers.yml.
+#
+# Search order for default_config.yml:
+#   --config > ./default_config.yml > ~/.config/ask_llm/ > /etc/ask_llm/ > package built-in
+#
+# Search order for providers.yml (provider specs / pricing catalog):
+#   ASK_LLM_PROVIDERS_YML > ./providers.yml > package root > ~/.config/ask_llm/
 
-# === 1. Provider/API Configuration ===
-default_provider: deepseek
-default_model: deepseek-chat
-providers:
-  deepseek:
-    base_url: "https://api.deepseek.com/v1"
-    api_key: ${DEEPSEEK_API_KEY}  # Use ${VAR} for environment variables
-    default_model: deepseek-chat
-    models:
-      - name: deepseek-chat
-      - name: deepseek-reasoner
-    api_temperature: 0.7
-    api_top_p: null
-    max_tokens: null
-    timeout: 60.0
+# === Optional: Override or add providers ===
+# If you need to override a provider from providers.yml, or add a new one:
+# providers:
+#   my-provider:
+#     base_url: "https://api.example.com/v1"
+#     api_key: ${MY_API_KEY}
+#     default_model: my-model
+#     models:
+#       - name: my-model
+#     timeout: 60.0
 
-# === 2. General/Global Defaults ===
+# === 1. General/Global Defaults ===
 general:
   default_prompt_template: "Please process the following text:\n\n{content}"
   default_output_filename: output.txt
   stream_default: true
 
-# === 3. Translation Defaults ===
+# === 2. Translation Defaults ===
 translation:
   target_language: zh
   source_language: auto
@@ -46,7 +51,7 @@ translation:
     - ".ipynb"
   recursive_dir: false           # Include subdirectories when translating a directory
 
-# === 4. Batch Processing Defaults ===
+# === 3. Batch Processing Defaults ===
 batch:
   mode: prompt-content-pairs
   threads: 5
@@ -58,7 +63,7 @@ batch:
   batch_results_dir: batch_results
   output_suffix: _results
 
-# === 5. File Handling ===
+# === 4. File Handling ===
 file:
   chunk_size: 8192
   default_output_suffix: _output
@@ -66,26 +71,37 @@ file:
   formatted_suffix: _formatted
   tqdm_ncols: 80
 
-# === 6. Markdown Heading Formatting ===
+# === 5. Markdown Heading Formatting ===
 format_heading:
   default_prompt_file: "@prompts/md-heading-format.md"
   batch_size: 80
   concurrency: 4
   context_heading_count: 5
 
-# === 7. Markdown Body Formatting ===
+# === 6. Markdown Body Formatting ===
 format_body:
   default_prompt_file: "@prompts/md-body-format.md"
   max_chunk_tokens: 2400
   concurrency: 4
 
-# === 8. Text Splitter ===
+# === 7. Text Splitter ===
 text_splitter:
   max_chunk_size: 2000
 
-# === 9. Token Counting ===
+# === 8. Token Counting ===
 token:
   default_encoding: cl100k_base
+
+# === 9. Paper explanation (ask-llm paper) ===
+paper:
+  default_run: all
+  output_subdir: explain
+  prompt_dir: "@prompts/paper"
+  pipeline_config: "@prompts/paper-explain-pipeline.yml"
+  concurrency: 20
+  max_output_tokens: 65536
+  full_model: deepseek-reasoner
+  request_timeout_seconds: 600.0
 
 # === 10. Project Root Markers (for @ path resolution) ===
 project_root_markers:

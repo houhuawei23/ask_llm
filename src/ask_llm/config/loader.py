@@ -1,6 +1,11 @@
 """Configuration loading utilities.
 
 Parameter priority: CLI args > environment variables > user config > package default.
+
+Provider configuration priority:
+  1. default_config.yml (user layer) — providers defined here override everything
+  2. providers.yml (provider specs) — auto-loaded as fallback for provider base_url/api_key/models
+  3. Package built-in default_config.yml — general defaults only, no built-in providers
 """
 
 import copy
@@ -182,6 +187,106 @@ class LoadResult:
         self.config_path = config_path
 
 
+def _candidate_providers_yml_paths() -> list[Path]:
+    """Return candidate paths for providers.yml (provider specs / pricing catalog)."""
+    paths: list[Path] = []
+    env_path = os.getenv("ASK_LLM_PROVIDERS_YML")
+    if env_path:
+        paths.append(Path(env_path).expanduser())
+    paths.append(Path.cwd() / "providers.yml")
+    # Package: .../ask_llm/config/loader.py -> ask_llm repo root often 3 levels up
+    pkg_root = Path(__file__).resolve().parent.parent.parent.parent
+    paths.append(pkg_root / "providers.yml")
+    paths.append(Path.home() / ".config" / "ask_llm" / "providers.yml")
+    return paths
+
+
+def _load_providers_yml() -> Dict[str, Any]:
+    """
+    Load provider runtime config from the first existing providers.yml.
+
+    Extracts fields needed for API calls: base_url, api_key, default_model, models,
+    api_temperature, api_top_p, max_tokens, timeout. Ignores pricing/spec fields
+    (context_length, max_output, pricing_per_million_tokens, etc.).
+
+    Returns:
+        Dict with shape {"providers": {...}, "default_provider": ..., "default_model": ...}
+        or empty dict if no providers.yml found.
+    """
+    runtime_fields = {
+        "base_url",
+        "api_key",
+        "default_model",
+        "models",
+        "api_temperature",
+        "api_top_p",
+        "max_tokens",
+        "timeout",
+    }
+    for p in _candidate_providers_yml_paths():
+        if not p.is_file():
+            continue
+        try:
+            with open(p, encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+            if not data or not isinstance(data, dict):
+                continue
+            data = resolve_env_vars(data)
+            providers = data.get("providers") or {}
+            if not providers:
+                continue
+
+            cleaned_providers: Dict[str, Any] = {}
+            for prov_id, prov_cfg in providers.items():
+                if not isinstance(prov_cfg, dict):
+                    continue
+                cleaned = {k: v for k, v in prov_cfg.items() if k in runtime_fields}
+                # Normalize models list: extract "name" from dict entries
+                models = cleaned.get("models")
+                if isinstance(models, list):
+                    model_names = []
+                    for m in models:
+                        if isinstance(m, dict):
+                            name = m.get("name")
+                            if name:
+                                model_names.append(name)
+                        elif isinstance(m, str):
+                            model_names.append(m)
+                    cleaned["models"] = model_names
+                if cleaned.get("base_url"):
+                    cleaned_providers[prov_id] = cleaned
+
+            if not cleaned_providers:
+                continue
+
+            # Determine default_provider / default_model from providers.yml
+            default_provider = data.get("default_provider")
+            default_model = data.get("default_model")
+            if not default_provider:
+                default_provider = next(iter(cleaned_providers.keys()))
+            if not default_model:
+                first_cfg = cleaned_providers[default_provider]
+                default_model = first_cfg.get("default_model")
+                if not default_model and first_cfg.get("models"):
+                    default_model = first_cfg["models"][0]
+
+            logger.debug(
+                f"Loaded provider runtime config from {p.resolve()} "
+                f"({len(cleaned_providers)} providers)"
+            )
+            return {
+                "providers": cleaned_providers,
+                "default_provider": default_provider,
+                "default_model": default_model,
+            }
+        except OSError as e:
+            logger.warning(f"Could not read providers.yml at {p}: {e}")
+        except (yaml.YAMLError, TypeError, ValueError) as e:
+            logger.warning(f"Invalid YAML in providers.yml at {p}: {e}")
+
+    return {}
+
+
 class ConfigLoader:
     """Load and parse default_config.yml."""
 
@@ -257,10 +362,18 @@ class ConfigLoader:
         else:
             data = base_data
 
-        # 3. Apply environment variable overrides
+        # 3. Merge providers.yml as fallback for provider runtime config.
+        #    Priority: default_config.yml (user) > providers.yml > package built-in.
+        providers_yml_data = _load_providers_yml()
+        if providers_yml_data:
+            # providers.yml fills in missing providers but does NOT override
+            # providers already defined in default_config.yml.
+            data = _deep_merge(providers_yml_data, data)
+
+        # 4. Apply environment variable overrides
         data = _apply_env_overrides(data)
 
-        # 4. Validate required sections
+        # 5. Validate required sections
         if "providers" not in data:
             raise ValueError(
                 "Config must contain 'providers' key. "
@@ -274,8 +387,10 @@ class ConfigLoader:
 
         if not data["providers"]:
             raise ValueError(
-                "Config must contain at least one provider. "
-                "Please configure providers in your default_config.yml"
+                "Config must contain at least one provider.\n\n"
+                "  1. Add providers to providers.yml in your project root, or\n"
+                "  2. Add providers to your default_config.yml, or\n"
+                "  3. Run 'ask-llm config init' to generate a template"
             )
 
         # Parse unified config (with defaults for missing sections)

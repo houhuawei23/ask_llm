@@ -1,5 +1,29 @@
 # Changelog
 
+## 2.7.1 (2026-05-21)
+
+### Features
+
+- **Auto-load providers from `providers.yml`**: Provider runtime configuration (base_url, api_key, models, default_model, timeout, etc.) is now automatically loaded from `providers.yml`, eliminating the need to duplicate provider settings in `default_config.yml`.
+  - New `_load_providers_yml()` in `loader.py` reads provider runtime fields from the first available `providers.yml` (search order: `ASK_LLM_PROVIDERS_YML` > `./providers.yml` > package root > `~/.config/ask_llm/`).
+  - `providers.yml` acts as the single source of truth for provider specs; `default_config.yml` only needs to contain overrides or non-provider settings.
+  - Added `siliconflow` provider to `providers.yml` with `deepseek-ai/DeepSeek-V4-Flash` model.
+
+### Fixes
+
+- **Provider-specific default_model resolution**: `ConfigManager.get_default_model()` now correctly returns the current provider's own `default_model` (stored as `models[0]`) instead of always falling back to the global `default_model`. This fixes the bug where `--provider siliconflow` would incorrectly use `deepseek-chat` instead of `deepseek-ai/DeepSeek-V4-Flash`.
+
+### Refactors
+
+- **`src/ask_llm/config/default_config.yml`**: Removed all built-in provider definitions (deepseek, kimi-code, ollama). Now contains only general defaults (translation, batch, file, formatting, paper, etc.).
+- **`docs/default_config.example.yml`**: Updated to reflect the new configuration architecture and added documentation on provider auto-loading.
+- **`providers.yml`**: Unified provider ID naming (`kimi` → `kimi-code`) and added missing `timeout: 120.0` for kimi-code.
+
+### Contributors
+
+- Feature designed and implemented with assistance from **Kimi CLI** (agent) and **kimi-k2.6** (model).
+
+
 ## 2.7.0 (2026-05-21)
 
 ### Features
