@@ -374,7 +374,7 @@ class ConfigLoader:
 
             converted_config = {
                 "api_provider": name,
-                "api_key": provider_config.get("api_key", ""),
+                "api_key": provider_config.get("api_key") or "",
                 "api_base": base_url,
             }
 

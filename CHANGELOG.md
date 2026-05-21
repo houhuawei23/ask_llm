@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.7.0 (2026-05-21)
+
+### Features
+
+- **Ollama provider support**: Add full Ollama API integration for local LLM inference.
+  - New `ollama` provider in `providers.yml` and `default_config.yml` with `qwen3.6` and `qwen3.5` models.
+  - No API key required — Ollama provider skips all API key validation gates.
+  - `create_provider_from_config()` factory now correctly routes `"ollama"` to `OllamaProvider`.
+  - Fix `base_url` for OpenAI SDK sync path: `/v1` suffix needed for `/v1/chat/completions`.
+  - Separate `_get_litellm_api_base()` override returning plain host for LiteLLM async path.
+  - `ProviderConfig.api_key` relaxed from required to optional (empty string OK) for keyless providers.
+  - `loader.py`: handle YAML `api_key: null` → empty string conversion.
+  - Interactive config, `config test`, and API key gate all skip Ollama.
+  - Dependencies: llm-engine `>=0.2.2` (factory routing and `_get_litellm_api_base()` fixes).
+
+### Contributors
+
+- Feature designed and implemented with assistance from **Claude Code** (agent) and **deepseek-v4-pro** (model).
+- llm-engine routing fixes co-authored with Claude Code.
+
 ## 2.6.2 (2026-05-19)
 
 ### Features

@@ -1,4 +1,4 @@
-# Ask LLM v2.6.0
+# Ask LLM v2.7.0
 
 A modern command-line tool for calling multiple LLM APIs (DeepSeek, Qwen, etc.) with an elegant interface.
 
@@ -13,7 +13,7 @@ A modern command-line tool for calling multiple LLM APIs (DeepSeek, Qwen, etc.) 
 - 📊 **Progress Bars** - Visual feedback for file operations
 - 📝 **Rich Logging** - Powered by Loguru
 - 💬 **Interactive Chat** - Multi-turn conversations with command support
-- 🔌 **Multiple Providers** - Support for OpenAI-compatible APIs
+- 🔌 **Multiple Providers** - Support for DeepSeek, Kimi, Ollama (local), and OpenAI-compatible APIs
 - 📦 **Batch Processing** - Process multiple tasks concurrently with multi-threading
 
 ## Quick Start
@@ -111,6 +111,28 @@ ask-llm paper -i paper.md --resume
 | `ask-llm config show`           | Display configuration                                                     |
 | `ask-llm config test`           | Test API connections                                                      |
 | `ask-llm config init`           | Create example config                                                     |
+
+### Ollama (Local LLM)
+
+Ollama support is built-in. No API key needed — just install and run the Ollama server:
+
+```bash
+# Use local model for chat
+ask-llm ask "你是谁？" --provider ollama --model qwen3.6
+
+# Translate with local model
+ask-llm trans document.md --provider ollama --model qwen3.5:9b
+
+# Format markdown with small local model
+ask-llm format file.md --type body \
+  -p @prompts/md-body-format.md \
+  --provider ollama --model qwen3.5:0.8b \
+  --body-concurrency 1
+```
+
+Available models: `qwen3.6` (default, 23 GB), `qwen3.5:9b` (6.6 GB), `qwen3.5:0.8b` (1 GB).
+For best performance, pre-load the model and reduce concurrency for local inference.
+See [docs/ollama.md](docs/ollama.md) for detailed guidance.
 
 ### Batch Processing
 

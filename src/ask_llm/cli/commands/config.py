@@ -91,7 +91,7 @@ def config(
 
                 pc = config.providers[name]
 
-                if not pc.api_key or pc.api_key == "your-api-key-here":
+                if name != "ollama" and (not pc.api_key or pc.api_key == "your-api-key-here"):
                     console.print_warning(f"[{name}] API key not configured")
                     continue
 

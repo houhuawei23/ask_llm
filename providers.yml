@@ -35,6 +35,36 @@ providers:
         functions:
           json_output: true
 
+  ollama:
+    base_url: "http://localhost:11434/v1"
+    api_key: null
+    default_model: "qwen3.6"
+    models:
+      - name: "qwen3.6"
+        context_length: 131072
+        max_output:
+          default: 4096
+          maximum: 32768
+        speed_tokens_per_second: 50
+        token_per_character:
+          english: 0.3
+          chinese: 0.6
+        pricing_per_million_tokens:
+          input: 0
+          output: 0
+      - name: "qwen3.5"
+        context_length: 131072
+        max_output:
+          default: 4096
+          maximum: 32768
+        speed_tokens_per_second: 50
+        token_per_character:
+          english: 0.3
+          chinese: 0.6
+        pricing_per_million_tokens:
+          input: 0
+          output: 0
+
   kimi:
     base_url: "https://api.kimi.com/coding/v1"
     api_key: ${KIMI_CODE_API_KEY}

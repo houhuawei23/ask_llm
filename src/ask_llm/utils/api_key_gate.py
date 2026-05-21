@@ -46,6 +46,9 @@ def require_resolved_api_key(config_manager: ConfigManager, provider_name: str) 
     Second line of defense before batch / parallel API calls.
     Exit with a single clear message if key is still missing.
     """
+    # Ollama requires no API key
+    if provider_name == "ollama":
+        return
     pc = config_manager.get_provider_config(provider_name)
     if api_key_is_missing_or_unresolved(pc.api_key):
         env_hint = provider_env_var_name(provider_name)
@@ -76,6 +79,10 @@ def ensure_api_key_for_provider(
         False if user passed ``--skip-api-key-check`` or chose option 3 (skip interactive gate).
     """
     if skip_api_key_check:
+        return False
+
+    # Ollama is a local server that requires no API key
+    if provider_name == "ollama":
         return False
 
     pc = config_manager.get_provider_config(provider_name)

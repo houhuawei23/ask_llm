@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ask-llm"
-version = "2.6.2"
+version = "2.7.0"
 description = "A flexible command-line tool for calling multiple LLM APIs"
 readme = "README.md"
 requires-python = ">=3.8"
@@ -37,7 +37,7 @@ dependencies = [
     "pydantic-settings>=2.0.0",
     "litellm>=1.0.0",
     "pyyaml>=6.0.0",
-    "llm-api-engine>=0.1.5",    # 使用 llm-api-engine 作为 LLM 引擎（流式 reasoning、并发重试 runner）
+    "llm-api-engine>=0.2.2",    # 使用 llm-api-engine 作为 LLM 引擎（流式 reasoning、并发重试 runner、Ollama 支持）
     "nbformat>=5.0.0",          # Jupyter notebook support for trans .ipynb
 ]
 

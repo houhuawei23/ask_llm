@@ -28,24 +28,24 @@ class TestProviderConfig:
         assert config.api_temperature == 0.7  # default
 
     def test_invalid_api_key_placeholder(self):
-        """Test validation rejects placeholder API key."""
-        with pytest.raises(ValidationError):
-            ProviderConfig(
-                api_provider="test",
-                api_key="your-api-key-here",
-                api_base="https://api.test.com",
-                models=["test-model"],
-            )
+        """Test placeholder API key is allowed (validation moved to upstream gate)."""
+        config = ProviderConfig(
+            api_provider="test",
+            api_key="your-api-key-here",
+            api_base="https://api.test.com",
+            models=["test-model"],
+        )
+        assert config.api_key == "your-api-key-here"
 
     def test_invalid_api_key_empty(self):
-        """Test validation rejects empty API key."""
-        with pytest.raises(ValidationError):
-            ProviderConfig(
-                api_provider="test",
-                api_key="",
-                api_base="https://api.test.com",
-                models=["test-model"],
-            )
+        """Test empty API key is allowed (ollama uses no key; gate enforces for others)."""
+        config = ProviderConfig(
+            api_provider="test",
+            api_key="",
+            api_base="https://api.test.com",
+            models=["test-model"],
+        )
+        assert config.api_key == ""
 
     def test_invalid_api_base(self):
         """Test validation rejects invalid API base URL."""

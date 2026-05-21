@@ -125,6 +125,10 @@ class InteractiveConfigHelper:
         Raises:
             ValueError: If API key cannot be configured or is invalid
         """
+        # Ollama is a local server that requires no API key
+        if provider_name == "ollama":
+            return
+
         provider_config = self.config_manager.get_provider_config(provider_name)
 
         # Check if API key is configured

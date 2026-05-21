@@ -84,7 +84,7 @@ class ProviderConfig(BaseModel):
     """Configuration for an LLM provider."""
 
     api_provider: str = Field(..., description="Provider identifier")
-    api_key: str = Field(..., description="API key for authentication")
+    api_key: str = Field(default="", description="API key for authentication")
     api_base: str = Field(..., description="API base URL")
     models: List[str] = Field(default_factory=list, description="Available models")
     api_temperature: float = Field(default=0.7, ge=0.0, le=2.0, description="Sampling temperature")
@@ -93,14 +93,6 @@ class ProviderConfig(BaseModel):
     )
     max_tokens: Optional[int] = Field(default=None, gt=0, description="Maximum tokens to generate")
     timeout: float = Field(default=60.0, gt=0, description="API timeout in seconds")
-
-    @field_validator("api_key")
-    @classmethod
-    def validate_api_key(cls, v: str) -> str:
-        """Validate API key is not placeholder."""
-        if v.strip().lower() in ("your-api-key-here", "", "placeholder"):
-            raise ValueError("API key cannot be placeholder or empty")
-        return v
 
     @field_validator("api_base")
     @classmethod
