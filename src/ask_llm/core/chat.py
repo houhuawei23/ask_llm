@@ -360,8 +360,11 @@ class ChatSession:
             console.print_warning("Usage: /search <pattern>")
             return
 
-        matches = [(i, m) for i, m in enumerate(self.history.messages)
-                   if re.search(pattern, m.content, re.IGNORECASE)]
+        matches = [
+            (i, m)
+            for i, m in enumerate(self.history.messages)
+            if re.search(pattern, m.content, re.IGNORECASE)
+        ]
 
         if not matches:
             console.print_info(f"No messages matching: {pattern!r}")
@@ -369,7 +372,7 @@ class ChatSession:
 
         console.print(f"\n[bold]{len(matches)} match(es) for {pattern!r}:[/bold]")
         for i, msg in matches:
-            preview = msg.content[:120].replace('\n', ' ')
+            preview = msg.content[:120].replace("\n", " ")
             if len(msg.content) > 120:
                 preview += "..."
             console.print(f"  [{i}] [cyan]{msg.role.value}[/cyan]: {preview}")
@@ -387,21 +390,21 @@ class ChatSession:
 
         # Detect format from extension if not specified
         if not fmt:
-            if filename.endswith('.md'):
-                fmt = 'md'
-            elif filename.endswith('.txt'):
-                fmt = 'txt'
+            if filename.endswith(".md"):
+                fmt = "md"
+            elif filename.endswith(".txt"):
+                fmt = "txt"
             else:
-                fmt = 'json'
+                fmt = "json"
 
         try:
-            if fmt == 'json':
+            if fmt == "json":
                 # Same as /save
                 data = self.history.to_dict()
                 data["saved_at"] = datetime.now().isoformat()
                 with open(filename, "w", encoding="utf-8") as f:
                     json.dump(data, f, indent=2, ensure_ascii=False)
-            elif fmt in ('md', 'markdown'):
+            elif fmt in ("md", "markdown"):
                 # Markdown format with alternating sections
                 lines = []
                 for msg in self.history.messages:
@@ -413,7 +416,7 @@ class ChatSession:
                         lines.append(f"## Assistant\n\n{msg.content}\n")
                 with open(filename, "w", encoding="utf-8") as f:
                     f.write("\n".join(lines))
-            elif fmt in ('txt', 'text'):
+            elif fmt in ("txt", "text"):
                 # Plain text format
                 lines = []
                 for msg in self.history.messages:

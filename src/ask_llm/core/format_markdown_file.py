@@ -31,6 +31,9 @@ class FormatMarkdownOutcome:
     message: str
     output_path: str | None = None
     heading_count: int = 0
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
+    total_latency: float = 0.0
 
 
 def _validate_and_read(file_path: str) -> tuple[str | None, FormatMarkdownOutcome | None]:
@@ -252,7 +255,7 @@ def format_body_markdown_file(
             max_chunk_tokens=body_max_chunk_tokens,
             concurrency=body_concurrency,
         )
-        formatted_content = formatter.format_body(content)
+        formatted_content, stats = formatter.format_body(content)
     except Exception as exc:
         logger.exception("Body format failed for {}", file_path)
         return FormatMarkdownOutcome(
@@ -273,4 +276,7 @@ def format_body_markdown_file(
         message="OK",
         output_path=outcome.output_path,
         heading_count=0,
+        total_input_tokens=stats.total_input_tokens,
+        total_output_tokens=stats.total_output_tokens,
+        total_latency=stats.total_latency,
     )

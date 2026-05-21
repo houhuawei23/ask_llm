@@ -38,7 +38,10 @@ def sample_config_dict():
                 "api_temperature": 0.7,
             },
         },
-        "general": {"default_prompt_template": "Test: {content}", "default_output_filename": "output.txt"},
+        "general": {
+            "default_prompt_template": "Test: {content}",
+            "default_output_filename": "output.txt",
+        },
         "translation": {"target_language": "zh", "threads": 5, "retries": 3},
         "batch": {"threads": 5, "retries": 3},
         "file": {"chunk_size": 8192, "default_output_suffix": "_output"},
@@ -74,9 +77,7 @@ def provider_config():
 def app_config(provider_config):
     """Sample app config."""
     return AppConfig(
-        default_provider="test",
-        default_model="test-model",
-        providers={"test": provider_config}
+        default_provider="test", default_model="test-model", providers={"test": provider_config}
     )
 
 

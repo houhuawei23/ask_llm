@@ -124,11 +124,14 @@ Content for title 2.
 
     def test_split_by_level2_headings(self):
         """Test splitting by level 2 headings when level 1 produces long chunks."""
-        text = """# Main Title
+        text = (
+            """# Main Title
 
 ## Section 1
 
-Very long content here. """ + "x" * 500 + """
+Very long content here. """
+            + "x" * 500
+            + """
 
 ## Section 2
 
@@ -138,6 +141,7 @@ More content.
 
 Even more content.
 """
+        )
         splitter = MarkdownSplitter(max_chunk_size=200)
         chunks = splitter.split(text)
 

@@ -47,18 +47,12 @@ class Translator:
         ),
         TranslationStyle.TECHNICAL: (
             "请将以下{source_lang}文本翻译成{target_lang}，使用技术性、准确的语言风格，"
-            "保持专业术语的准确性，"
-            + _PRESERVE_INSTRUCTION
-            + "：\n\n{content}"  # noqa: RUF001
+            "保持专业术语的准确性，" + _PRESERVE_INSTRUCTION + "：\n\n{content}"  # noqa: RUF001
         ),
     }
 
-    DEFAULT_TEMPLATE: ClassVar[
-        str
-    ] = (
-        "请将以下{source_lang}文本翻译成{target_lang}，"
-        + _PRESERVE_INSTRUCTION
-        + "：\n\n{content}"  # noqa: RUF001
+    DEFAULT_TEMPLATE: ClassVar[str] = (
+        "请将以下{source_lang}文本翻译成{target_lang}，" + _PRESERVE_INSTRUCTION + "：\n\n{content}"  # noqa: RUF001
     )
 
     def __init__(
@@ -108,7 +102,9 @@ class Translator:
         source_lang = self._format_language_name(self.source_language)
         target_lang = self._format_language_name(self.target_language)
 
-        template = template.replace("{source_lang}", source_lang).replace("{target_lang}", target_lang)
+        template = template.replace("{source_lang}", source_lang).replace(
+            "{target_lang}", target_lang
+        )
 
         # Inject glossary if provided
         if self.glossary_pairs:

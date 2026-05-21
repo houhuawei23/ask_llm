@@ -87,7 +87,11 @@ def _deep_merge(base: Dict[str, Any], overlay: Dict[str, Any]) -> Dict[str, Any]
     """
     result = copy.deepcopy(base)
     for key, overlay_val in overlay.items():
-        if key == "providers" and isinstance(overlay_val, dict) and isinstance(result.get(key), dict):
+        if (
+            key == "providers"
+            and isinstance(overlay_val, dict)
+            and isinstance(result.get(key), dict)
+        ):
             if not overlay_val:
                 # Explicitly empty providers dict clears everything
                 result[key] = {}
@@ -167,7 +171,7 @@ def resolve_env_vars(value: Any) -> Any:
                 else:
                     if var_name not in _WARNED_UNSET_ENV_VARS:
                         _WARNED_UNSET_ENV_VARS.add(var_name)
-                        logger.warning(f"Environment variable {var_name} not set")
+                        logger.debug(f"Environment variable {var_name} not set")
 
         return value
     elif isinstance(value, dict):
@@ -350,7 +354,7 @@ class ConfigLoader:
         # 1. Load package default as base
         if not pkg_path.exists():
             raise FileNotFoundError(
-                f"Package default config not found at {pkg_path}. " "Reinstall the ask-llm package."
+                f"Package default config not found at {pkg_path}. Reinstall the ask-llm package."
             )
         base_data = cls._load_yaml(pkg_path)
 

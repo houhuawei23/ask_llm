@@ -218,11 +218,15 @@ def ask(
             stats = TokenCounter.estimate_tokens(final_prompt, default_model)
             console.print("[bold]--- Dry Run Preview ---[/bold]")
             console.print(f"Model: {default_model}")
-            console.print(f"Estimated input: {stats['token_count']} tokens ({stats['word_count']} words)")
+            console.print(
+                f"Estimated input: {stats['token_count']} tokens ({stats['word_count']} words)"
+            )
             if system:
                 system_stats = TokenCounter.estimate_tokens(system, default_model)
                 console.print(f"System prompt: {system_stats['token_count']} tokens")
-            console.print(f"\nPrompt (first 500 chars):\n{final_prompt[:500]}{'...' if len(final_prompt) > 500 else ''}")
+            console.print(
+                f"\nPrompt (first 500 chars):\n{final_prompt[:500]}{'...' if len(final_prompt) > 500 else ''}"
+            )
             raise typer.Exit(0)
 
         # API key check and provider initialization (after dry-run)

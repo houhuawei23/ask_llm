@@ -272,7 +272,9 @@ def trans(
         glossary_pairs: list[tuple[str, str]] = []
         if glossary:
             glossary_pairs = Translator.load_glossary(glossary)
-            console.print_info(f"Glossary: {len(glossary_pairs)} term pair(s) loaded from {glossary}")
+            console.print_info(
+                f"Glossary: {len(glossary_pairs)} term pair(s) loaded from {glossary}"
+            )
 
         apply_cli_overrides_and_gate_api_key(
             config_manager,

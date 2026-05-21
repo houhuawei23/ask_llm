@@ -327,6 +327,8 @@ def _run_sequential_format(
     successful_count = 0
     failed_count = 0
     skipped_count = 0
+    total_input_tokens = 0
+    total_output_tokens = 0
 
     for file_path in resolved_files:
         console.print()
@@ -364,6 +366,13 @@ def _run_sequential_format(
                 console.print_success(f"已保存: {outcome.output_path}")
             if format_type == "title":
                 console.print(f"  共格式化 {outcome.heading_count} 个标题")
+            else:
+                total_input_tokens += outcome.total_input_tokens
+                total_output_tokens += outcome.total_output_tokens
+                if outcome.total_input_tokens or outcome.total_output_tokens:
+                    console.print(
+                        f"  消耗 tokens: {outcome.total_input_tokens} -> {outcome.total_output_tokens}"
+                    )
         elif outcome.skipped:
             skipped_count += 1
             console.print_warning(f"跳过 {file_path}: {outcome.message}")
@@ -371,7 +380,9 @@ def _run_sequential_format(
             failed_count += 1
             console.print_error(f"{file_path}: {outcome.message}")
 
-    _print_format_summary(successful_count, failed_count, skipped_count)
+    _print_format_summary(
+        successful_count, failed_count, skipped_count, total_input_tokens, total_output_tokens
+    )
 
 
 def _run_parallel_format(
@@ -394,6 +405,8 @@ def _run_parallel_format(
     successful_count = 0
     failed_count = 0
     skipped_count = 0
+    total_input_tokens = 0
+    total_output_tokens = 0
 
     workers = min(max_workers, len(resolved_files))
 
@@ -438,10 +451,7 @@ def _run_parallel_format(
             total=len(resolved_files),
         )
         with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="format-md") as pool:
-            future_map = {
-                _submit_file(pool, fp): fp
-                for fp in resolved_files
-            }
+            future_map = {_submit_file(pool, fp): fp for fp in resolved_files}
             for fut in as_completed(future_map):
                 fp = future_map[fut]
                 try:
@@ -461,10 +471,14 @@ def _run_parallel_format(
                                 outcome.heading_count,
                             )
                         else:
+                            total_input_tokens += outcome.total_input_tokens
+                            total_output_tokens += outcome.total_output_tokens
                             logger.info(
-                                "完成 [{}] -> {}",
+                                "完成 [{}] -> {} (tokens: {} -> {})",
                                 fp,
                                 outcome.output_path,
+                                outcome.total_input_tokens,
+                                outcome.total_output_tokens,
                             )
                     elif outcome.skipped:
                         skipped_count += 1
@@ -474,10 +488,18 @@ def _run_parallel_format(
                         logger.error("{}: {}", fp, outcome.message)
                 progress.advance(task_id)
 
-    _print_format_summary(successful_count, failed_count, skipped_count)
+    _print_format_summary(
+        successful_count, failed_count, skipped_count, total_input_tokens, total_output_tokens
+    )
 
 
-def _print_format_summary(successful: int, failed: int, skipped: int) -> None:
+def _print_format_summary(
+    successful: int,
+    failed: int,
+    skipped: int,
+    total_input_tokens: int = 0,
+    total_output_tokens: int = 0,
+) -> None:
     console.print()
     if successful:
         console.print_success(f"成功: {successful} 个文件")
@@ -485,3 +507,8 @@ def _print_format_summary(successful: int, failed: int, skipped: int) -> None:
         console.print_warning(f"跳过: {skipped} 个文件")
     if failed:
         console.print_warning(f"失败: {failed} 个文件")
+    if total_input_tokens or total_output_tokens:
+        console.print(
+            f"[dim]总 token 消耗: {total_input_tokens} -> {total_output_tokens} "
+            f"(共 {total_input_tokens + total_output_tokens} tokens)[/dim]"
+        )

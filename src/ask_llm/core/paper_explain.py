@@ -314,9 +314,7 @@ def build_bundle_from_directory(
     if not title or title == directory.name:
         title = _first_heading_or_title(main_body, main_path.stem)
 
-    sections, section_order, section_headings = split_markdown_ordered(
-        main_body, pipeline=pipeline
-    )
+    sections, section_order, section_headings = split_markdown_ordered(main_body, pipeline=pipeline)
     extra_keys = [k for k in section_order if k.startswith("extra:")]
     if extra_keys:
         logger.info(f"Non-standard headings → generic prompt: {extra_keys[:12]}")
@@ -387,7 +385,9 @@ def build_bundle_from_file(
     )
 
 
-def resolve_prompt_path(prompt_dir: str, prompt_filename: str, project_root: Path | None = None) -> Path:
+def resolve_prompt_path(
+    prompt_dir: str, prompt_filename: str, project_root: Path | None = None
+) -> Path:
     """Resolve @prompts/paper/foo.md, explicit path, repo ``prompts/paper/``, or package symlink."""
     base = prompt_dir.strip()
     candidates: list[Path] = []
@@ -435,9 +435,7 @@ def resolve_prompt_path(prompt_dir: str, prompt_filename: str, project_root: Pat
     )
 
 
-def resolve_prompt_key(
-    key: str, pipeline: PaperExplainPipelineConfig | None = None
-) -> str:
+def resolve_prompt_key(key: str, pipeline: PaperExplainPipelineConfig | None = None) -> str:
     """Map job key (e.g. ``extra:foo``) to template registry key.
 
     With ``pipeline`` (from paper-explain-pipeline.yml), uses configured prefix rules;
@@ -575,7 +573,9 @@ def load_prompt_template(
     else:
         if key == "full" or key.startswith("full:"):
             stem = key.split(":", 1)[1] if key.startswith("full:") else None
-            legacy = PaperExplainPipelineConfig.builtin().prompt_files.get("full", "section-full.md")
+            legacy = PaperExplainPipelineConfig.builtin().prompt_files.get(
+                "full", "section-full.md"
+            )
             fname = legacy
             if stem:
                 for cand in ("section-full.md", "outlines.md"):
@@ -700,9 +700,7 @@ def explain_source_line(
         return f"原论文对应小节（{labels.get(base, base)}；模板变体：{stem}）。"
     raw = bundle.section_headings.get(key, "")
     if key.startswith("extra:"):
-        return (
-            f"原论文 Markdown 中标题为「{raw}」的小节（非标准章节名，使用通用解析模板）。"
-        )
+        return f"原论文 Markdown 中标题为「{raw}」的小节（非标准章节名，使用通用解析模板）。"
     label = labels.get(key, key)
     if raw:
         return f"原论文 Markdown 中标题为「{raw}」的小节（对应标准章节：{label}）。"

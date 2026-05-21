@@ -236,8 +236,10 @@ def paper(
                     return True
                 if fl == "combo" and lk.startswith("combo:"):
                     return True
-                if lk.startswith("combo:") and fl.startswith("combo:") and (
-                    lk == fl or lk.startswith(fl + ":")
+                if (
+                    lk.startswith("combo:")
+                    and fl.startswith("combo:")
+                    and (lk == fl or lk.startswith(fl + ":"))
                 ):
                     return True
                 base, stem = parse_section_job_key(key, explain_pipeline)
@@ -335,12 +337,8 @@ def paper(
             console.print(f"\n[bold]Dry Run — {len(jobs)} job(s) planned:[/bold]")
             total_tokens = 0
             for idx, (key, body, appendix_h2) in enumerate(jobs):
-                template = load_prompt_template(
-                    prompt_dir, key, pipeline=explain_pipeline
-                )
-                label = section_label_for_job(
-                    bundle, key, appendix_h2, pipeline=explain_pipeline
-                )
+                template = load_prompt_template(prompt_dir, key, pipeline=explain_pipeline)
+                label = section_label_for_job(bundle, key, appendix_h2, pipeline=explain_pipeline)
                 if key.startswith("combo:"):
                     parts = key.split(":")
                     cid = parts[1] if len(parts) >= 2 else ""
@@ -372,11 +370,20 @@ def paper(
                 out_file = explain_root / out_name
                 status = "[yellow]exists[/yellow]" if out_file.exists() else "[green]new[/green]"
                 console.print(f"  [{idx:2}] {key:<30} {tok:>6} tokens  {status}  → {out_name}")
-            console.print(f"\n  Total estimated input: {total_tokens:,} tokens across {len(jobs)} jobs")
+            console.print(
+                f"\n  Total estimated input: {total_tokens:,} tokens across {len(jobs)} jobs"
+            )
             if pricing_map:
-                console.print(format_cost_estimate(current_provider, section_job_model,
-                                                   total_tokens, total_tokens * 3,
-                                                   pricing_map, pricing_source=pricing_source))
+                console.print(
+                    format_cost_estimate(
+                        current_provider,
+                        section_job_model,
+                        total_tokens,
+                        total_tokens * 3,
+                        pricing_map,
+                        pricing_source=pricing_source,
+                    )
+                )
             raise typer.Exit(0)
 
         # Conflict guard with --resume support
@@ -385,7 +392,9 @@ def paper(
             filtered = [
                 (orig_idx, job)
                 for orig_idx, job in original_jobs
-                if not (explain_root / explain_output_filename(orig_idx, job[0], explain_pipeline)).exists()
+                if not (
+                    explain_root / explain_output_filename(orig_idx, job[0], explain_pipeline)
+                ).exists()
             ]
             skipped = len(original_jobs) - len(filtered)
             if skipped:
@@ -409,9 +418,7 @@ def paper(
 
         for orig_idx, (key, body, appendix_h2) in jobs_with_orig_idx:
             template = load_prompt_template(prompt_dir, key, pipeline=explain_pipeline)
-            label = section_label_for_job(
-                bundle, key, appendix_h2, pipeline=explain_pipeline
-            )
+            label = section_label_for_job(bundle, key, appendix_h2, pipeline=explain_pipeline)
             if key.startswith("combo:"):
                 parts = key.split(":")
                 cid = parts[1] if len(parts) >= 2 else ""
@@ -500,9 +507,7 @@ def paper(
                     prompt_dir=prompt_dir,
                 )
             elif key.startswith("appendices:h2:") and appendix_h2:
-                src_apx = (
-                    f"附录（侧车或正文中的 Appendices）按二级标题「##」切分后的「{appendix_h2}」小节。"
-                )
+                src_apx = f"附录（侧车或正文中的 Appendices）按二级标题「##」切分后的「{appendix_h2}」小节。"
                 preamble = build_explain_preamble_text(
                     bundle,
                     key,

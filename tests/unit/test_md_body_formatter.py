@@ -69,11 +69,12 @@ class TestBodyFormatter:
             max_chunk_tokens=10000,  # Large enough for single chunk
         )
 
-        result = formatter.format_body(text)
+        result, stats = formatter.format_body(text)
 
         assert "FORMATTED:" in result
         assert "# Title" in result
         assert "Some content here" in result
+        assert stats.chunks_processed == 1
 
     def test_format_body_empty(self):
         """Test formatting empty text."""
@@ -84,19 +85,35 @@ class TestBodyFormatter:
             prompt_template=_TEST_PROMPT_TEMPLATE,
         )
 
-        result = formatter.format_body("")
+        result, stats = formatter.format_body("")
         assert result == ""
+        assert stats.chunks_processed == 0
 
-        result = formatter.format_body("   \n\n  ")
+        result, stats = formatter.format_body("   \n\n  ")
         assert result == ""
+        assert stats.chunks_processed == 0
 
     def test_format_body_multi_chunk_merge_order(self):
         """Test that multi-chunk results are merged in correct order."""
         # Mock the splitter to return controlled chunks
         chunks = [
-            TextChunk(content="# Part 1\n\nContent A.\n", chunk_id=0, start_pos=0, end_pos=20, metadata={}),
-            TextChunk(content="# Part 2\n\nContent B.\n", chunk_id=1, start_pos=20, end_pos=40, metadata={}),
-            TextChunk(content="# Part 3\n\nContent C.\n", chunk_id=2, start_pos=40, end_pos=60, metadata={}),
+            TextChunk(
+                content="# Part 1\n\nContent A.\n", chunk_id=0, start_pos=0, end_pos=20, metadata={}
+            ),
+            TextChunk(
+                content="# Part 2\n\nContent B.\n",
+                chunk_id=1,
+                start_pos=20,
+                end_pos=40,
+                metadata={},
+            ),
+            TextChunk(
+                content="# Part 3\n\nContent C.\n",
+                chunk_id=2,
+                start_pos=40,
+                end_pos=60,
+                metadata={},
+            ),
         ]
 
         call_order = []
@@ -131,7 +148,7 @@ class TestBodyFormatter:
             "ask_llm.core.markdown_token_splitter.MarkdownTokenSplitter.split",
             return_value=chunks,
         ):
-            result = formatter.format_body("dummy")
+            result, stats = formatter.format_body("dummy")
 
         # Each chunk should be present in order
         assert "# Part 1" in result
@@ -140,6 +157,7 @@ class TestBodyFormatter:
         # Verify order: Part 1 before Part 2 before Part 3
         assert result.index("# Part 1") < result.index("# Part 2")
         assert result.index("# Part 2") < result.index("# Part 3")
+        assert stats.chunks_processed == 3
 
     def test_format_body_concurrency_single_worker(self):
         """Test that concurrency=1 processes chunks sequentially."""
@@ -181,11 +199,12 @@ class TestBodyFormatter:
             "ask_llm.core.markdown_token_splitter.MarkdownTokenSplitter.split",
             return_value=chunks,
         ):
-            result = formatter.format_body("dummy")
+            result, stats = formatter.format_body("dummy")
 
         # Sequential processing should call in chunk order
         assert call_order == ["A", "B"]
         assert result == "[A]\n\n[B]"
+        assert stats.chunks_processed == 2
 
     def test_load_prompt_from_file(self):
         """Test loading prompt template from file."""
@@ -260,7 +279,7 @@ $$
             max_chunk_tokens=10000,
         )
 
-        result = formatter.format_body(text)
+        result, stats = formatter.format_body(text)
 
         # Verify structure is preserved (echo response includes original)
         assert "# Main Title" in result
@@ -269,6 +288,7 @@ $$
         assert "```python" in result
         assert "$E = mc^2$" in result
         assert "| Col1 | Col2 |" in result
+        assert stats.chunks_processed == 1
 
     def test_join_chunks_prevents_markdown_gluing(self):
         """Test that _join_chunks inserts blank lines between chunks.

@@ -149,7 +149,7 @@ class TestConfigManager:
                     api_base="https://api2.com",
                     models=["model2"],
                 ),
-            }
+            },
         )
 
         manager = ConfigManager(config)

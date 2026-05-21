@@ -122,8 +122,7 @@ def test_explain_output_filename():
     assert explain_output_filename(3, "full:outlines") == "3-full-outlines.explain.md"
     assert explain_output_filename(1, "abstract") == "1-abstract.explain.md"
     assert (
-        explain_output_filename(2, "extra:model-architecture")
-        == "2-model-architecture.explain.md"
+        explain_output_filename(2, "extra:model-architecture") == "2-model-architecture.explain.md"
     )
     assert (
         explain_output_filename(99, "appendices:h2:proof-of-theorem-1")
@@ -231,7 +230,9 @@ def test_build_bundle_from_minimal_file(tmp_path: Path):
     reason="Sample arxiv2md directory not present",
 )
 def test_build_bundle_from_real_arxiv_dir():
-    d = Path("/home/hhw/Desktop/00_Personal/my_scripts/output2/20170612-Arxiv-Attention-Is-All-You-Need")
+    d = Path(
+        "/home/hhw/Desktop/00_Personal/my_scripts/output2/20170612-Arxiv-Attention-Is-All-You-Need"
+    )
     b = build_bundle_from_directory(d)
     assert "Attention" in b.paper_title
     assert len(b.full_text) > 100

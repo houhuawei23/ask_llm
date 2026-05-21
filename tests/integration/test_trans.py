@@ -104,6 +104,7 @@ Content for section 2.
         if len(chunks) < 2:
             # Create a second chunk manually for testing
             from ask_llm.core.text_splitter import TextChunk
+
             chunks.append(
                 TextChunk(
                     content="Second chunk.",

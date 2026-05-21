@@ -87,10 +87,7 @@ class TestTranslatorPromptFile:
 
     def test_prompt_file_with_placeholders(self):
         """Test prompt file with all placeholders."""
-        prompt_content = (
-            "Translate from {source_lang} to {target_lang}.\n\n"
-            "Content:\n{content}"
-        )
+        prompt_content = "Translate from {source_lang} to {target_lang}.\n\nContent:\n{content}"
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
             f.write(prompt_content)

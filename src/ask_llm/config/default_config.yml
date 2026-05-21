@@ -64,14 +64,14 @@ file:
 format_heading:
   default_prompt_file: "@prompts/md-heading-format.md"
   batch_size: 80
-  concurrency: 4
+  concurrency: 8
   context_heading_count: 5
 
 # === 6. Markdown Body Formatting ===
 format_body:
   default_prompt_file: "@prompts/md-body-format.md"
   max_chunk_tokens: 2400
-  concurrency: 4
+  concurrency: 8
 
 # === 7. Text Splitter ===
 text_splitter:

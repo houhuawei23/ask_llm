@@ -7,6 +7,7 @@ formats each chunk concurrently via LLM API, and merges the results.
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from pathlib import Path
 
 from loguru import logger
@@ -16,6 +17,16 @@ from ask_llm.core.markdown_token_splitter import MarkdownTokenSplitter
 from ask_llm.core.processor import RequestProcessor
 from ask_llm.core.text_splitter import TextChunk
 from ask_llm.utils.file_handler import FileHandler
+
+
+@dataclass
+class BodyFormatStats:
+    """Statistics for body formatting operation."""
+
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
+    total_latency: float = 0.0
+    chunks_processed: int = 0
 
 
 class BodyFormatter:
@@ -46,14 +57,16 @@ class BodyFormatter:
         self.prompt_file = prompt_file
 
         fb_config = get_config().unified_config.format_body
-        self.max_chunk_tokens = max_chunk_tokens if max_chunk_tokens is not None else fb_config.max_chunk_tokens
+        self.max_chunk_tokens = (
+            max_chunk_tokens if max_chunk_tokens is not None else fb_config.max_chunk_tokens
+        )
         self.concurrency = concurrency if concurrency is not None else fb_config.concurrency
 
         # Load prompt from file if specified
         if prompt_file:
             self.prompt_template = self._load_prompt_from_file(prompt_file)
 
-    def format_body(self, text: str) -> str:
+    def format_body(self, text: str) -> tuple[str, BodyFormatStats]:
         """Format markdown body by splitting into chunks and processing each.
 
         Uses MarkdownTokenSplitter for heading-aware splitting, then processes
@@ -63,14 +76,16 @@ class BodyFormatter:
             text: Markdown text content
 
         Returns:
-            Formatted markdown text
+            Tuple of (formatted markdown text, statistics)
 
         Raises:
             ValueError: If prompt template is missing
             RuntimeError: If LLM API call fails
         """
+        stats = BodyFormatStats()
+
         if not text.strip():
-            return ""
+            return "", stats
 
         template = self.prompt_template
         if not template and self.prompt_file:
@@ -89,19 +104,34 @@ class BodyFormatter:
         chunks = splitter.split(text)
 
         if not chunks:
-            return text
+            return text, stats
+
+        # Calculate total document tokens
+        total_doc_tokens = sum(splitter._tok(chunk.content) for chunk in chunks)
+        logger.info(
+            f"[BodyFormat] model={self.model}, total_doc_tokens≈{total_doc_tokens}, "
+            f"chunks={len(chunks)}, concurrency={min(self.concurrency, len(chunks))}"
+        )
 
         if len(chunks) == 1:
             logger.debug("Single chunk, processing directly")
-            _, formatted = self._process_chunk(chunks[0], template)
-            return formatted
+            _, formatted, meta = self._process_chunk(chunks[0], template)
+            stats.total_input_tokens = meta.input_tokens
+            stats.total_output_tokens = meta.output_tokens
+            stats.total_latency = meta.latency
+            stats.chunks_processed = 1
+            logger.info(
+                f"[BodyFormat] chunk 1/1 completed: "
+                f"{meta.input_tokens} -> {meta.output_tokens} tokens in {meta.latency:.2f}s"
+            )
+            return formatted, stats
 
         # Process chunks concurrently
         max_workers = min(self.concurrency, len(chunks))
 
-        def process_chunk_wrapper(chunk: TextChunk) -> tuple[int, str]:
+        def process_chunk_wrapper(chunk: TextChunk) -> tuple[int, str, object]:
             logger.info(
-                f"Formatting body chunk {chunk.chunk_id + 1}/{len(chunks)} "
+                f"[BodyFormat] chunk {chunk.chunk_id + 1}/{len(chunks)} start "
                 f"(tokens: ~{splitter._tok(chunk.content)}, pos: {chunk.start_pos}-{chunk.end_pos})"
             )
             return self._process_chunk(chunk, template)
@@ -111,35 +141,63 @@ class BodyFormatter:
                 # Sequential processing
                 results = {}
                 for chunk in chunks:
-                    chunk_id, formatted = process_chunk_wrapper(chunk)
+                    chunk_id, formatted, meta = process_chunk_wrapper(chunk)
                     results[chunk_id] = formatted
+                    stats.total_input_tokens += meta.input_tokens
+                    stats.total_output_tokens += meta.output_tokens
+                    stats.total_latency += meta.latency
+                    stats.chunks_processed += 1
+                    logger.info(
+                        f"[BodyFormat] chunk {chunk_id + 1}/{len(chunks)} completed: "
+                        f"{meta.input_tokens} -> {meta.output_tokens} tokens in {meta.latency:.2f}s"
+                    )
                 sorted_chunks = [results[i] for i in range(len(chunks))]
-                return self._join_chunks(sorted_chunks)
+                logger.info(
+                    f"[BodyFormat] all {len(chunks)} chunks done: "
+                    f"total {stats.total_input_tokens} -> {stats.total_output_tokens} tokens "
+                    f"in {stats.total_latency:.2f}s"
+                )
+                return self._join_chunks(sorted_chunks), stats
 
             logger.info(
-                f"Formatting body in {len(chunks)} chunks "
-                f"(concurrency: {max_workers}, max_chunk_tokens: {self.max_chunk_tokens})"
+                f"[BodyFormat] processing {len(chunks)} chunks concurrently "
+                f"(max_workers={max_workers}, max_chunk_tokens={self.max_chunk_tokens})"
             )
 
             results: dict[int, str] = {}
-            with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="format-body") as executor:
+            with ThreadPoolExecutor(
+                max_workers=max_workers, thread_name_prefix="format-body"
+            ) as executor:
                 futures = {
                     executor.submit(process_chunk_wrapper, chunk): chunk.chunk_id
                     for chunk in chunks
                 }
                 for future in as_completed(futures):
-                    chunk_id, formatted = future.result()
+                    chunk_id, formatted, meta = future.result()
                     results[chunk_id] = formatted
+                    stats.total_input_tokens += meta.input_tokens
+                    stats.total_output_tokens += meta.output_tokens
+                    stats.total_latency += meta.latency
+                    stats.chunks_processed += 1
+                    logger.info(
+                        f"[BodyFormat] chunk {chunk_id + 1}/{len(chunks)} completed: "
+                        f"{meta.input_tokens} -> {meta.output_tokens} tokens in {meta.latency:.2f}s"
+                    )
 
             # Merge in original order
             sorted_chunks = [results[i] for i in range(len(chunks))]
-            return self._join_chunks(sorted_chunks)
+            logger.info(
+                f"[BodyFormat] all {len(chunks)} chunks done: "
+                f"total {stats.total_input_tokens} -> {stats.total_output_tokens} tokens "
+                f"in {stats.total_latency:.2f}s"
+            )
+            return self._join_chunks(sorted_chunks), stats
 
         except Exception as e:
             logger.error(f"Failed to format body chunk: {e}")
             raise RuntimeError(f"LLM API call failed: {e}") from e
 
-    def _process_chunk(self, chunk: TextChunk, template: str) -> tuple[int, str]:
+    def _process_chunk(self, chunk: TextChunk, template: str) -> tuple[int, str, object]:
         """Process a single chunk via LLM API.
 
         Args:
@@ -147,13 +205,13 @@ class BodyFormatter:
             template: Prompt template
 
         Returns:
-            Tuple of (chunk_id, formatted_content)
+            Tuple of (chunk_id, formatted_content, metadata)
         """
         result = self.processor.process_with_metadata(
             content=chunk.content,
             prompt_template=template,
         )
-        return chunk.chunk_id, result.content.rstrip()
+        return chunk.chunk_id, result.content.rstrip(), result.metadata
 
     @staticmethod
     def _join_chunks(chunks: list[str]) -> str:

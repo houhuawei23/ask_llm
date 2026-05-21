@@ -90,9 +90,7 @@ def load_providers_model_limits(
                         )
                     limits[name] = ModelLimits(ctx, default_out, max_out)
             used = p.resolve()
-            logger.debug(
-                f"Loaded model limits from {used} ({len(limits)} model entries)"
-            )
+            logger.debug(f"Loaded model limits from {used} ({len(limits)} model entries)")
             break
         except OSError as e:
             logger.warning(f"Could not read providers.yml at {p}: {e}")

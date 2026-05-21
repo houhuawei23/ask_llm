@@ -1,5 +1,30 @@
 # Changelog
 
+## 2.7.2 (2026-05-21)
+
+### Features
+
+- **Enhanced format body logging**: `ask-llm format --type body` now provides detailed per-chunk and aggregate token consumption information.
+  - Start of formatting: logs model name, total document tokens, number of chunks, and concurrency.
+  - Per-chunk start: logs chunk index, estimated tokens, and position.
+  - Per-chunk completion: logs chunk index, input/output tokens, and latency.
+  - Completion summary: logs total input/output tokens and total latency for all chunks.
+  - CLI output: shows per-file token consumption and a final aggregate summary.
+
+### Fixes
+
+- **Eliminated spurious API key warnings**: Environment variable resolution for unused providers (e.g., `KIMI_CODE_API_KEY` when using `--provider aliyun`) no longer emits `WARNING` logs. Both `ask_llm` and `llm-engine` now log missing env vars at `DEBUG` level only.
+- **Aliyun timeout increased**: Added `timeout: 300.0` to the `aliyun` provider in `providers.yml` to accommodate slower response times from Qwen models.
+
+### Refactors
+
+- **`BodyFormatter.format_body()`**: Now returns `(str, BodyFormatStats)` tuple instead of just `str`, enabling callers to aggregate token statistics across files.
+- **`FormatMarkdownOutcome`**: Extended with `total_input_tokens`, `total_output_tokens`, and `total_latency` fields.
+
+### Contributors
+
+- Feature designed and implemented with assistance from **Kimi CLI** (agent) and **kimi-k2.6** (model).
+
 ## 2.7.1 (2026-05-21)
 
 ### Features

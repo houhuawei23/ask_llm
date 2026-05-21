@@ -38,7 +38,9 @@ class TestCLICommands:
 
     def test_config_show_no_config(self):
         """Test config show without config fails."""
-        result = runner.invoke(app, ["config", "show", "--config", "/nonexistent/default_config.yml"])
+        result = runner.invoke(
+            app, ["config", "show", "--config", "/nonexistent/default_config.yml"]
+        )
         assert result.exit_code != 0
 
 
@@ -93,7 +95,7 @@ class TestDemoScript:
         """
         demo_script = temp_dir / "demo.py"
 
-        script_content = '''
+        script_content = """
 #!/usr/bin/env python3
 \"\"\"
 Demo script for Ask LLM.
@@ -222,7 +224,7 @@ print()
 print("=" * 50)
 print("All demo tests completed successfully!")
 print("=" * 50)
-'''
+"""
 
         demo_script.write_text(script_content)
 

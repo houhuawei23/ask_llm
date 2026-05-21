@@ -23,7 +23,7 @@ providers:
         context_length: 128000
         max_output:
           default: 4096
-          maximum: 65536   # API allows max_tokens up to 65536 for this model (chat is 8192)
+          maximum: 65536 # API allows max_tokens up to 65536 for this model (chat is 8192)
         speed_tokens_per_second: 30
         token_per_character:
           english: 0.3
@@ -39,6 +39,7 @@ providers:
     base_url: "https://api.siliconflow.cn/v1/"
     api_key: ${SILICONFLOW_API_KEY}
     default_model: "deepseek-ai/DeepSeek-V4-Flash"
+    timeout: 300.0
     models:
       - name: "Pro/deepseek-ai/DeepSeek-V3.2"
       - name: "deepseek-ai/DeepSeek-V4-Flash"
@@ -58,27 +59,14 @@ providers:
           json_output: true
 
   aliyun:
-    base_url: "https://api.siliconflow.cn/v1/"
-    api_key: ${SILICONFLOW_API_KEY}
-    default_model: "deepseek-ai/DeepSeek-V4-Flash"
+    base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    api_key: ${ALIYUN_API_KEY}
+    default_model: "qwen3.5-flash"
+    timeout: 300.0
     models:
-      - name: "Pro/deepseek-ai/DeepSeek-V3.2"
-      - name: "deepseek-ai/DeepSeek-V4-Flash"
-        context_length: 128000
-        max_output:
-          default: 4096
-          maximum: 8192
-        speed_tokens_per_second: 30
-        token_per_character:
-          english: 0.3
-          chinese: 0.6
-        pricing_per_million_tokens: # 人民币/元
-          input: 2 # ￥/百万，cache miss
-          input_cache_hit: 0.2 # ￥/百万
-          output: 3 # ￥/百万
-        functions:
-          json_output: true
-
+      - name: "qwen3.5-flash"
+      - name: "qwen3.6-flash"
+      - name: "qwen3.6-max-preview"
 
   ollama:
     base_url: "http://localhost:11434/v1"

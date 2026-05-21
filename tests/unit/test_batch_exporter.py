@@ -170,9 +170,7 @@ class TestBatchResultExporter:
         sample_results[0].response = "Response 1"
         sample_results[1].response = "Response 2"
 
-        exported_files = BatchResultExporter.export_split_files(
-            sample_results, str(temp_dir)
-        )
+        exported_files = BatchResultExporter.export_split_files(sample_results, str(temp_dir))
 
         assert len(exported_files) == 2
         assert all(Path(f).exists() for f in exported_files)

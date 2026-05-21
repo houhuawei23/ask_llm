@@ -63,10 +63,7 @@ class TestTranslatorLaTeX:
 
     def test_prompt_with_nested_braces(self):
         """Test prompt with nested braces (like LaTeX subscripts)."""
-        template = (
-            "Translate: {content}\n\n"
-            "Note: Use format like $a_{i,j}$ for subscripts."
-        )
+        template = "Translate: {content}\n\nNote: Use format like $a_{i,j}$ for subscripts."
 
         translator = Translator(
             target_language="zh",
@@ -82,9 +79,7 @@ class TestTranslatorLaTeX:
     def test_prompt_with_multiple_placeholders_and_latex(self):
         """Test prompt with both placeholders and LaTeX formulas."""
         template = (
-            "From {source_lang} to {target_lang}:\n\n"
-            "Formula: $E = mc^{2}$\n\n"
-            "Content: {content}"
+            "From {source_lang} to {target_lang}:\n\nFormula: $E = mc^{2}$\n\nContent: {content}"
         )
 
         translator = Translator(
