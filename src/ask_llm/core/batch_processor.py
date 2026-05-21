@@ -224,7 +224,6 @@ class BatchProcessor:
             from rich.progress import (
                 BarColumn,
                 Progress,
-                TaskID,
                 TextColumn,
                 TimeElapsedColumn,
                 TimeRemainingColumn,
@@ -864,7 +863,6 @@ class GlobalBatchProcessor:
             from rich.progress import (
                 BarColumn,
                 Progress,
-                TaskID,
                 TextColumn,
                 TimeElapsedColumn,
                 TimeRemainingColumn,

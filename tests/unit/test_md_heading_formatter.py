@@ -152,11 +152,11 @@ class TestHeadingFormatter:
         processor = self._create_mock_processor(mock_response)
         formatter = HeadingFormatter(processor=processor, prompt_template=_TEST_PROMPT_TEMPLATE)
 
-        formatted = formatter.format_headings(headings)
+        result = formatter.format_headings(headings)
 
-        assert len(formatted) == 2
-        assert formatted[0] == "# Title"
-        assert formatted[1] == "## 1 Section"
+        assert len(result.formatted_headings) == 2
+        assert result.formatted_headings[0] == "# Title"
+        assert result.formatted_headings[1] == "## 1 Section"
 
     def test_format_headings_with_numbering(self):
         """Test formatting headings with numbering."""
@@ -175,22 +175,22 @@ class TestHeadingFormatter:
         processor = self._create_mock_processor(mock_response)
         formatter = HeadingFormatter(processor=processor, prompt_template=_TEST_PROMPT_TEMPLATE)
 
-        formatted = formatter.format_headings(headings)
+        result = formatter.format_headings(headings)
 
-        assert len(formatted) == 4
-        assert formatted[0] == "# Title"
-        assert formatted[1] == "## 1 Section"
-        assert formatted[2] == "### 1.1 Subsection"
-        assert formatted[3] == "#### 1.1.1 Sub-subsection"
+        assert len(result.formatted_headings) == 4
+        assert result.formatted_headings[0] == "# Title"
+        assert result.formatted_headings[1] == "## 1 Section"
+        assert result.formatted_headings[2] == "### 1.1 Subsection"
+        assert result.formatted_headings[3] == "#### 1.1.1 Sub-subsection"
 
     def test_format_headings_empty(self):
         """Test formatting empty heading list."""
         processor = self._create_mock_processor("")
         formatter = HeadingFormatter(processor=processor, prompt_template=_TEST_PROMPT_TEMPLATE)
 
-        formatted = formatter.format_headings([])
+        result = formatter.format_headings([])
 
-        assert len(formatted) == 0
+        assert len(result.formatted_headings) == 0
 
     def test_parse_formatted_headings_with_extra_text(self):
         """Test parsing formatted headings when LLM adds extra text."""
@@ -208,10 +208,10 @@ That's all!"""
         processor = self._create_mock_processor(mock_response)
         formatter = HeadingFormatter(processor=processor, prompt_template=_TEST_PROMPT_TEMPLATE)
 
-        formatted = formatter.format_headings(headings)
+        result = formatter.format_headings(headings)
 
-        assert len(formatted) == 1
-        assert formatted[0] == "# Title"
+        assert len(result.formatted_headings) == 1
+        assert result.formatted_headings[0] == "# Title"
 
     def test_parse_formatted_headings_count_mismatch(self):
         """Test handling count mismatch in LLM response."""
@@ -226,8 +226,12 @@ That's all!"""
         processor = self._create_mock_processor(mock_response)
         formatter = HeadingFormatter(processor=processor, prompt_template=_TEST_PROMPT_TEMPLATE)
 
-        with pytest.raises(RuntimeError, match="LLM API call failed"):
-            formatter.format_headings(headings)
+        result = formatter.format_headings(headings)
+        # With retry logic, the batch fails after retries and falls back to original headings
+        assert len(result.formatted_headings) == 2
+        assert result.formatted_headings[0] == "# Title"
+        assert result.formatted_headings[1] == "# Section"
+        assert result.stats.batches_failed == 1
 
     def test_load_prompt_from_file(self):
         """Test loading prompt template from file."""
@@ -293,9 +297,9 @@ That's all!"""
             prompt_template=_TEST_PROMPT_TEMPLATE,
             batch_size=50,
         )
-        formatted = formatter.format_headings(headings)
+        result = formatter.format_headings(headings)
 
-        assert len(formatted) == 100
+        assert len(result.formatted_headings) == 100
         assert call_count == 2  # 100 headings / 50 per batch = 2 batches
 
     def test_load_prompt_with_at_prefix(self, sample_config_file):

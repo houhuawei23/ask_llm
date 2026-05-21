@@ -203,6 +203,22 @@ class FormatHeadingConfig(BaseModel):
         ge=0,
         description="Number of previous headings for context in batch processing",
     )
+    retries: int = Field(
+        default=3,
+        ge=0,
+        le=10,
+        description="Maximum retry attempts per heading batch",
+    )
+    retry_delay: float = Field(
+        default=1.0,
+        gt=0,
+        description="Initial delay between retries in seconds",
+    )
+    retry_delay_max: float = Field(
+        default=10.0,
+        gt=0,
+        description="Maximum retry delay cap in seconds",
+    )
 
 
 class FormatBodyConfig(BaseModel):
@@ -222,6 +238,22 @@ class FormatBodyConfig(BaseModel):
         default=4,
         gt=0,
         description="Max concurrent API calls for body chunks",
+    )
+    retries: int = Field(
+        default=3,
+        ge=0,
+        le=10,
+        description="Maximum retry attempts per body chunk",
+    )
+    retry_delay: float = Field(
+        default=1.0,
+        gt=0,
+        description="Initial delay between retries in seconds",
+    )
+    retry_delay_max: float = Field(
+        default=10.0,
+        gt=0,
+        description="Maximum retry delay cap in seconds",
     )
 
 

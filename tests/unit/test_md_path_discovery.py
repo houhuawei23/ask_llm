@@ -58,3 +58,37 @@ class TestDiscoverMarkdownFiles:
         finally:
             os.chdir(old)
         assert len(out) == 2
+
+    def test_max_depth_zero(self, tmp_path: Path) -> None:
+        (tmp_path / "root.md").write_text("# A\n", encoding="utf-8")
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        (sub / "nested.md").write_text("# B\n", encoding="utf-8")
+        out = discover_markdown_files([str(tmp_path)], recursive=True, max_depth=0)
+        names = {p.name for p in out}
+        assert "root.md" in names
+        assert "nested.md" not in names
+
+    def test_max_depth_one(self, tmp_path: Path) -> None:
+        (tmp_path / "root.md").write_text("# A\n", encoding="utf-8")
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        (sub / "nested.md").write_text("# B\n", encoding="utf-8")
+        subsub = sub / "subsub"
+        subsub.mkdir()
+        (subsub / "deep.md").write_text("# C\n", encoding="utf-8")
+        out = discover_markdown_files([str(tmp_path)], recursive=True, max_depth=1)
+        names = {p.name for p in out}
+        assert "root.md" in names
+        assert "nested.md" in names
+        assert "deep.md" not in names
+
+    def test_max_depth_ignored_when_not_recursive(self, tmp_path: Path) -> None:
+        (tmp_path / "root.md").write_text("# A\n", encoding="utf-8")
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        (sub / "nested.md").write_text("# B\n", encoding="utf-8")
+        out = discover_markdown_files([str(tmp_path)], recursive=False, max_depth=0)
+        names = {p.name for p in out}
+        assert "root.md" in names
+        assert "nested.md" not in names

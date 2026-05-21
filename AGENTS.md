@@ -27,7 +27,10 @@ ask_llm/
 │   │   ├── batch.py          # Batch processing
 │   │   ├── translator.py     # Translation utilities
 │   │   ├── text_splitter.py  # Text splitting logic
-│   │   └── md_heading_formatter.py  # Markdown formatting
+│   │   ├── md_heading_formatter.py  # Markdown heading formatting
+│   │   ├── md_body_formatter.py     # Markdown body formatting
+│   │   ├── format_checkpoint.py     # Checkpoint persistence for resume
+│   │   └── format_markdown_file.py  # Single-file format workflow
 │   ├── config/               # Configuration management
 │   │   ├── loader.py         # Loads default_config.yml
 │   │   ├── unified_config.py # UnifiedConfig model
@@ -201,7 +204,7 @@ The tool uses a single `default_config.yml` for all settings. Run `ask-llm confi
 
 Search order: `--config` > `./default_config.yml` > `~/.config/ask_llm/` > `/etc/ask_llm/` > package built-in.
 
-Sections: `providers`, `general`, `translation`, `batch`, `file`, `format_heading`, `text_splitter`, `token`, `project_root_markers`.
+Sections: `providers`, `general`, `translation`, `batch`, `file`, `format_heading`, `format_body`, `text_splitter`, `token`, `paper`, `project_root_markers`.
 Use `${VAR}` in YAML for environment variable substitution.
 
 ### CLI Commands
@@ -214,6 +217,7 @@ Use `${VAR}` in YAML for environment variable substitution.
 | `ask-llm config show` | Display configuration |
 | `ask-llm config test` | Test API connections |
 | `ask-llm config init` | Generate default_config.yml template |
+| `ask-llm format [FILES]` | Format Markdown headings or body via LLM |
 
 ### Example Usage
 
@@ -229,6 +233,12 @@ ask-llm chat -i context.txt -s "You are a helpful assistant"
 
 # Batch processing
 ask-llm batch config.yml -o results.json --threads 10
+
+# Format Markdown
+ask-llm format doc.md --type title
+ask-llm format doc.md --type body
+ask-llm format ./notes_dir --max-depth 1
+ask-llm format doc.md --type body --resume doc.md.body_checkpoint.json
 ```
 
 ## Architecture Patterns
@@ -305,7 +315,7 @@ def test_heavy_computation():
 
 ### Adding a New Command
 
-1. Add command function in `src/ask_llm/cli.py` using `@app.command()`
+1. Add command function in `src/ask_llm/cli/commands/` using `@app.command()`
 2. Use type hints and `Annotated` for CLI arguments
 3. Use `console.print_*` methods for output
 4. Add tests in `tests/unit/` or `tests/integration/`

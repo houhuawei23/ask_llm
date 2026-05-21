@@ -24,8 +24,10 @@ from ask_llm.config.context import set_config
 from ask_llm.config.loader import ConfigLoader
 from ask_llm.config.manager import ConfigManager
 from ask_llm.core.format_markdown_file import format_body_markdown_file, format_one_markdown_file
+from ask_llm.core.md_body_formatter import BodyFormatter
 from ask_llm.core.processor import RequestProcessor
 from ask_llm.utils.console import console
+from ask_llm.utils.file_handler import FileHandler
 from ask_llm.utils.md_path_discovery import discover_markdown_files
 
 try:
@@ -178,6 +180,15 @@ def format_cmd(
             help="目录参数是否递归包含子目录中的 Markdown（默认：递归）",
         ),
     ] = True,
+    max_depth: Annotated[
+        int | None,
+        typer.Option(
+            "--max-depth",
+            "-d",
+            help="目录递归的最大深度（0=仅当前目录，1=当前+一级子目录，默认无限制）",
+            min=0,
+        ),
+    ] = None,
     workers: Annotated[
         int | None,
         typer.Option(
@@ -185,6 +196,39 @@ def format_cmd(
             "-j",
             min=1,
             help="并行处理文件数（多文件/目录批处理时生效；默认随 CPU 调整）",
+        ),
+    ] = None,
+    retries: Annotated[
+        int | None,
+        typer.Option(
+            "--retries",
+            "-r",
+            min=0,
+            help="每个 chunk/batch 的最大重试次数（默认见配置）",
+        ),
+    ] = None,
+    retry_delay: Annotated[
+        float | None,
+        typer.Option(
+            "--retry-delay",
+            help="初始重试延迟秒数（默认见配置）",
+            min=0.0,
+        ),
+    ] = None,
+    retry_delay_max: Annotated[
+        float | None,
+        typer.Option(
+            "--retry-delay-max",
+            help="最大重试延迟秒数（默认见配置）",
+            min=0.0,
+        ),
+    ] = None,
+    resume: Annotated[
+        str | None,
+        typer.Option(
+            "--resume",
+            "-R",
+            help="从 checkpoint 文件恢复未完成的格式化",
         ),
     ] = None,
 ) -> None:
@@ -206,8 +250,15 @@ def format_cmd(
         ask-llm format ./notes_dir -j 8 -o ./formatted_out/
         ask-llm format *.md --no-recursive
         ask-llm format doc.md --inplace
+        ask-llm format ./notes_dir --max-depth 1
+        ask-llm format doc.md --type body --resume doc.md.body_checkpoint.json
     """
     try:
+        # Handle --resume mode first
+        if resume:
+            _handle_resume(resume, output=output, inplace=inplace, force=force)
+            raise typer.Exit(0)
+
         load_result = ConfigLoader.load(config_path)
         set_config(load_result)
         config_manager = ConfigManager(load_result.app_config)
@@ -235,7 +286,7 @@ def format_cmd(
         llm_provider = create_provider_adapter(provider_config, default_model=default_model)
         processor = RequestProcessor(llm_provider)
 
-        resolved_paths = discover_markdown_files(files, recursive=recursive)
+        resolved_paths = discover_markdown_files(files, recursive=recursive, max_depth=max_depth)
         resolved_files: list[str] = [str(p) for p in resolved_paths]
 
         if not resolved_files:
@@ -253,9 +304,10 @@ def format_cmd(
 
         file_workers = workers if workers is not None else _default_file_workers()
 
+        depth_str = f"，最大深度={max_depth}" if max_depth is not None else ""
         console.print_info(
             f"待处理 {len(resolved_files)} 个 Markdown 文件"
-            f"（类型={type_lower}，目录递归={recursive}，并行数={file_workers}）"
+            f"（类型={type_lower}，目录递归={recursive}{depth_str}，并行数={file_workers}）"
         )
 
         use_parallel = len(resolved_files) > 1 and file_workers > 1
@@ -275,6 +327,9 @@ def format_cmd(
                 inplace=inplace,
                 force=force,
                 max_workers=file_workers,
+                retries=retries,
+                retry_delay=retry_delay,
+                retry_delay_max=retry_delay_max,
             )
         else:
             _run_sequential_format(
@@ -290,6 +345,9 @@ def format_cmd(
                 output=output,
                 inplace=inplace,
                 force=force,
+                retries=retries,
+                retry_delay=retry_delay,
+                retry_delay_max=retry_delay_max,
             )
 
     except FileNotFoundError as e:
@@ -308,6 +366,89 @@ def format_cmd(
         raise_unexpected_cli_error("format", e)
 
 
+def _handle_resume(
+    checkpoint_path: str,
+    *,
+    output: str | None,
+    inplace: bool,
+    force: bool,
+) -> None:
+    """Resume formatting from a checkpoint file."""
+    from ask_llm.config.context import get_config
+    from ask_llm.core.format_checkpoint import FormatCheckpoint
+
+    checkpoint = FormatCheckpoint.load(checkpoint_path)
+    source_file = checkpoint.source_file
+
+    console.print_info(f"从 checkpoint 恢复: {checkpoint_path}")
+    console.print_info(f"源文件: {source_file}")
+    console.print_info(
+        f"失败 chunk 数: {len(checkpoint.failed_chunks)}, "
+        f"成功 chunk 数: {len(checkpoint.successful_chunks)}"
+    )
+
+    # Load config and create provider
+    load_result = ConfigLoader.load()
+    set_config(load_result)
+    config_manager = ConfigManager(load_result.app_config)
+    provider_config = config_manager.get_provider_config()
+    default_model = config_manager.get_default_model()
+
+    if not default_model:
+        console.print_error("未指定模型。请使用 --model 或在配置中设置默认模型。")
+        raise typer.Exit(1)
+
+    llm_provider = create_provider_adapter(provider_config, default_model=default_model)
+    processor = RequestProcessor(llm_provider)
+
+    if checkpoint.format_type == "body":
+        result = BodyFormatter.resume_from_checkpoint(
+            checkpoint_path,
+            processor=processor,
+            model=default_model,
+        )
+    else:
+        # For title mode, re-run the full formatter with the original headings
+        # This is simpler than implementing a separate resume for headings
+        console.print_info("标题格式化暂不支持 checkpoint 恢复，请直接重新运行 format 命令。")
+        raise typer.Exit(1)
+
+    # Determine output path
+    if inplace:
+        out_path = source_file
+    elif output:
+        out_path = output
+    else:
+        out_path = FileHandler.generate_output_path(
+            source_file,
+            suffix=get_config().unified_config.file.formatted_suffix,
+        )
+
+    # Write output
+    try:
+        FileHandler.write(out_path, result.text, force=force or inplace)
+    except Exception as exc:
+        console.print_error(f"写入失败: {exc}")
+        raise typer.Exit(1) from exc
+
+    if result.failed_chunks:
+        console.print_warning(
+            f"部分成功: {len(result.failed_chunks)} 个 chunk 仍失败，原始内容已保留"
+        )
+        if result.checkpoint_path:
+            console.print_info(f"更新后的 checkpoint: {result.checkpoint_path}")
+    else:
+        console.print_success(f"全部完成！已保存: {out_path}")
+        # Clean up checkpoint if all succeeded
+        import os
+
+        try:
+            os.remove(checkpoint_path)
+            console.print_info(f"已删除 checkpoint: {checkpoint_path}")
+        except OSError:
+            pass
+
+
 def _run_sequential_format(
     resolved_files: list[str],
     *,
@@ -322,6 +463,9 @@ def _run_sequential_format(
     output: str | None,
     inplace: bool,
     force: bool,
+    retries: int | None,
+    retry_delay: float | None,
+    retry_delay_max: float | None,
 ) -> None:
     """Single-worker path: verbose per-file logging (legacy UX)."""
     successful_count = 0
@@ -373,6 +517,12 @@ def _run_sequential_format(
                     console.print(
                         f"  消耗 tokens: {outcome.total_input_tokens} -> {outcome.total_output_tokens}"
                     )
+            if outcome.failed_chunks:
+                console.print_warning(
+                    f"  部分失败: {len(outcome.failed_chunks)} 个 chunk/batch 失败，原始内容已保留"
+                )
+                if outcome.checkpoint_path:
+                    console.print_info(f"  可使用 --resume {outcome.checkpoint_path} 再次尝试")
         elif outcome.skipped:
             skipped_count += 1
             console.print_warning(f"跳过 {file_path}: {outcome.message}")
@@ -400,6 +550,9 @@ def _run_parallel_format(
     inplace: bool,
     force: bool,
     max_workers: int,
+    retries: int | None,
+    retry_delay: float | None,
+    retry_delay_max: float | None,
 ) -> None:
     """Process many files with a thread pool and a Rich progress bar."""
     successful_count = 0
@@ -479,6 +632,14 @@ def _run_parallel_format(
                                 outcome.output_path,
                                 outcome.total_input_tokens,
                                 outcome.total_output_tokens,
+                            )
+                        if outcome.failed_chunks:
+                            logger.warning(
+                                "部分失败 [{}]: {} 个 chunk/batch 失败，"
+                                "可使用 --resume {} 再次尝试",
+                                fp,
+                                len(outcome.failed_chunks),
+                                outcome.checkpoint_path,
                             )
                     elif outcome.skipped:
                         skipped_count += 1

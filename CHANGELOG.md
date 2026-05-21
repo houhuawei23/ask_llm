@@ -1,5 +1,29 @@
 # Changelog
 
+## 2.7.3 (2026-05-21)
+
+### Features
+
+- **Format command retry and checkpoint recovery**: `ask-llm format` now gracefully handles API timeouts and failures.
+  - **Per-chunk/batch retry**: Failed API calls are automatically retried with exponential backoff (`retry_delay * 2^attempt`, capped at `retry_delay_max`). Configurable via `--retries` / `--retry-delay` / `--retry-delay-max` CLI flags or `default_config.yml`.
+  - **Failure fallback**: After all retries are exhausted, failed chunks retain their original content while successful chunks keep their formatted results. The merged output is still saved.
+  - **Checkpoint persistence**: When chunks fail, a checkpoint file (`.body_checkpoint.json` / `.title_checkpoint.json`) is saved next to the source file, containing the full context needed to resume.
+  - **Resume support**: `ask-llm format --resume <checkpoint.json>` re-processes only the failed chunks and merges with previous successful results. Automatically deletes the checkpoint when all chunks succeed.
+  - **New CLI flags**: `--retries`, `--retry-delay`, `--retry-delay-max`, `--resume`.
+  - **New config fields**: `format_body.retries`, `format_body.retry_delay`, `format_body.retry_delay_max`, `format_heading.retries`, `format_heading.retry_delay`, `format_heading.retry_delay_max`.
+
+- **Directory recursion depth control**: `ask-llm format ./dir --max-depth N` limits how many levels of subdirectories to scan for Markdown files. `0` means only the top-level directory.
+
+### Refactors
+
+- **`BodyFormatter.format_body()`**: Now returns `BodyFormatResult` (dataclass with `text`, `stats`, `failed_chunks`, `checkpoint_path`) instead of `(str, stats)` tuple.
+- **`HeadingFormatter.format_headings()`**: Now returns `HeadingFormatResult` (dataclass with `formatted_headings`, `stats`, `failed_batches`, `checkpoint_path`) instead of `List[str]`.
+- **New `format_checkpoint.py` module**: Centralized checkpoint serialization/deserialization with `FormatCheckpoint`, `FailedChunkInfo`, `SuccessfulChunkInfo` data classes.
+
+### Contributors
+
+- Feature designed and implemented with assistance from **Kimi CLI** (agent) and **kimi-k2.6** (model).
+
 ## 2.7.2 (2026-05-21)
 
 ### Features

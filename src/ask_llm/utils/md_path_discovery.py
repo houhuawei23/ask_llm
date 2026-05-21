@@ -17,12 +17,33 @@ def _normalize_suffix(path: Path) -> bool:
     return path.suffix.lower() in MD_SUFFIXES
 
 
-def _iter_markdown_in_directory(directory: Path, *, recursive: bool) -> Iterable[Path]:
-    """Yield Markdown files under ``directory``."""
+def _iter_markdown_in_directory(
+    directory: Path,
+    *,
+    recursive: bool,
+    max_depth: int | None = None,
+) -> Iterable[Path]:
+    """Yield Markdown files under ``directory``.
+
+    Args:
+        directory: Root directory to search.
+        recursive: Whether to search subdirectories.
+        max_depth: Maximum depth to recurse. 0 means only the directory itself.
+            ``None`` means no limit. Ignored when ``recursive=False``.
+    """
     if recursive:
         for p in sorted(directory.rglob("*")):
-            if p.is_file() and _normalize_suffix(p):
-                yield p
+            if not p.is_file() or not _normalize_suffix(p):
+                continue
+            if max_depth is not None:
+                # Compute relative depth from directory root
+                try:
+                    rel_depth = len(p.relative_to(directory).parts) - 1
+                except ValueError:
+                    continue
+                if rel_depth > max_depth:
+                    continue
+            yield p
     else:
         for pattern in ("*.md", "*.markdown"):
             for p in sorted(directory.glob(pattern)):
@@ -52,6 +73,7 @@ def discover_markdown_files(
     patterns: Sequence[str],
     *,
     recursive: bool = True,
+    max_depth: int | None = None,
 ) -> list[Path]:
     """
     Resolve CLI patterns to a sorted, deduplicated list of Markdown file paths.
@@ -65,6 +87,9 @@ def discover_markdown_files(
     Args:
         patterns: Raw arguments from the CLI (file paths, dirs, globs)
         recursive: When the argument is a directory, search subdirectories
+        max_depth: Maximum recursion depth for directories.
+            ``0`` means only the top-level directory, ``None`` means unlimited.
+            Ignored when ``recursive=False``.
 
     Returns:
         Sorted unique paths to Markdown files
@@ -87,7 +112,9 @@ def discover_markdown_files(
         for path in expanded:
             path = path.resolve()
             if path.is_dir():
-                for md in _iter_markdown_in_directory(path, recursive=recursive):
+                for md in _iter_markdown_in_directory(
+                    path, recursive=recursive, max_depth=max_depth
+                ):
                     add(md)
             elif path.is_file():
                 if _normalize_suffix(path):

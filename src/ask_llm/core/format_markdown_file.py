@@ -11,6 +11,7 @@ from pathlib import Path
 from loguru import logger
 
 from ask_llm.config.context import get_config
+from ask_llm.core.format_checkpoint import FailedChunkInfo
 from ask_llm.core.md_body_formatter import BodyFormatter
 from ask_llm.core.md_heading_formatter import (
     HeadingApplier,
@@ -34,6 +35,8 @@ class FormatMarkdownOutcome:
     total_input_tokens: int = 0
     total_output_tokens: int = 0
     total_latency: float = 0.0
+    failed_chunks: list[FailedChunkInfo] | None = None
+    checkpoint_path: str | None = None
 
 
 def _validate_and_read(file_path: str) -> tuple[str | None, FormatMarkdownOutcome | None]:
@@ -179,7 +182,7 @@ def format_one_markdown_file(
             batch_size=heading_batch_size,
             concurrency=heading_concurrency,
         )
-        formatted_headings = formatter.format_headings(headings)
+        result = formatter.format_headings(headings, source_file=file_path)
     except Exception as exc:
         logger.exception("Heading format failed for {}", file_path)
         return FormatMarkdownOutcome(
@@ -191,7 +194,7 @@ def format_one_markdown_file(
 
     try:
         applier = HeadingApplier()
-        formatted_content = applier.apply(content, headings, formatted_headings)
+        formatted_content = applier.apply(content, headings, result.formatted_headings)
     except Exception as exc:
         logger.exception("Apply headings failed for {}", file_path)
         return FormatMarkdownOutcome(
@@ -205,13 +208,19 @@ def format_one_markdown_file(
     if not outcome.ok:
         return outcome
 
+    msg = "OK"
+    if result.failed_batches:
+        msg = f"Partial success: {len(result.failed_batches)} batch(es) failed, original headings preserved"
+
     return FormatMarkdownOutcome(
         source_path=file_path,
         ok=True,
         skipped=False,
-        message="OK",
+        message=msg,
         output_path=outcome.output_path,
         heading_count=len(headings),
+        failed_chunks=result.failed_batches or None,
+        checkpoint_path=result.checkpoint_path,
     )
 
 
@@ -255,7 +264,7 @@ def format_body_markdown_file(
             max_chunk_tokens=body_max_chunk_tokens,
             concurrency=body_concurrency,
         )
-        formatted_content, stats = formatter.format_body(content)
+        result = formatter.format_body(content, source_file=file_path)
     except Exception as exc:
         logger.exception("Body format failed for {}", file_path)
         return FormatMarkdownOutcome(
@@ -265,18 +274,27 @@ def format_body_markdown_file(
             message=str(exc),
         )
 
-    outcome = _write_output(file_path, formatted_content, output, inplace, force)
+    outcome = _write_output(file_path, result.text, output, inplace, force)
     if not outcome.ok:
         return outcome
+
+    msg = "OK"
+    if result.failed_chunks:
+        msg = (
+            f"Partial success: {len(result.failed_chunks)} chunk(s) failed, "
+            f"original content preserved"
+        )
 
     return FormatMarkdownOutcome(
         source_path=file_path,
         ok=True,
         skipped=False,
-        message="OK",
+        message=msg,
         output_path=outcome.output_path,
         heading_count=0,
-        total_input_tokens=stats.total_input_tokens,
-        total_output_tokens=stats.total_output_tokens,
-        total_latency=stats.total_latency,
+        total_input_tokens=result.stats.total_input_tokens,
+        total_output_tokens=result.stats.total_output_tokens,
+        total_latency=result.stats.total_latency,
+        failed_chunks=result.failed_chunks or None,
+        checkpoint_path=result.checkpoint_path,
     )

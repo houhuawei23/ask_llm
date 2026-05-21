@@ -5,14 +5,22 @@ and applies the formatted headings back to the original text.
 """
 
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from loguru import logger
 
 from ask_llm.config.context import get_config
+from ask_llm.core.format_checkpoint import (
+    FailedChunkInfo,
+    FormatCheckpoint,
+    SuccessfulChunkInfo,
+    generate_checkpoint_path,
+)
 from ask_llm.core.processor import RequestProcessor
 from ask_llm.utils.file_handler import FileHandler
 
@@ -67,6 +75,27 @@ class HeadingExtractor:
         return headings
 
 
+@dataclass
+class HeadingFormatResult:
+    """Result of heading formatting operation."""
+
+    formatted_headings: List[str]
+    stats: "HeadingFormatStats"
+    failed_batches: list[FailedChunkInfo] = field(default_factory=list)
+    checkpoint_path: str | None = None
+
+
+@dataclass
+class HeadingFormatStats:
+    """Statistics for heading formatting operation."""
+
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
+    total_latency: float = 0.0
+    batches_processed: int = 0
+    batches_failed: int = 0
+
+
 class HeadingFormatter:
     """Format headings using LLM API."""
 
@@ -82,6 +111,9 @@ class HeadingFormatter:
         prompt_file: Optional[str] = None,
         batch_size: Optional[int] = None,
         concurrency: Optional[int] = None,
+        retries: int | None = None,
+        retry_delay: float | None = None,
+        retry_delay_max: float | None = None,
     ):
         """
         Initialize heading formatter.
@@ -93,6 +125,9 @@ class HeadingFormatter:
             batch_size: Max headings per API call (default 80). Use smaller value
                 if LLM output is truncated.
             concurrency: Max concurrent API calls (default 4). Set to 1 to disable.
+            retries: Max retry attempts per batch (default from config)
+            retry_delay: Initial retry delay in seconds (default from config)
+            retry_delay_max: Max retry delay cap in seconds (default from config)
         """
         self.processor = processor
         self.prompt_template = prompt_template
@@ -100,6 +135,11 @@ class HeadingFormatter:
         fh_config = get_config().unified_config.format_heading
         self.batch_size = batch_size if batch_size is not None else fh_config.batch_size
         self.concurrency = concurrency if concurrency is not None else fh_config.concurrency
+        self.retries = retries if retries is not None else fh_config.retries
+        self.retry_delay = retry_delay if retry_delay is not None else fh_config.retry_delay
+        self.retry_delay_max = (
+            retry_delay_max if retry_delay_max is not None else fh_config.retry_delay_max
+        )
         self._context_heading_count = fh_config.context_heading_count
 
         # Load prompt from file if specified
@@ -138,7 +178,75 @@ class HeadingFormatter:
             take_last_only=bool(context_headings),
         )
 
-    def format_headings(self, headings: List[HeadingMatch]) -> List[str]:
+    @dataclass
+    class _BatchResult:
+        """Internal result for a single batch processing attempt."""
+
+        batch_idx: int
+        success: bool
+        formatted: List[str] = field(default_factory=list)
+        original_headings: List[str] = field(default_factory=list)
+        meta: Any = None
+        failed_info: FailedChunkInfo = field(
+            default_factory=lambda: FailedChunkInfo(0, "", "", "", 0)
+        )
+
+    def _process_batch_with_retries(
+        self,
+        batch: List[HeadingMatch],
+        template: str,
+        batch_idx: int,
+        total: int,
+        context_headings: Optional[List[str]] = None,
+    ) -> "HeadingFormatter._BatchResult":
+        """Process a single batch with retry logic."""
+        last_error = ""
+        batch_text = "\n".join(h.raw_text for h in batch)
+        for attempt in range(self.retries + 1):
+            try:
+                formatted = self._process_batch(batch, template, batch_idx, total, context_headings)
+                return HeadingFormatter._BatchResult(
+                    batch_idx=batch_idx,
+                    success=True,
+                    formatted=formatted,
+                    original_headings=[h.raw_text for h in batch],
+                )
+            except Exception as e:
+                last_error = str(e)
+                if attempt < self.retries:
+                    delay = min(
+                        self.retry_delay * (2**attempt),
+                        self.retry_delay_max,
+                    )
+                    logger.warning(
+                        f"[HeadingFormat] batch {batch_idx + 1} failed (attempt {attempt + 1}/"
+                        f"{self.retries + 1}): {last_error}. Retrying in {delay:.1f}s..."
+                    )
+                    time.sleep(delay)
+                else:
+                    logger.error(
+                        f"[HeadingFormat] batch {batch_idx + 1} failed after "
+                        f"{self.retries + 1} attempts: {last_error}"
+                    )
+
+        return HeadingFormatter._BatchResult(
+            batch_idx=batch_idx,
+            success=False,
+            original_headings=[h.raw_text for h in batch],
+            failed_info=FailedChunkInfo(
+                chunk_id=batch_idx,
+                content=batch_text,
+                prompt_template=template,
+                error=last_error,
+                retry_count=self.retries + 1,
+            ),
+        )
+
+    def format_headings(
+        self,
+        headings: List[HeadingMatch],
+        source_file: str | None = None,
+    ) -> HeadingFormatResult:
         """
         Format headings using LLM API.
 
@@ -146,18 +254,24 @@ class HeadingFormatter:
         Each batch (except the first) receives the last N original headings
         from the previous batch as context (enables concurrent + level consistency).
 
+        Failed batches (after all retries) retain original headings.
+
         Args:
             headings: List of heading matches to format
+            source_file: Optional source file path for checkpoint naming
 
         Returns:
-            List of formatted heading strings (one per heading)
+            HeadingFormatResult with formatted headings and stats
 
         Raises:
-            ValueError: If LLM response cannot be parsed
-            RuntimeError: If LLM API call fails
+            ValueError: If prompt template is missing
         """
         if not headings:
-            return []
+            return HeadingFormatResult(
+                formatted_headings=[],
+                stats=HeadingFormatStats(),
+                failed_batches=[],
+            )
 
         template = self.prompt_template
         if not template and self.prompt_file:
@@ -184,47 +298,96 @@ class HeadingFormatter:
             batch_idx: int,
             batch: List[HeadingMatch],
             context_headings: Optional[List[str]],
-        ) -> tuple[int, List[str]]:
+        ) -> HeadingFormatter._BatchResult:
             logger.info(
                 f"Formatting headings {batch_idx + 1}-{batch_idx + len(batch)} "
                 f"of {len(headings)} (batch size: {len(batch)})"
             )
-            formatted = self._process_batch(
-                batch,
-                template,
-                batch_idx,
-                len(headings),
-                context_headings=context_headings,
+            return self._process_batch_with_retries(
+                batch, template, batch_idx, len(headings), context_headings
             )
-            return batch_idx, formatted
 
-        try:
-            if max_workers <= 1:
-                all_formatted = []
-                for i, batch, ctx in batches:
-                    _, formatted = process_batch(i, batch, ctx)
-                    all_formatted.extend(formatted)
-                return all_formatted
+        batch_results: dict[int, HeadingFormatter._BatchResult] = {}
 
+        if max_workers <= 1:
+            for i, batch, ctx in batches:
+                batch_results[i] = process_batch(i, batch, ctx)
+        else:
             logger.info(
                 f"Formatting {len(headings)} headings in {len(batches)} batches "
                 f"(concurrency: {max_workers})"
             )
-            batch_results: dict[int, List[str]] = {}
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 futures = {
                     executor.submit(process_batch, i, batch, ctx): i for i, batch, ctx in batches
                 }
                 for future in as_completed(futures):
-                    batch_idx, formatted = future.result()
-                    batch_results[batch_idx] = formatted
+                    bidx = futures[future]
+                    batch_results[bidx] = future.result()
 
-            return [
-                heading for idx in sorted(batch_results.keys()) for heading in batch_results[idx]
-            ]
-        except Exception as e:
-            logger.error(f"Failed to format headings batch: {e}")
-            raise RuntimeError(f"LLM API call failed: {e}") from e
+        # Collect results in order
+        stats = HeadingFormatStats()
+        failed_batches: list[FailedChunkInfo] = []
+        all_formatted: List[str] = []
+
+        for bidx in sorted(batch_results.keys()):
+            res = batch_results[bidx]
+            if res.success:
+                all_formatted.extend(res.formatted)
+                stats.batches_processed += 1
+                logger.info(
+                    f"[HeadingFormat] batch {bidx + 1}/{len(batches)} completed: "
+                    f"{len(res.formatted)} headings"
+                )
+            else:
+                all_formatted.extend(res.original_headings)
+                stats.batches_failed += 1
+                failed_batches.append(res.failed_info)
+                logger.warning(
+                    f"[HeadingFormat] batch {bidx + 1}/{len(batches)} FAILED: {res.failed_info.error}"
+                )
+
+        logger.info(
+            f"[HeadingFormat] all {len(batches)} batches done: "
+            f"success={stats.batches_processed}, failed={stats.batches_failed}"
+        )
+
+        # Save checkpoint if any batches failed
+        checkpoint_path: str | None = None
+        if failed_batches and source_file:
+            checkpoint_path = str(generate_checkpoint_path(source_file, "title"))
+            successful = []
+            offset = 0
+            for bidx in sorted(batch_results.keys()):
+                res = batch_results[bidx]
+                if res.success:
+                    for fh in res.formatted:
+                        successful.append(
+                            SuccessfulChunkInfo(chunk_id=offset, formatted_content=fh)
+                        )
+                        offset += 1
+                else:
+                    offset += len(res.original_headings)
+
+            checkpoint = FormatCheckpoint(
+                version=1,
+                source_file=source_file,
+                format_type="title",
+                model="",
+                prompt_template=template,
+                max_chunk_tokens=None,
+                created_at=datetime.now().isoformat(),
+                failed_chunks=failed_batches,
+                successful_chunks=successful,
+            )
+            checkpoint.save(checkpoint_path)
+
+        return HeadingFormatResult(
+            formatted_headings=all_formatted,
+            stats=stats,
+            failed_batches=failed_batches,
+            checkpoint_path=checkpoint_path,
+        )
 
     def _parse_formatted_headings(
         self,
@@ -324,6 +487,7 @@ class HeadingFormatter:
             if project_root:
                 prompt_file = project_root / relative_path.lstrip("/")
             else:
+                # Fallback to current directory
                 prompt_file = Path(relative_path.lstrip("/"))
         else:
             prompt_file = Path(prompt_path)

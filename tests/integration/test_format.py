@@ -84,12 +84,12 @@ Content for second section.
             formatter = HeadingFormatter(processor=processor, prompt_template="Format: {content}")
 
             # Format headings
-            formatted_headings = formatter.format_headings(headings)
-            assert len(formatted_headings) == 4
+            result = formatter.format_headings(headings)
+            assert len(result.formatted_headings) == 4
 
             # Apply formatting
             applier = HeadingApplier()
-            formatted_content = applier.apply(test_content, headings, formatted_headings)
+            formatted_content = applier.apply(test_content, headings, result.formatted_headings)
 
             # Verify formatting
             assert "## 1 First Section" in formatted_content
@@ -118,8 +118,8 @@ Just paragraphs.
         processor = self._create_mock_processor("")
         formatter = HeadingFormatter(processor=processor, prompt_template="Format: {content}")
 
-        formatted = formatter.format_headings(headings)
-        assert len(formatted) == 0
+        result = formatter.format_headings(headings)
+        assert len(result.formatted_headings) == 0
 
     def test_format_output_path(self):
         """Test output path generation."""
@@ -201,10 +201,10 @@ More content.
 
         processor = self._create_mock_processor(mock_response)
         formatter = HeadingFormatter(processor=processor, prompt_template="Format: {content}")
-        formatted_headings = formatter.format_headings(headings)
+        result = formatter.format_headings(headings)
 
         applier = HeadingApplier()
-        formatted_content = applier.apply(test_content, headings, formatted_headings)
+        formatted_content = applier.apply(test_content, headings, result.formatted_headings)
 
         # Verify formatting applied
         assert "## 1 Section One" in formatted_content
@@ -238,8 +238,8 @@ More content.
 
             assert "Custom format prompt" in formatter.prompt_template
 
-            formatted = formatter.format_headings(headings)
-            assert len(formatted) == 2
+            result = formatter.format_headings(headings)
+            assert len(result.formatted_headings) == 2
 
         finally:
             Path(prompt_path).unlink()
@@ -263,5 +263,8 @@ Content.
 
         formatter = HeadingFormatter(processor=processor, prompt_template="Format: {content}")
 
-        with pytest.raises(RuntimeError, match="LLM API call failed"):
-            formatter.format_headings(headings)
+        # With retry logic, the batch fails after retries and falls back to original headings
+        result = formatter.format_headings(headings)
+        assert len(result.formatted_headings) == 1
+        assert result.formatted_headings[0] == "# Title"
+        assert result.stats.batches_failed == 1

@@ -6,13 +6,22 @@ formats each chunk concurrently via LLM API, and merges the results.
 
 from __future__ import annotations
 
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 from loguru import logger
 
 from ask_llm.config.context import get_config
+from ask_llm.core.format_checkpoint import (
+    CHECKPOINT_VERSION,
+    FailedChunkInfo,
+    FormatCheckpoint,
+    SuccessfulChunkInfo,
+    generate_checkpoint_path,
+)
 from ask_llm.core.markdown_token_splitter import MarkdownTokenSplitter
 from ask_llm.core.processor import RequestProcessor
 from ask_llm.core.text_splitter import TextChunk
@@ -27,6 +36,29 @@ class BodyFormatStats:
     total_output_tokens: int = 0
     total_latency: float = 0.0
     chunks_processed: int = 0
+    chunks_failed: int = 0
+
+
+@dataclass
+class BodyFormatResult:
+    """Result of a body formatting operation, including any failed chunks."""
+
+    text: str
+    stats: BodyFormatStats
+    failed_chunks: list[FailedChunkInfo] = field(default_factory=list)
+    checkpoint_path: str | None = None
+
+
+@dataclass
+class _ChunkResult:
+    """Internal result for a single chunk processing attempt."""
+
+    chunk_id: int
+    success: bool
+    formatted: str = ""
+    original: str = ""
+    meta: object = None
+    failed_info: FailedChunkInfo = field(default_factory=lambda: FailedChunkInfo(0, "", "", "", 0))
 
 
 class BodyFormatter:
@@ -40,6 +72,9 @@ class BodyFormatter:
         prompt_file: str | None = None,
         max_chunk_tokens: int | None = None,
         concurrency: int | None = None,
+        retries: int | None = None,
+        retry_delay: float | None = None,
+        retry_delay_max: float | None = None,
     ):
         """Initialize body formatter.
 
@@ -50,6 +85,9 @@ class BodyFormatter:
             prompt_file: Path to prompt template file (overrides prompt_template)
             max_chunk_tokens: Max tokens per chunk (default from config)
             concurrency: Max concurrent API calls (default from config)
+            retries: Max retry attempts per chunk (default from config)
+            retry_delay: Initial retry delay in seconds (default from config)
+            retry_delay_max: Max retry delay cap in seconds (default from config)
         """
         self.processor = processor
         self.model = model
@@ -61,31 +99,44 @@ class BodyFormatter:
             max_chunk_tokens if max_chunk_tokens is not None else fb_config.max_chunk_tokens
         )
         self.concurrency = concurrency if concurrency is not None else fb_config.concurrency
+        self.retries = retries if retries is not None else fb_config.retries
+        self.retry_delay = retry_delay if retry_delay is not None else fb_config.retry_delay
+        self.retry_delay_max = (
+            retry_delay_max if retry_delay_max is not None else fb_config.retry_delay_max
+        )
 
         # Load prompt from file if specified
         if prompt_file:
             self.prompt_template = self._load_prompt_from_file(prompt_file)
 
-    def format_body(self, text: str) -> tuple[str, BodyFormatStats]:
+    def format_body(
+        self,
+        text: str,
+        source_file: str | None = None,
+    ) -> BodyFormatResult:
         """Format markdown body by splitting into chunks and processing each.
 
         Uses MarkdownTokenSplitter for heading-aware splitting, then processes
         chunks concurrently via ThreadPoolExecutor, and merges results in order.
 
+        Failed chunks (after all retries) are recorded and the original content
+        is preserved. A checkpoint file is saved if any chunks fail.
+
         Args:
             text: Markdown text content
+            source_file: Optional source file path for checkpoint naming
 
         Returns:
-            Tuple of (formatted markdown text, statistics)
+            BodyFormatResult with formatted text, stats, and failed chunk info
 
         Raises:
             ValueError: If prompt template is missing
-            RuntimeError: If LLM API call fails
         """
         stats = BodyFormatStats()
+        failed_chunks: list[FailedChunkInfo] = []
 
         if not text.strip():
-            return "", stats
+            return BodyFormatResult(text="", stats=stats, failed_chunks=[])
 
         template = self.prompt_template
         if not template and self.prompt_file:
@@ -104,67 +155,68 @@ class BodyFormatter:
         chunks = splitter.split(text)
 
         if not chunks:
-            return text, stats
+            return BodyFormatResult(text=text, stats=stats, failed_chunks=[])
 
         # Calculate total document tokens
         total_doc_tokens = sum(splitter._tok(chunk.content) for chunk in chunks)
         logger.info(
             f"[BodyFormat] model={self.model}, total_doc_tokens≈{total_doc_tokens}, "
-            f"chunks={len(chunks)}, concurrency={min(self.concurrency, len(chunks))}"
+            f"chunks={len(chunks)}, concurrency={min(self.concurrency, len(chunks))}, "
+            f"retries={self.retries}"
         )
 
         if len(chunks) == 1:
             logger.debug("Single chunk, processing directly")
-            _, formatted, meta = self._process_chunk(chunks[0], template)
-            stats.total_input_tokens = meta.input_tokens
-            stats.total_output_tokens = meta.output_tokens
-            stats.total_latency = meta.latency
-            stats.chunks_processed = 1
-            logger.info(
-                f"[BodyFormat] chunk 1/1 completed: "
-                f"{meta.input_tokens} -> {meta.output_tokens} tokens in {meta.latency:.2f}s"
-            )
-            return formatted, stats
+            result = self._process_chunk_with_retries(chunks[0], template)
+            if result.success:
+                stats.total_input_tokens = result.meta.input_tokens
+                stats.total_output_tokens = result.meta.output_tokens
+                stats.total_latency = result.meta.latency
+                stats.chunks_processed = 1
+                logger.info(
+                    f"[BodyFormat] chunk 1/1 completed: "
+                    f"{result.meta.input_tokens} -> {result.meta.output_tokens} tokens "
+                    f"in {result.meta.latency:.2f}s"
+                )
+                return BodyFormatResult(
+                    text=result.formatted,
+                    stats=stats,
+                    failed_chunks=[],
+                )
+            else:
+                stats.chunks_failed = 1
+                failed_chunks.append(result.failed_info)
+                logger.warning(
+                    f"[BodyFormat] chunk 1/1 failed after {self.retries} retries: "
+                    f"{result.failed_info.error}"
+                )
+                return BodyFormatResult(
+                    text=chunks[0].content,
+                    stats=stats,
+                    failed_chunks=failed_chunks,
+                )
 
         # Process chunks concurrently
         max_workers = min(self.concurrency, len(chunks))
 
-        def process_chunk_wrapper(chunk: TextChunk) -> tuple[int, str, object]:
+        def process_chunk_wrapper(chunk: TextChunk) -> _ChunkResult:
             logger.info(
                 f"[BodyFormat] chunk {chunk.chunk_id + 1}/{len(chunks)} start "
                 f"(tokens: ~{splitter._tok(chunk.content)}, pos: {chunk.start_pos}-{chunk.end_pos})"
             )
-            return self._process_chunk(chunk, template)
+            return self._process_chunk_with_retries(chunk, template)
 
-        try:
-            if max_workers <= 1:
-                # Sequential processing
-                results = {}
-                for chunk in chunks:
-                    chunk_id, formatted, meta = process_chunk_wrapper(chunk)
-                    results[chunk_id] = formatted
-                    stats.total_input_tokens += meta.input_tokens
-                    stats.total_output_tokens += meta.output_tokens
-                    stats.total_latency += meta.latency
-                    stats.chunks_processed += 1
-                    logger.info(
-                        f"[BodyFormat] chunk {chunk_id + 1}/{len(chunks)} completed: "
-                        f"{meta.input_tokens} -> {meta.output_tokens} tokens in {meta.latency:.2f}s"
-                    )
-                sorted_chunks = [results[i] for i in range(len(chunks))]
-                logger.info(
-                    f"[BodyFormat] all {len(chunks)} chunks done: "
-                    f"total {stats.total_input_tokens} -> {stats.total_output_tokens} tokens "
-                    f"in {stats.total_latency:.2f}s"
-                )
-                return self._join_chunks(sorted_chunks), stats
+        chunk_results: dict[int, _ChunkResult] = {}
 
+        if max_workers <= 1:
+            # Sequential processing
+            for chunk in chunks:
+                chunk_results[chunk.chunk_id] = process_chunk_wrapper(chunk)
+        else:
             logger.info(
                 f"[BodyFormat] processing {len(chunks)} chunks concurrently "
                 f"(max_workers={max_workers}, max_chunk_tokens={self.max_chunk_tokens})"
             )
-
-            results: dict[int, str] = {}
             with ThreadPoolExecutor(
                 max_workers=max_workers, thread_name_prefix="format-body"
             ) as executor:
@@ -173,32 +225,127 @@ class BodyFormatter:
                     for chunk in chunks
                 }
                 for future in as_completed(futures):
-                    chunk_id, formatted, meta = future.result()
-                    results[chunk_id] = formatted
-                    stats.total_input_tokens += meta.input_tokens
-                    stats.total_output_tokens += meta.output_tokens
-                    stats.total_latency += meta.latency
-                    stats.chunks_processed += 1
-                    logger.info(
-                        f"[BodyFormat] chunk {chunk_id + 1}/{len(chunks)} completed: "
-                        f"{meta.input_tokens} -> {meta.output_tokens} tokens in {meta.latency:.2f}s"
+                    cid = futures[future]
+                    chunk_results[cid] = future.result()
+
+        # Collect results in order
+        sorted_results: list[_ChunkResult] = [chunk_results[i] for i in range(len(chunks))]
+        final_chunks: list[str] = []
+        for res in sorted_results:
+            if res.success:
+                final_chunks.append(res.formatted)
+                stats.total_input_tokens += res.meta.input_tokens
+                stats.total_output_tokens += res.meta.output_tokens
+                stats.total_latency += res.meta.latency
+                stats.chunks_processed += 1
+                logger.info(
+                    f"[BodyFormat] chunk {res.chunk_id + 1}/{len(chunks)} completed: "
+                    f"{res.meta.input_tokens} -> {res.meta.output_tokens} tokens "
+                    f"in {res.meta.latency:.2f}s"
+                )
+            else:
+                final_chunks.append(res.original)
+                stats.chunks_failed += 1
+                failed_chunks.append(res.failed_info)
+                logger.warning(
+                    f"[BodyFormat] chunk {res.chunk_id + 1}/{len(chunks)} FAILED: "
+                    f"{res.failed_info.error}"
+                )
+
+        logger.info(
+            f"[BodyFormat] all {len(chunks)} chunks done: "
+            f"success={stats.chunks_processed}, failed={stats.chunks_failed}, "
+            f"total {stats.total_input_tokens} -> {stats.total_output_tokens} tokens "
+            f"in {stats.total_latency:.2f}s"
+        )
+
+        formatted_text = self._join_chunks(final_chunks)
+
+        # Save checkpoint if any chunks failed
+        checkpoint_path: str | None = None
+        if failed_chunks and source_file:
+            checkpoint_path = str(generate_checkpoint_path(source_file, "body"))
+            successful = [
+                SuccessfulChunkInfo(
+                    chunk_id=i,
+                    formatted_content=sr.formatted,
+                )
+                for i, sr in enumerate(sorted_results)
+                if sr.success
+            ]
+            checkpoint = FormatCheckpoint(
+                version=1,
+                source_file=source_file,
+                format_type="body",
+                model=self.model,
+                prompt_template=template,
+                max_chunk_tokens=self.max_chunk_tokens,
+                created_at=datetime.now().isoformat(),
+                failed_chunks=failed_chunks,
+                successful_chunks=successful,
+            )
+            checkpoint.save(checkpoint_path)
+
+        return BodyFormatResult(
+            text=formatted_text,
+            stats=stats,
+            failed_chunks=failed_chunks,
+            checkpoint_path=checkpoint_path,
+        )
+
+    def _process_chunk_with_retries(self, chunk: TextChunk, template: str) -> _ChunkResult:
+        """Process a single chunk with retry logic.
+
+        Args:
+            chunk: Text chunk to format
+            template: Prompt template
+
+        Returns:
+            _ChunkResult with success/failure info
+        """
+        last_error = ""
+        for attempt in range(self.retries + 1):
+            try:
+                chunk_id, formatted, meta = self._process_chunk(chunk, template)
+                return _ChunkResult(
+                    chunk_id=chunk_id,
+                    success=True,
+                    formatted=formatted,
+                    meta=meta,
+                )
+            except Exception as e:
+                last_error = str(e)
+                if attempt < self.retries:
+                    delay = min(
+                        self.retry_delay * (2**attempt),
+                        self.retry_delay_max,
+                    )
+                    logger.warning(
+                        f"[BodyFormat] chunk {chunk.chunk_id + 1} failed (attempt {attempt + 1}/"
+                        f"{self.retries + 1}): {last_error}. Retrying in {delay:.1f}s..."
+                    )
+                    time.sleep(delay)
+                else:
+                    logger.error(
+                        f"[BodyFormat] chunk {chunk.chunk_id + 1} failed after "
+                        f"{self.retries + 1} attempts: {last_error}"
                     )
 
-            # Merge in original order
-            sorted_chunks = [results[i] for i in range(len(chunks))]
-            logger.info(
-                f"[BodyFormat] all {len(chunks)} chunks done: "
-                f"total {stats.total_input_tokens} -> {stats.total_output_tokens} tokens "
-                f"in {stats.total_latency:.2f}s"
-            )
-            return self._join_chunks(sorted_chunks), stats
-
-        except Exception as e:
-            logger.error(f"Failed to format body chunk: {e}")
-            raise RuntimeError(f"LLM API call failed: {e}") from e
+        return _ChunkResult(
+            chunk_id=chunk.chunk_id,
+            success=False,
+            original=chunk.content,
+            failed_info=FailedChunkInfo(
+                chunk_id=chunk.chunk_id,
+                content=chunk.content,
+                prompt_template=template,
+                error=last_error,
+                retry_count=self.retries + 1,
+            ),
+        )
 
     def _process_chunk(self, chunk: TextChunk, template: str) -> tuple[int, str, object]:
-        """Process a single chunk via LLM API.
+        """Process a single chunk via LLM API (no retries).
 
         Args:
             chunk: Text chunk to format
@@ -236,6 +383,104 @@ class BodyFormatter:
             # Normalize trailing/leading newlines and ensure a blank line
             result = result.rstrip("\n") + "\n\n" + chunk.lstrip("\n")
         return result
+
+    @classmethod
+    def resume_from_checkpoint(
+        cls,
+        checkpoint_path: str,
+        processor: RequestProcessor,
+        model: str,
+    ) -> BodyFormatResult:
+        """Resume formatting from a checkpoint file.
+
+        Loads the checkpoint, re-processes only the failed chunks, and merges
+        with previously successful results.
+
+        Args:
+            checkpoint_path: Path to checkpoint JSON file
+            processor: RequestProcessor instance
+            model: Model name
+
+        Returns:
+            BodyFormatResult with complete formatted text
+        """
+        checkpoint = FormatCheckpoint.load(checkpoint_path)
+        logger.info(
+            f"[BodyFormat] Resuming from checkpoint: {checkpoint_path}, "
+            f"failed_chunks={len(checkpoint.failed_chunks)}, "
+            f"successful_chunks={len(checkpoint.successful_chunks)}"
+        )
+
+        formatter = cls(
+            processor=processor,
+            model=model or checkpoint.model,
+            prompt_template=checkpoint.prompt_template,
+            max_chunk_tokens=checkpoint.max_chunk_tokens,
+        )
+
+        stats = BodyFormatStats()
+        still_failed: list[FailedChunkInfo] = []
+
+        # Build result map from successful chunks
+        result_map: dict[int, str] = {
+            sc.chunk_id: sc.formatted_content for sc in checkpoint.successful_chunks
+        }
+
+        # Retry failed chunks
+        for fc in checkpoint.failed_chunks:
+            chunk = TextChunk(
+                content=fc.content,
+                chunk_id=fc.chunk_id,
+            )
+            res = formatter._process_chunk_with_retries(chunk, fc.prompt_template)
+            if res.success:
+                result_map[fc.chunk_id] = res.formatted
+                stats.total_input_tokens += res.meta.input_tokens
+                stats.total_output_tokens += res.meta.output_tokens
+                stats.total_latency += res.meta.latency
+                stats.chunks_processed += 1
+                logger.info(f"[BodyFormat] resumed chunk {fc.chunk_id + 1} succeeded")
+            else:
+                result_map[fc.chunk_id] = fc.content
+                stats.chunks_failed += 1
+                still_failed.append(res.failed_info)
+                logger.warning(
+                    f"[BodyFormat] resumed chunk {fc.chunk_id + 1} still failed: {res.failed_info.error}"
+                )
+
+        # Merge in order
+        all_ids = sorted(result_map.keys())
+        final_chunks = [result_map[i] for i in all_ids]
+        formatted_text = cls._join_chunks(final_chunks)
+
+        # Save updated checkpoint if still failing
+        checkpoint_path_updated: str | None = None
+        if still_failed:
+            checkpoint_path_updated = checkpoint_path
+            successful = [
+                SuccessfulChunkInfo(chunk_id=cid, formatted_content=result_map[cid])
+                for cid in all_ids
+                if cid not in {f.chunk_id for f in still_failed}
+            ]
+            updated = FormatCheckpoint(
+                version=CHECKPOINT_VERSION,
+                source_file=checkpoint.source_file,
+                format_type=checkpoint.format_type,
+                model=checkpoint.model,
+                prompt_template=checkpoint.prompt_template,
+                max_chunk_tokens=checkpoint.max_chunk_tokens,
+                created_at=datetime.now().isoformat(),
+                failed_chunks=still_failed,
+                successful_chunks=successful,
+            )
+            updated.save(checkpoint_path)
+
+        return BodyFormatResult(
+            text=formatted_text,
+            stats=stats,
+            failed_chunks=still_failed,
+            checkpoint_path=checkpoint_path_updated,
+        )
 
     @staticmethod
     def _load_prompt_from_file(prompt_path: str) -> str:
