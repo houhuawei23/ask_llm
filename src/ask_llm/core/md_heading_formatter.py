@@ -37,15 +37,44 @@ class HeadingMatch:
 
 
 class HeadingExtractor:
-    """Extract headings from markdown text."""
+    """Extract headings from markdown text, excluding code blocks."""
 
     # Regex to match markdown headings: # Title, ## Title, etc.
     HEADING_PATTERN = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
 
+    # Regex to match markdown code fences: ``` or ~~~ (with optional language)
+    CODE_FENCE_PATTERN = re.compile(r"^(```|~~~).*$", re.MULTILINE)
+
+    @classmethod
+    def _find_code_block_ranges(cls, text: str) -> List[tuple[int, int]]:
+        """Find ranges of code blocks in markdown text.
+
+        Returns:
+            List of (start, end) tuples for each code block.
+        """
+        ranges = []
+        in_code_block = False
+        block_start = 0
+
+        for match in cls.CODE_FENCE_PATTERN.finditer(text):
+            if not in_code_block:
+                block_start = match.start()
+                in_code_block = True
+            else:
+                # End of code block (match.end() includes the newline after fence)
+                ranges.append((block_start, match.end()))
+                in_code_block = False
+
+        # Handle unclosed code block (treat rest of text as code block)
+        if in_code_block:
+            ranges.append((block_start, len(text)))
+
+        return ranges
+
     @classmethod
     def extract(cls, text: str) -> List[HeadingMatch]:
         """
-        Extract all headings from markdown text.
+        Extract all headings from markdown text, excluding those inside code blocks.
 
         Args:
             text: Markdown text content
@@ -53,12 +82,19 @@ class HeadingExtractor:
         Returns:
             List of HeadingMatch objects in order of appearance
         """
+        code_ranges = cls._find_code_block_ranges(text)
+
         headings = []
         for match in cls.HEADING_PATTERN.finditer(text):
+            start_pos = match.start()
+
+            # Skip headings inside code blocks
+            if any(start <= start_pos < end for start, end in code_ranges):
+                continue
+
             level = len(match.group(1))  # Number of # characters
             title = match.group(2).strip()
             raw_text = match.group(0)  # Full match including # and title
-            start_pos = match.start()
             end_pos = match.end()
 
             headings.append(

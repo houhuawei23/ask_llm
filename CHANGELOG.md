@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.7.5 (2026-05-29)
+
+### Fixes
+
+- **`ask-llm format --type title` no longer formats headings inside code blocks**.
+  - `HeadingExtractor` now detects Markdown code fences (`` ``` `` and `~~~`) and skips any headings that appear within code block ranges.
+  - This prevents LLM from reformatting example Markdown headings inside `` ```md `` or other fenced code blocks, which was an unintended side effect.
+  - Handles both closed and unclosed code blocks (unclosed blocks are treated as code until end of file).
+
+### Contributors
+
+- Fix designed and implemented with assistance from **Kimi CLI** (agent) and **kimi-k2.6** (model).
+
 ## 2.7.4 (2026-05-29)
 
 ### Features
