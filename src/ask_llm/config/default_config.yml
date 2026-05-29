@@ -21,14 +21,14 @@ translation:
   target_language: zh
   source_language: auto
   style: formal
-  threads: 20                    # Single-file concurrent API calls (max_concurrent_api_calls)
+  threads: 32                    # Single-file concurrent API calls (max_concurrent_api_calls)
   max_parallel_files: 3          # Max files processed in parallel when translating a directory
-  max_concurrent_api_calls: 20   # Per-file concurrent API calls (alias for threads)
+  max_concurrent_api_calls: 32   # Per-file concurrent API calls (alias for threads)
   retries: 3
   balance_translation_chunks: true   # split/merge by tiktoken so parallel requests are similar cost
-  max_chunk_tokens: 3000            # target max body tokens per chunk after rebalance
+  max_chunk_tokens: 6000            # target max body tokens per chunk after rebalance
   max_output_tokens: 8192           # completion cap per chunk (avoid truncation vs llm_engine default 2000)
-  min_chunk_merge_tokens: 1500        # unused (compat); bodies merge if combined ≤ max_chunk_tokens
+  min_chunk_merge_tokens: 3000        # unused (compat); bodies merge if combined ≤ max_chunk_tokens
   preserve_format: true
   include_original: false
   temperature: null             # null uses provider default
@@ -63,7 +63,7 @@ file:
 # === 5. Markdown Heading Formatting ===
 format_heading:
   default_prompt_file: "@prompts/md-heading-format.md"
-  batch_size: 80
+  batch_size: 160
   concurrency: 8
   context_heading_count: 5
   retries: 3
@@ -74,7 +74,7 @@ format_heading:
 format_body:
   default_prompt_file: "@prompts/md-body-format.md"
   max_chunk_tokens: 2400
-  concurrency: 8
+  concurrency: 32
   retries: 3
   retry_delay: 1.0
   retry_delay_max: 10.0
@@ -93,7 +93,7 @@ paper:
   output_subdir: explain
   prompt_dir: "@prompts/paper"
   pipeline_config: "@prompts/paper-explain-pipeline.yml"  # job key → prompt file mapping
-  concurrency: 20                # parallel LLM calls (I/O-bound; cap to respect rate limits)
+  concurrency: 32                # parallel LLM calls (I/O-bound; cap to respect rate limits)
   max_output_tokens: 65536         # clamped per model by providers.yml max_output.maximum
   full_model: deepseek-reasoner    # full-text job only; saves reasoning_content when API returns it
   request_timeout_seconds: 600.0  # HTTP timeout (default provider timeout is often 60s; reasoner needs more)

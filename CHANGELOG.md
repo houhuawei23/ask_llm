@@ -1,5 +1,26 @@
 # Changelog
 
+## 2.7.4 (2026-05-29)
+
+### Features
+
+- **New English prompt templates**: Added `md-heading-format_en.md` and `md-body-format_en.md` for English Markdown formatting workflows.
+- **Enhanced Chinese prompt templates**:
+  - `md-body-format.md`: Added explicit rules for Chinese punctuation, paragraph splitting for long content, LaTeX symbol fixes, and math formula spacing in tables (`|x|` → `\vert x \vert`).
+  - `tech-paper-trans.md` & `tech-paper-trans-compact.md`: Added instructions to fix malformed formulas and enforce spacing around inline math in Chinese text.
+- **Provider model updates (`providers.yml`)**:
+  - Added `deepseek-v4-flash` (1M context, 384K output) and `deepseek-v4-pro` (1M context, 384K output) with pricing and capability metadata.
+  - Improved numeric readability with underscore separators (`128_000` instead of `128000`).
+- **Default configuration tuning (`default_config.yml`)**:
+  - Increased translation concurrency: `threads` / `max_concurrent_api_calls` from `20` → `32`.
+  - Increased translation chunk size: `max_chunk_tokens` from `3000` → `6000`, `min_chunk_merge_tokens` from `1500` → `3000`.
+  - Increased formatting throughput: `format_heading.batch_size` from `80` → `160`, `format_body.concurrency` from `8` → `32`.
+  - Increased paper explain concurrency: `paper.concurrency` from `20` → `32`.
+
+### Contributors
+
+- Feature designed and implemented with assistance from **Kimi CLI** (agent) and **kimi-k2.6** (model).
+
 ## 2.7.3 (2026-05-21)
 
 ### Features
