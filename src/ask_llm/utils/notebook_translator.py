@@ -54,6 +54,7 @@ class NotebookTranslator:
         balance_chunks: bool = True,
         max_chunk_tokens: int = 2400,
         min_chunk_merge_tokens: int = 400,
+        stream_api: bool = True,
     ) -> Tuple[int, int, int, int]:
         """
         Translate a Jupyter notebook.
@@ -135,6 +136,7 @@ class NotebookTranslator:
         processor = GlobalBatchProcessor(
             max_workers=max_workers,
             max_retries=max_retries,
+            stream_api=stream_api,
         )
         results = processor.process_global_tasks(tasks, config_manager, show_progress=show_progress)
 

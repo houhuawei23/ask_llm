@@ -17,6 +17,7 @@ def run_global_batch_tasks(
     verbose: bool = False,
     show_progress: bool = True,
     clamp_workers_to_task_count: bool = False,
+    stream_api: bool = True,
 ) -> tuple[list[BatchResult], GlobalBatchProcessor]:
     """
     Create a GlobalBatchProcessor and run process_global_tasks.
@@ -39,6 +40,7 @@ def run_global_batch_tasks(
         retry_delay=retry_delay,
         retry_delay_max=retry_delay_max,
         verbose=verbose,
+        stream_api=stream_api,
     )
     results = processor.process_global_tasks(tasks, config_manager, show_progress=show_progress)
     return results, processor

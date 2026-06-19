@@ -92,6 +92,7 @@ def _process_notebook_translation(
     final_model: str,
     force: bool,
     stream: bool,
+    stream_api: bool,
     pricing_map: Any,
     pricing_source: Any,
 ) -> tuple[int, int] | None:
@@ -145,6 +146,7 @@ def _process_notebook_translation(
             balance_chunks=trans_config.balance_translation_chunks,
             max_chunk_tokens=trans_config.max_chunk_tokens,
             min_chunk_merge_tokens=trans_config.min_chunk_merge_tokens,
+            stream_api=stream_api,
         )
     except RuntimeError as e:
         if "API authentication failed" in str(e):

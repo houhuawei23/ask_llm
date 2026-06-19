@@ -1,6 +1,6 @@
 """Token counting utilities."""
 
-from typing import ClassVar, Optional
+from typing import Any, ClassVar, Optional
 
 from loguru import logger
 
@@ -17,6 +17,9 @@ except ImportError:
 
 class TokenCounter:
     """Count tokens and words in text."""
+
+    # 缓存 encoding 对象，避免每次调用 tiktoken.get_encoding()
+    _encoding_cache: ClassVar[dict[str, Any]] = {}
 
     # Model to encoding mapping (kept in code as models evolve frequently)
 
@@ -86,7 +89,12 @@ class TokenCounter:
             return None
         try:
             encoding_name = cls._get_encoding(model)
-            return tiktoken.get_encoding(encoding_name)
+            cache_key = encoding_name
+            enc = cls._encoding_cache.get(cache_key)
+            if enc is None:
+                enc = tiktoken.get_encoding(encoding_name)
+                cls._encoding_cache[cache_key] = enc
+            return enc
         except Exception as e:
             logger.debug(f"Token encoding retrieval failed: {e}")
             return None
@@ -110,8 +118,9 @@ class TokenCounter:
             return cls.count_words(text)
 
         try:
-            encoding_name = cls._get_encoding(model)
-            encoding = tiktoken.get_encoding(encoding_name)
+            encoding = cls.get_encoding(model)
+            if encoding is None:
+                return cls.count_words(text)
             return len(encoding.encode(text))
         except Exception as e:
             logger.debug(f"Token counting failed: {e}, falling back to word count")
@@ -223,8 +232,9 @@ class TokenCounter:
             return text[:max_chars]
 
         try:
-            encoding_name = cls._get_encoding(model)
-            encoding = tiktoken.get_encoding(encoding_name)
+            encoding = cls.get_encoding(model)
+            if encoding is None:
+                return text[:max_tokens * 4]
             tokens = encoding.encode(text)
 
             if len(tokens) <= max_tokens:

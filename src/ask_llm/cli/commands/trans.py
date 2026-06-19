@@ -142,9 +142,16 @@ def trans(
         bool,
         typer.Option(
             "--stream",
-            help="Stream translation progress to console",
+            help="Stream translation progress to console (progress bars only)",
         ),
     ] = False,
+    stream_api: Annotated[
+        bool,
+        typer.Option(
+            "--stream-api/--no-stream-api",
+            help="Use streaming API calls; disable for higher batch throughput",
+        ),
+    ] = True,
     prompt_file: Annotated[
         str | None,
         typer.Option(
@@ -334,6 +341,7 @@ def trans(
                         final_model=final_model,
                         force=force,
                         stream=stream,
+                        stream_api=stream_api,
                         pricing_map=pricing_map,
                         pricing_source=pricing_source,
                     )
@@ -416,6 +424,7 @@ def trans(
                 max_retries=trans_config.retries,
                 show_progress=not stream,
                 clamp_workers_to_task_count=False,
+                stream_api=stream_api,
             )
 
             # Check for failures

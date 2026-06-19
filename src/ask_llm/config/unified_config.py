@@ -38,7 +38,7 @@ class TranslationConfig(BaseModel):
         description="Translation style: formal, casual, or technical",
     )
     threads: int = Field(
-        default=20,
+        default=12,
         ge=1,
         le=50,
         description="Number of concurrent threads (max_concurrent_api_calls per file)",
@@ -50,7 +50,7 @@ class TranslationConfig(BaseModel):
         description="Max number of files to process in parallel when translating a directory",
     )
     max_concurrent_api_calls: int = Field(
-        default=20,
+        default=12,
         ge=1,
         le=100,
         description="Max concurrent LLM API calls per file (alias for threads)",

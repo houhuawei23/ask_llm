@@ -22,7 +22,7 @@ class TestTranslationConfig:
         assert config.target_language == "zh"
         assert config.source_language == "auto"
         assert config.style == "formal"
-        assert config.threads == 20
+        assert config.threads == 12
         assert config.max_parallel_files == 3
         assert config.retries == 3
         assert config.max_chunk_tokens == 2400

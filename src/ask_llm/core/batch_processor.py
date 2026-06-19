@@ -26,6 +26,7 @@ from ask_llm.core.batch import (
 from ask_llm.core.models import RequestMetadata
 from ask_llm.core.processor import RequestProcessor
 from ask_llm.core.protocols import LLMProviderProtocol, ReasoningChunk
+from ask_llm.utils.rate_limiter import get_global_rate_limiter
 from ask_llm.utils.token_counter import TokenCounter
 
 
@@ -365,6 +366,7 @@ class GlobalBatchProcessor:
         retry_delay: float = 1.0,
         retry_delay_max: float = 10.0,
         verbose: bool = False,
+        stream_api: bool = True,
     ):
         """
         Initialize global batch processor.
@@ -375,12 +377,14 @@ class GlobalBatchProcessor:
             retry_delay: Initial delay between retries (exponential backoff)
             retry_delay_max: Maximum retry delay cap in seconds
             verbose: Enable verbose output with detailed API call information
+            stream_api: Use streaming API calls; disable for higher batch throughput.
         """
         self.max_workers = max_workers
         self.max_retries = max_retries
         self.retry_delay = retry_delay
         self.retry_delay_max = retry_delay_max
         self.verbose = verbose
+        self.stream_api = stream_api
         self._auth_error_lock = threading.Lock()
         self._auth_error_logged = False
 
@@ -674,7 +678,7 @@ class GlobalBatchProcessor:
             temperature=model_config.temperature,
             model=model_config.model,
             max_tokens=model_config.max_tokens,
-            stream=True,
+            stream=self.stream_api,
         )
         description_prefix = f"{model_key} Task {task.task_id} ({progress_tokens} tokens)"
         response, _, output_token_count, latency = self._stream_and_collect(
@@ -770,6 +774,18 @@ class GlobalBatchProcessor:
         progress_tokens = f"body≈{body_tokens} input≈{display_input_tokens}"
 
         try:
+            # 全局速率限制：按 provider/model 限制跨文件/跨实例的并发请求
+            limiter = get_global_rate_limiter()
+            acquired = limiter.acquire(
+                model_config.provider,
+                model_config.model,
+                timeout=60.0,
+            )
+            if not acquired:
+                raise RuntimeError(
+                    f"Rate limit timeout for {model_config.provider}/{model_config.model}"
+                )
+
             paper_timeout: float | None = None
             if task.task_kind == "paper_explain":
                 paper_timeout = self._paper_request_timeout_seconds()

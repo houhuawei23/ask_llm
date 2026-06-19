@@ -21,9 +21,9 @@ translation:
   target_language: zh
   source_language: auto
   style: formal
-  threads: 32                    # Single-file concurrent API calls (max_concurrent_api_calls)
+  threads: 12                    # Single-file concurrent API calls (max_concurrent_api_calls)
   max_parallel_files: 3          # Max files processed in parallel when translating a directory
-  max_concurrent_api_calls: 32   # Per-file concurrent API calls (alias for threads)
+  max_concurrent_api_calls: 12   # Per-file concurrent API calls (alias for threads)
   retries: 3
   balance_translation_chunks: true   # split/merge by tiktoken so parallel requests are similar cost
   max_chunk_tokens: 6000            # target max body tokens per chunk after rebalance
