@@ -167,7 +167,7 @@ class FileConfig(BaseModel):
         description="Default suffix for auto-generated output path",
     )
     translated_suffix: str = Field(
-        default="_translated",
+        default="_trans",
         description="Suffix for translated output files",
     )
     formatted_suffix: str = Field(

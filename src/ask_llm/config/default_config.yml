@@ -56,7 +56,7 @@ batch:
 file:
   chunk_size: 8192
   default_output_suffix: _output
-  translated_suffix: _translated
+  translated_suffix: _trans
   formatted_suffix: _formatted
   tqdm_ncols: 80
 
