@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.8.0 (2026-06-19)
+
+### Features
+
+- **Optional non-streaming API for translation**: new `--stream-api / --no-stream-api` flag on `ask-llm trans`. Non-streaming mode reduces per-token overhead and is recommended for batch throughput; streaming remains the default for interactive use.
+- **tiktoken encoding cache**: `TokenCounter` now caches `Encoding` objects by encoding name, eliminating repeated `tiktoken.get_encoding()` calls during splitting, rebalancing, and statistics.
+- **Global per-provider rate limiter**: new `GlobalRateLimiter` limits concurrent API requests per provider/model across files and `GlobalBatchProcessor` instances, reducing 429 rate-limit retries and improving tail latency.
+
+### Changed
+
+- **Default translation concurrency reduced**: `translation.threads` and `translation.max_concurrent_api_calls` lowered from `32` to `12` to match the new rate limiter and avoid provider throttling.
+- **Version**: 2.7.5 → 2.8.0
+
+### Contributors
+
+- Designed and implemented with assistance from **Kimi CLI** (agent) and **kimi-k2.7** (model).
+
 ## 2.7.5 (2026-05-29)
 
 ### Fixes

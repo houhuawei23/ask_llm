@@ -15,6 +15,7 @@ A modern command-line tool for calling multiple LLM APIs (DeepSeek, Qwen, etc.) 
 - 💬 **Interactive Chat** - Multi-turn conversations with command support
 - 🔌 **Multiple Providers** - Support for DeepSeek, Kimi, Ollama (local), and OpenAI-compatible APIs
 - 📦 **Batch Processing** - Process multiple tasks concurrently with multi-threading
+- ⚡ **Performance Tuning** - Optional non-streaming API calls, tiktoken encoding cache, and a global per-provider rate limiter to reduce 429 retries and improve batch throughput
 
 ## Quick Start
 
@@ -77,6 +78,9 @@ ask-llm trans *.md --max-parallel-files 5
 # Translation with glossary for consistent terminology
 ask-llm trans paper.md --glossary glossary.yml
 
+# Faster batch translation: disable streaming API
+ask-llm trans /path/to/dir/ -o translated/ --no-stream-api
+
 # Batch processing
 ask-llm batch batch-examples/prompt-contents.yml -o results.json
 
@@ -104,6 +108,7 @@ ask-llm paper -i paper.md --resume
 | `ask-llm chat /export`          | Export conversation to JSON/Markdown/TXT                                  |
 | `ask-llm trans [FILES...]`      | Translate files (supports directory and glob)                             |
 | `ask-llm trans --glossary`      | Use terminology glossary for consistent translations                      |
+| `ask-llm trans --no-stream-api` | Use non-streaming API calls for higher batch throughput                   |
 | `ask-llm paper -i PATH`         | Explain a paper: outputs under `./explain/` next to the file or directory |
 | `ask-llm paper --dry-run`       | Preview sections and token estimates                                      |
 | `ask-llm paper --resume`        | Skip completed sections when resuming                                     |
