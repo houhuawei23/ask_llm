@@ -191,6 +191,13 @@ def trans(
             help="Path to glossary file (YAML map or JSONL {src,tgt})",
         ),
     ] = None,
+    translated_suffix: Annotated[
+        str | None,
+        typer.Option(
+            "--translated-suffix",
+            help="Suffix for translated output files (default: config file.translated_suffix)",
+        ),
+    ] = None,
 ) -> None:
     """
     Translate text files using LLM API.
@@ -425,18 +432,20 @@ def trans(
                 raise typer.Exit(1)
 
             # Determine output path
+            effective_translated_suffix = (
+                translated_suffix if translated_suffix is not None else get_config().unified_config.file.translated_suffix
+            )
             if output:
                 output_path = output
                 # If output is a directory, create file-specific name
                 if Path(output).is_dir():
                     input_file = Path(file_path)
-                    translated_suffix = get_config().unified_config.file.translated_suffix
-                    output_name = f"{input_file.stem}{translated_suffix}{input_file.suffix}"
+                    output_name = f"{input_file.stem}{effective_translated_suffix}{input_file.suffix}"
                     output_path = str(Path(output) / output_name)
             else:
                 # Auto-generate output path
                 output_path = FileHandler.generate_output_path(
-                    file_path, suffix=get_config().unified_config.file.translated_suffix
+                    file_path, suffix=effective_translated_suffix
                 )
 
             # Export results
