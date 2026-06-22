@@ -5,14 +5,14 @@ from pathlib import Path
 
 import pytest
 
-from ask_llm.cli import _resolve_trans_input_paths
-from ask_llm.core.batch import BatchResult, GlobalBatchProcessor, ModelConfig, TaskStatus
-from ask_llm.core.text_splitter import TextSplitter
-from ask_llm.core.translator import Translator
-from ask_llm.core.models import RequestMetadata
+from ask_llm.cli import _is_directory_output, _offset_task_ids, _resolve_trans_input_paths
 from ask_llm.config.context import set_config
 from ask_llm.config.loader import ConfigLoader
 from ask_llm.config.manager import ConfigManager
+from ask_llm.core.batch import BatchResult, BatchTask, ModelConfig, TaskStatus
+from ask_llm.core.models import RequestMetadata
+from ask_llm.core.text_splitter import TextChunk, TextSplitter
+from ask_llm.core.translator import Translator
 from ask_llm.utils.translation_exporter import TranslationExporter
 
 
@@ -319,3 +319,225 @@ More content.
             )
             assert len(resolved) == 2  # root.md and sub/nested.md
             assert any("nested.md" in p for p in resolved)
+
+    def test_is_directory_output_existing_directory(self):
+        """Existing directory is always treated as directory."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            assert _is_directory_output(tmpdir, [], 1) is True
+
+    def test_is_directory_output_trailing_separator(self):
+        """Output ending with path separator is treated as directory."""
+        assert _is_directory_output("/some/path/", [], 1) is True
+        assert _is_directory_output("/some/path\\", [], 1) is True
+
+    def test_is_directory_output_multiple_files_no_extension(self):
+        """Non-existent path without extension is treated as directory for multiple files."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = str(Path(tmpdir) / "translated")
+            assert _is_directory_output(out, ["a.md", "b.md"], 2) is True
+
+    def test_is_directory_output_single_directory_input(self):
+        """Non-existent path without extension is treated as directory when input is a directory."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = str(Path(tmpdir) / "translated")
+            assert _is_directory_output(out, [tmpdir], 1) is True
+
+    def test_is_directory_output_with_extension_is_file(self):
+        """Non-existent path with extension is treated as a file."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = str(Path(tmpdir) / "out.txt")
+            assert _is_directory_output(out, ["a.md", "b.md"], 2) is False
+
+    def test_is_directory_output_single_file_is_file(self):
+        """Non-existent path without extension but single file input is treated as file."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = str(Path(tmpdir) / "out")
+            assert _is_directory_output(out, ["a.md"], 1) is False
+
+    def test_offset_task_ids_shifts_ids(self):
+        """_offset_task_ids shifts task and chunk IDs by the given offset."""
+        model_config = ModelConfig(provider="test", model="test-model")
+        chunks = [
+            TextChunk(content="a", chunk_id=0),
+            TextChunk(content="b", chunk_id=1),
+        ]
+        tasks = [
+            BatchTask(task_id=0, prompt="p", content="a", task_model_config=model_config),
+            BatchTask(task_id=1, prompt="p", content="b", task_model_config=model_config),
+        ]
+
+        new_tasks, new_chunks = _offset_task_ids(tasks, chunks, 10)
+
+        assert [c.chunk_id for c in new_chunks] == [10, 11]
+        assert [t.task_id for t in new_tasks] == [10, 11]
+        # Original objects are not mutated.
+        assert [c.chunk_id for c in chunks] == [0, 1]
+        assert [t.task_id for t in tasks] == [0, 1]
+
+    def test_offset_task_ids_preserves_mapping(self):
+        """Offset IDs keep the one-to-one mapping required by TranslationExporter."""
+        model_config = ModelConfig(provider="test", model="test-model")
+        chunks = [TextChunk(content="x", chunk_id=0)]
+        tasks = [BatchTask(task_id=0, prompt="p", content="x", task_model_config=model_config)]
+
+        new_tasks, new_chunks = _offset_task_ids(tasks, chunks, 5)
+        assert new_tasks[0].task_id == new_chunks[0].chunk_id
+
+
+class TestTransPerFileBatching:
+    """Tests for per-file translation batching with failure isolation."""
+
+    @staticmethod
+    def _make_fake_run_global_batch_tasks(captured_calls: list[list[BatchTask]]):
+        from ask_llm.core.models import RequestMetadata
+
+        class _FakeProcessor:
+            _auth_error_logged = False
+
+        def fake_run_global_batch_tasks(tasks, *args, **kwargs):
+            captured_calls.append(list(tasks))
+            results = []
+            for task in tasks:
+                results.append(
+                    BatchResult(
+                        task_id=task.task_id,
+                        prompt=task.prompt,
+                        content=task.content,
+                        model_settings=task.task_model_config,
+                        response=f"translated {task.task_id}",
+                        status=TaskStatus.SUCCESS,
+                        metadata=RequestMetadata(
+                            provider="test_provider",
+                            model="test-model",
+                            temperature=0.5,
+                            input_tokens=1,
+                            output_tokens=1,
+                            latency=0.1,
+                        ),
+                    )
+                )
+            return results, _FakeProcessor()
+
+        return fake_run_global_batch_tasks
+
+    def test_each_file_gets_own_batch_call(
+        self, temp_dir, sample_config_file, monkeypatch
+    ):
+        """Each text file is translated in its own batch call and exported."""
+        from typer.testing import CliRunner
+
+        from ask_llm.cli import app
+
+        (temp_dir / "a.md").write_text("Hello world")
+        (temp_dir / "b.md").write_text("Second file")
+
+        output_dir = temp_dir / "out"
+        output_dir.mkdir()
+
+        captured_calls: list[list[BatchTask]] = []
+        fake = self._make_fake_run_global_batch_tasks(captured_calls)
+        monkeypatch.setattr(
+            "ask_llm.cli.commands.trans.run_global_batch_tasks",
+            fake,
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(
+            app,
+            [
+                "trans",
+                str(temp_dir / "a.md"),
+                str(temp_dir / "b.md"),
+                "-o",
+                str(output_dir),
+                "--config",
+                str(sample_config_file),
+                "--threads",
+                "4",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert len(captured_calls) == 2
+        assert len(captured_calls[0]) == 1
+        assert len(captured_calls[1]) == 1
+        assert (output_dir / "a_trans.md").exists()
+        assert (output_dir / "b_trans.md").exists()
+
+    def test_failure_in_one_file_does_not_block_other(
+        self, temp_dir, sample_config_file, monkeypatch
+    ):
+        """If one file's batch fails, the other file is still translated and saved."""
+        from typer.testing import CliRunner
+
+        from ask_llm.cli import app
+        from ask_llm.core.models import RequestMetadata
+
+        (temp_dir / "ok.md").write_text("Good content")
+        (temp_dir / "bad.md").write_text("Bad content")
+
+        output_dir = temp_dir / "out"
+        output_dir.mkdir()
+
+        class _FakeProcessor:
+            _auth_error_logged = False
+
+        def fake_run_global_batch_tasks(tasks, *args, **kwargs):
+            results = []
+            for task in tasks:
+                if "bad" in task.content.lower():
+                    results.append(
+                        BatchResult(
+                            task_id=task.task_id,
+                            prompt=task.prompt,
+                            content=task.content,
+                            model_settings=task.task_model_config,
+                            status=TaskStatus.FAILED,
+                            error="simulated failure",
+                        )
+                    )
+                else:
+                    results.append(
+                        BatchResult(
+                            task_id=task.task_id,
+                            prompt=task.prompt,
+                            content=task.content,
+                            model_settings=task.task_model_config,
+                            response="translated",
+                            status=TaskStatus.SUCCESS,
+                            metadata=RequestMetadata(
+                                provider="test_provider",
+                                model="test-model",
+                                temperature=0.5,
+                                input_tokens=1,
+                                output_tokens=1,
+                                latency=0.1,
+                            ),
+                        )
+                    )
+            return results, _FakeProcessor()
+
+        monkeypatch.setattr(
+            "ask_llm.cli.commands.trans.run_global_batch_tasks",
+            fake_run_global_batch_tasks,
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(
+            app,
+            [
+                "trans",
+                str(temp_dir / "ok.md"),
+                str(temp_dir / "bad.md"),
+                "-o",
+                str(output_dir),
+                "--config",
+                str(sample_config_file),
+                "--threads",
+                "4",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert (output_dir / "ok_trans.md").exists()
+        assert not (output_dir / "bad_trans.md").exists()

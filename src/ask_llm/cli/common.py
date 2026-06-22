@@ -10,8 +10,10 @@ import typer
 
 from ask_llm.config.context import get_config
 from ask_llm.core.batch import (
+    BatchTask,
     ModelConfig,
 )
+from ask_llm.core.text_splitter import TextChunk
 from ask_llm.core.translator import Translator
 from ask_llm.utils.console import console
 from ask_llm.utils.file_handler import FileHandler
@@ -55,6 +57,45 @@ def _resolve_trans_input_paths(
     return sorted(set(resolved))
 
 
+def _is_directory_output(output: str, files: list[str], resolved_count: int) -> bool:
+    """Heuristically decide whether ``output`` is meant as a directory.
+
+    A path is considered a directory when:
+    - It already exists as a directory.
+    - It ends with a path separator (``/`` or ``\\``).
+    - It does not exist, has no file extension, and the input consists of
+      multiple files or a directory.
+    """
+    output_path = Path(output)
+    if output_path.is_dir():
+        return True
+    if output.endswith(("/", "\\")):
+        return True
+    if not output_path.exists() and not output_path.suffix:
+        if resolved_count > 1:
+            return True
+        for pattern in files:
+            if Path(pattern).is_dir():
+                return True
+    return False
+
+
+def _offset_task_ids(
+    tasks: list[BatchTask], chunks: list[TextChunk], offset: int
+) -> tuple[list[BatchTask], list[TextChunk]]:
+    """Shift task and chunk IDs by ``offset`` so tasks from multiple files are globally unique.
+
+    Returns new task and chunk lists where each ``task_id``/``chunk_id`` is the original
+    value plus ``offset``. This preserves the one-to-one mapping required by
+    :class:`TranslationExporter` when results from all files are processed in a single
+    global batch.
+    """
+    id_map: dict[int, int] = {chunk.chunk_id: chunk.chunk_id + offset for chunk in chunks}
+    new_chunks = [chunk.model_copy(update={"chunk_id": id_map[chunk.chunk_id]}) for chunk in chunks]
+    new_tasks = [task.model_copy(update={"task_id": id_map[task.task_id]}) for task in tasks]
+    return new_tasks, new_chunks
+
+
 def _config_init(output_path: str | None = None) -> None:
     """Generate default_config.yml template."""
     pkg_config = Path(__file__).resolve().parent.parent / "config" / "default_config.yml"
@@ -95,12 +136,13 @@ def _process_notebook_translation(
     stream_api: bool,
     pricing_map: Any,
     pricing_source: Any,
+    output_is_dir: bool = False,
 ) -> tuple[int, int] | None:
     """Process .ipynb notebook translation (markdown cells only). Returns (input_tokens, output_tokens) if any."""
     # Determine output path
     if output:
         output_path = output
-        if Path(output).is_dir():
+        if output_is_dir or Path(output).is_dir():
             input_file = Path(file_path)
             output_name = f"{input_file.stem}{get_config().unified_config.file.translated_suffix}{input_file.suffix}"
             output_path = str(Path(output) / output_name)

@@ -2,6 +2,8 @@
 
 Translate text files using an LLM API. Supports plain text (`.txt`), Markdown (`.md`), and Jupyter notebooks (`.ipynb`). For notebooks, only markdown cells are translated; code cells are preserved.
 
+When multiple files are provided, each file is translated and saved independently: a failure in one file does not block the others, and successful files are written to the output directory as soon as they finish.
+
 ## Usage
 
 ```bash
@@ -22,8 +24,8 @@ ask-llm trans [FILES...] [OPTIONS]
 | `--config` | `-c` | Path to `default_config.yml` |
 | `--target-lang` | `-t` | Target language code |
 | `--source-lang` | `-s` | Source language code (default: auto-detect) |
-| `--threads` | `-T` | Per-file concurrent API calls |
-| `--max-parallel-files` | | Max files to process in parallel when translating a directory (default: 3) |
+| `--threads` | `-T` | Max concurrent API calls per file |
+| `--max-parallel-files` | | Max files to translate in parallel (default: 3) |
 | `--retries` | `-r` | Maximum number of retries |
 | `--provider` | `-a` | API provider to use |
 | `--model` | `-m` | Model name to use |

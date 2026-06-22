@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -17,11 +18,13 @@ from ask_llm.config.cli_session import (
 )
 from ask_llm.config.context import get_config
 from ask_llm.core.batch import (
+    BatchResult,
+    BatchTask,
     ModelConfig,
 )
 from ask_llm.core.global_batch_runner import run_global_batch_tasks
 from ask_llm.core.markdown_token_splitter import MarkdownTokenSplitter
-from ask_llm.core.text_splitter import TextSplitter
+from ask_llm.core.text_splitter import TextChunk, TextSplitter
 from ask_llm.core.translator import Translator
 from ask_llm.utils.chunk_balance import plain_text_chunks_by_tokens, rebalance_translation_chunks
 from ask_llm.utils.console import console
@@ -37,7 +40,11 @@ except ImportError:
     )
     raise
 
-from ask_llm.cli.common import _process_notebook_translation, _resolve_trans_input_paths
+from ask_llm.cli.common import (
+    _is_directory_output,
+    _process_notebook_translation,
+    _resolve_trans_input_paths,
+)
 from ask_llm.cli.errors import raise_unexpected_cli_error
 
 
@@ -83,7 +90,7 @@ def trans(
         typer.Option(
             "--threads",
             "-T",
-            help="Per-file concurrent API calls (from default_config.yml if not set)",
+            help="Max concurrent API calls per file (from default_config.yml if not set)",
             min=1,
             max=100,
         ),
@@ -92,7 +99,7 @@ def trans(
         int | None,
         typer.Option(
             "--max-parallel-files",
-            help="Max files to process in parallel when translating a directory (default: 3)",
+            help="Max files to translate in parallel (default: 3)",
             min=1,
             max=50,
         ),
@@ -310,49 +317,65 @@ def trans(
             raise typer.Exit(1)
 
         console.print_info(f"Found {len(resolved_files)} file(s) to translate")
-        if trans_config.max_parallel_files > 1:
-            console.print_info(
-                f"Processing with max {trans_config.max_parallel_files} file(s) in parallel"
+        console.print_info(
+            f"File-level concurrency: {trans_config.max_parallel_files} file(s) in parallel"
+        )
+        console.print_info(
+            f"Chunk-level concurrency: up to {trans_config.threads} concurrent API call(s) per file"
+        )
+
+        # Determine whether the output target is a directory. Create it once
+        # before parallel processing to avoid races between worker threads.
+        output_is_dir = bool(
+            output and _is_directory_output(output, files, len(resolved_files))
+        )
+        if output_is_dir:
+            Path(output).mkdir(parents=True, exist_ok=True)
+
+        @dataclass
+        class _TextTranslationJob:
+            """Internal container for a prepared text/markdown translation job."""
+
+            file_path: str
+            file_type: str
+            chunks: list[TextChunk]
+            tasks: list[BatchTask]
+            output_path: str
+
+        def _resolve_output_path(file_path: str) -> str:
+            """Determine the output path for a single input file."""
+            effective_translated_suffix = (
+                translated_suffix
+                if translated_suffix is not None
+                else get_config().unified_config.file.translated_suffix
             )
+            if output:
+                output_path = output
+                if output_is_dir:
+                    input_file = Path(file_path)
+                    output_name = (
+                        f"{input_file.stem}{effective_translated_suffix}{input_file.suffix}"
+                    )
+                    output_path = str(Path(output) / output_name)
+            else:
+                output_path = FileHandler.generate_output_path(
+                    file_path, suffix=effective_translated_suffix
+                )
+            return output_path
 
-        def _process_one_file(file_path: str) -> tuple[int, int] | None:
-            """Process a single file (md, txt, or ipynb). Returns (input_tokens, output_tokens) for session total."""
+        def _prepare_text_file(file_path: str) -> _TextTranslationJob | None:
+            """Read, split, and build translation tasks for a text/markdown file."""
             console.print()
-            console.print(f"[bold]Processing: {file_path}[/bold]")
+            console.print(f"[bold]Preparing: {file_path}[/bold]")
 
-            # Check file type (auto-detect by extension)
             file_type = TextSplitter.detect_file_type(file_path)
-            if file_type not in ("markdown", "text", "notebook"):
+            if file_type not in ("markdown", "text"):
                 console.print_warning(
                     f"Unsupported file type: {Path(file_path).suffix}. "
                     f"Only .txt, .md, and .ipynb files are supported. Skipping."
                 )
                 return None
 
-            # Handle .ipynb notebook translation (markdown cells only, code cells preserved)
-            if file_type == "notebook":
-                try:
-                    return _process_notebook_translation(
-                        file_path=file_path,
-                        output=output,
-                        trans_config=trans_config,
-                        config_manager=config_manager,
-                        final_provider=final_provider,
-                        final_model=final_model,
-                        force=force,
-                        stream=stream,
-                        stream_api=stream_api,
-                        pricing_map=pricing_map,
-                        pricing_source=pricing_source,
-                    )
-                except FileExistsError:
-                    console.print_error("Output file already exists. Use --force to overwrite.")
-                except Exception as e:
-                    console.print_error(f"Failed to translate notebook {file_path}: {e}")
-                    logger.exception("Notebook translation error")
-                return None
-
-            # Read file content (for .txt and .md)
             try:
                 content = FileHandler.read(file_path, show_progress=not stream)
             except Exception as e:
@@ -363,8 +386,7 @@ def trans(
                 console.print_warning(f"File {file_path} is empty. Skipping.")
                 return None
 
-            # Split by token budget (structure-aware for Markdown)
-            if TextSplitter.detect_file_type(file_path) == "markdown":
+            if file_type == "markdown":
                 chunks = MarkdownTokenSplitter(final_model, trans_config.max_chunk_tokens).split(
                     content
                 )
@@ -393,7 +415,6 @@ def trans(
             else:
                 console.print_info(f"Split into {len(chunks)} chunk(s)")
 
-            # Create translator
             translator = Translator(
                 target_language=trans_config.target_language,
                 source_language=trans_config.source_language,
@@ -403,7 +424,6 @@ def trans(
                 glossary_pairs=glossary_pairs,
             )
 
-            # Create model config
             model_config = ModelConfig(
                 provider=final_provider,
                 model=final_model,
@@ -411,91 +431,96 @@ def trans(
                 max_tokens=trans_config.max_output_tokens,
             )
 
-            # Create translation tasks
             tasks = translator.create_translation_tasks(chunks, model_config)
+            output_path = _resolve_output_path(file_path)
 
-            console.print_info(
-                f"Translating {len(tasks)} chunk(s) with {trans_config.threads} thread(s)..."
-            )
-            results, processor = run_global_batch_tasks(
-                tasks,
-                config_manager,
-                max_workers=trans_config.threads,
-                max_retries=trans_config.retries,
-                show_progress=not stream,
-                clamp_workers_to_task_count=False,
-                stream_api=stream_api,
+            return _TextTranslationJob(
+                file_path=file_path,
+                file_type=file_type,
+                chunks=chunks,
+                tasks=tasks,
+                output_path=output_path,
             )
 
-            # Check for failures
+        def _process_notebook_file(file_path: str) -> tuple[int, int] | None:
+            """Process a single Jupyter notebook (keeps its own internal chunk parallelism)."""
+            console.print()
+            console.print(f"[bold]Processing: {file_path}[/bold]")
+
+            try:
+                return _process_notebook_translation(
+                    file_path=file_path,
+                    output=output,
+                    trans_config=trans_config,
+                    config_manager=config_manager,
+                    final_provider=final_provider,
+                    final_model=final_model,
+                    force=force,
+                    stream=stream,
+                    stream_api=stream_api,
+                    pricing_map=pricing_map,
+                    pricing_source=pricing_source,
+                    output_is_dir=output_is_dir,
+                )
+            except FileExistsError:
+                console.print_error("Output file already exists. Use --force to overwrite.")
+            except Exception as e:
+                console.print_error(f"Failed to translate notebook {file_path}: {e}")
+                logger.exception("Notebook translation error")
+            return None
+
+        def _export_text_file(
+            job: _TextTranslationJob,
+            results: list[BatchResult],
+        ) -> tuple[int, int] | None:
+            """Export translated chunks for a single text/markdown file."""
             failed_count = sum(1 for r in results if r.status.value == "failed")
             successful_chunks = sum(1 for r in results if r.status.value == "success")
+
             if failed_count > 0:
                 console.print_warning(f"{failed_count} chunk(s) failed to translate")
-            if (
-                successful_chunks == 0
-                and failed_count > 0
-                and getattr(processor, "_auth_error_logged", False)
-            ):
-                console.print_error("翻译失败: API 认证错误, 未产生有效译文。")
-                raise typer.Exit(1)
+            if successful_chunks == 0 and failed_count > 0:
+                console.print_error(f"翻译失败: {job.file_path} 所有分块均失败。")
+                return None
 
-            # Determine output path
-            effective_translated_suffix = (
-                translated_suffix if translated_suffix is not None else get_config().unified_config.file.translated_suffix
-            )
-            if output:
-                output_path = output
-                # If output is a directory, create file-specific name
-                if Path(output).is_dir():
-                    input_file = Path(file_path)
-                    output_name = f"{input_file.stem}{effective_translated_suffix}{input_file.suffix}"
-                    output_path = str(Path(output) / output_name)
-            else:
-                # Auto-generate output path
-                output_path = FileHandler.generate_output_path(
-                    file_path, suffix=effective_translated_suffix
-                )
-
-            # Export results
             exporter = TranslationExporter(
-                chunks=chunks,
+                chunks=job.chunks,
                 results=results,
                 preserve_format=preserve_format,
                 include_original=trans_config.include_original,
             )
 
-            # Detect output format from extension
+            output_ext = Path(job.output_path).suffix.lower()
             output_format = None
-            output_ext = Path(output_path).suffix.lower()
             if output_ext == ".json":
                 output_format = "json"
             elif output_ext in (".md", ".markdown"):
                 output_format = "markdown"
 
             try:
-                # Check if output file exists
-                output_file = Path(output_path)
+                output_file = Path(job.output_path)
                 if output_file.exists() and not force:
                     raise FileExistsError(
-                        f"Output file already exists: {output_path}. Use --force to overwrite."
+                        f"Output file already exists: {job.output_path}. Use --force to overwrite."
                     )
 
-                exported_path = exporter.export(output_path, format_type=output_format)
+                exported_path = exporter.export(job.output_path, format_type=output_format)
                 console.print_success(f"Translation saved to: {exported_path}")
 
-                # Display statistics
                 console.print(f"  Successful: {successful_chunks}/{len(results)}")
                 if failed_count > 0:
                     console.print_warning(f"  Failed: {failed_count}/{len(results)}")
 
-                by_model = processor.calculate_statistics(results)
-                model_key = f"{final_provider}/{final_model}"
-                st = by_model.get(model_key)
-                if st is None and by_model:
-                    st = next(iter(by_model.values()))
-                total_in = st.total_input_tokens if st else 0
-                total_out = st.total_output_tokens if st else 0
+                total_in = sum(
+                    r.metadata.input_tokens
+                    for r in results
+                    if r.metadata and r.status.value == "success"
+                )
+                total_out = sum(
+                    r.metadata.output_tokens
+                    for r in results
+                    if r.metadata and r.status.value == "success"
+                )
                 console.print(
                     format_cost_estimate(
                         final_provider,
@@ -510,12 +535,71 @@ def trans(
 
             except FileExistsError:
                 console.print_error(
-                    f"Output file already exists: {output_path}. Use --force to overwrite."
+                    f"Output file already exists: {job.output_path}. Use --force to overwrite."
                 )
             except Exception as e:
                 console.print_error(f"Failed to export translation: {e}")
                 logger.exception("Export error")
             return None
+
+        def _translate_and_export_text_file(
+            job: _TextTranslationJob,
+        ) -> tuple[int, int] | None:
+            """Translate and immediately export a single text/markdown file.
+
+            Runs inside the shared file-level thread pool so each file is saved as
+            soon as its own chunks finish, without waiting for other files.
+            """
+            console.print()
+            console.print(f"[bold]Translating: {job.file_path}[/bold]")
+
+            results, processor = run_global_batch_tasks(
+                job.tasks,
+                config_manager,
+                max_workers=trans_config.threads,
+                max_retries=trans_config.retries,
+                show_progress=not stream,
+                clamp_workers_to_task_count=True,
+                stream_api=stream_api,
+            )
+
+            failed_count = sum(1 for r in results if r.status.value == "failed")
+            successful_chunks = sum(1 for r in results if r.status.value == "success")
+            if failed_count > 0:
+                console.print_warning(f"{failed_count} chunk(s) failed to translate")
+            if (
+                successful_chunks == 0
+                and failed_count > 0
+                and getattr(processor, "_auth_error_logged", False)
+            ):
+                console.print_error(
+                    f"翻译失败: API 认证错误, {job.file_path} 未产生有效译文。"
+                )
+                return None
+
+            return _export_text_file(job, results)
+
+        # Classify files and prepare text/markdown jobs up front.
+        notebook_files: list[str] = []
+        text_jobs: list[_TextTranslationJob] = []
+
+        for file_path in resolved_files:
+            file_type = TextSplitter.detect_file_type(file_path)
+            if file_type == "notebook":
+                notebook_files.append(file_path)
+            elif file_type in ("markdown", "text"):
+                job = _prepare_text_file(file_path)
+                if job:
+                    text_jobs.append(job)
+            else:
+                console.print_warning(
+                    f"Unsupported file type: {Path(file_path).suffix}. "
+                    f"Only .txt, .md, and .ipynb files are supported. Skipping."
+                )
+
+        if not text_jobs and not notebook_files:
+            console.print_error("No translatable files found")
+            raise typer.Exit(1)
 
         prompt_preview = Translator(
             target_language=trans_config.target_language,
@@ -536,30 +620,53 @@ def trans(
             f"{prompt_template_tokens} tokens (tiktoken · {final_model})"
         )
 
-        # Run file processing (sequential or parallel)
         session_in = 0
         session_out = 0
+
+        # Translate and export files in parallel. Each file is saved as soon as it
+        # finishes; a failure in one file does not block others.
         if trans_config.max_parallel_files <= 1:
-            for file_path in resolved_files:
-                usage = _process_one_file(file_path)
-                if usage:
-                    session_in += usage[0]
-                    session_out += usage[1]
+            for job in text_jobs:
+                try:
+                    usage = _translate_and_export_text_file(job)
+                    if usage:
+                        session_in += usage[0]
+                        session_out += usage[1]
+                except Exception as e:
+                    console.print_error(f"Failed to translate {job.file_path}: {e}")
+                    logger.exception("Translation error")
+            for file_path in notebook_files:
+                try:
+                    usage = _process_notebook_file(file_path)
+                    if usage:
+                        session_in += usage[0]
+                        session_out += usage[1]
+                except Exception as e:
+                    console.print_error(f"Failed to translate {file_path}: {e}")
+                    logger.exception("Translation error")
         else:
             with ThreadPoolExecutor(max_workers=trans_config.max_parallel_files) as executor:
-                futures = {executor.submit(_process_one_file, fp): fp for fp in resolved_files}
+                futures: dict[Future, str] = {}
+                for job in text_jobs:
+                    futures[
+                        executor.submit(_translate_and_export_text_file, job)
+                    ] = job.file_path
+                for file_path in notebook_files:
+                    futures[executor.submit(_process_notebook_file, file_path)] = file_path
+
                 for future in as_completed(futures):
+                    file_path = futures[future]
                     try:
                         usage = future.result()
                         if usage:
                             session_in += usage[0]
                             session_out += usage[1]
                     except Exception as e:
-                        file_path = futures[future]
                         console.print_error(f"Failed to translate {file_path}: {e}")
                         logger.exception("Translation error")
 
-        if len(resolved_files) > 1:
+        processed_file_count = len(text_jobs) + len(notebook_files)
+        if processed_file_count > 1:
             console.print()
             console.print("[bold]Session total (all files)[/bold]")
             console.print(

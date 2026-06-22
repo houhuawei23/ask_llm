@@ -34,9 +34,9 @@ translation:
   target_language: zh
   source_language: auto
   style: formal  # formal | casual | technical
-  threads: 20                    # Single-file concurrent API calls
-  max_parallel_files: 3          # Max files in parallel when translating a directory
-  max_concurrent_api_calls: 20    # Per-file concurrent API calls (alias for threads)
+  threads: 20                    # Max concurrent API calls per file
+  max_parallel_files: 3          # Max files to translate in parallel
+  max_concurrent_api_calls: 20    # Alias for threads
   retries: 3
   balance_translation_chunks: true
   max_chunk_tokens: 2400

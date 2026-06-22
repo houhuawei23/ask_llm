@@ -1,5 +1,34 @@
 # Changelog
 
+## 2.9.0 (2026-06-22)
+
+### Features
+
+- **`ask-llm trans` directory output fix**: `-o <dir>` now correctly creates the directory and writes each translated file into it, instead of overwriting the directory path as a single file.
+- **`ask-llm trans` cross-file + cross-chunk parallelism**: text and Markdown files are now translated with file-level parallelism (`--max-parallel-files`) while each file keeps chunk-level parallelism (`--threads`).
+- **Failure isolation and early per-file export**: each file is saved as soon as its own translation finishes. A failure in one file no longer blocks or invalidates other files; successful files are still written to the output directory.
+
+### Changed
+
+- `--threads` help text now reads "Max concurrent API calls per file".
+- `--max-parallel-files` help text now reads "Max files to translate in parallel".
+- Internal refactor of `trans.py` into `_prepare_text_file`, `_translate_and_export_text_file`, and `_export_text_file` helpers for clearer per-file lifecycle management.
+- Added `_is_directory_output` and `_offset_task_ids` helpers in `ask_llm.cli.common`.
+
+### Tests
+
+- Added integration tests for directory-output heuristics (`_is_directory_output`).
+- Added integration tests for task/chunk ID offsetting (`_offset_task_ids`).
+- Added `TestTransPerFileBatching` to verify each file gets its own batch call and that a failing file does not block others.
+
+### Version
+
+- 2.8.0 → 2.9.0
+
+### Contributors
+
+- Designed and implemented with assistance from **kimi-code** (agent) and **kimi-k2.7** (model).
+
 ## 2.8.0 (2026-06-19)
 
 ### Features
