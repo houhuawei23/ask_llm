@@ -18,6 +18,8 @@ from ask_llm.cli.common import _is_directory_output, _resolve_trans_input_paths
 from ask_llm.config.manager import ConfigManager
 from ask_llm.config.unified_config import UnifiedConfig
 from ask_llm.core.batch import BatchResult, BatchTask, ModelConfig
+from ask_llm.core.batch_checkpoint import BatchCheckpoint
+from ask_llm.core.batch_models import TaskStatus
 from ask_llm.core.global_batch_runner import run_global_batch_tasks
 from ask_llm.core.markdown_token_splitter import MarkdownTokenSplitter
 from ask_llm.core.text_splitter import TextChunk, TextSplitter
@@ -52,6 +54,7 @@ class TranslationOptions:
     translatable_extensions: list[str]
     recursive_dir: bool
     prompt_file: str | None = None
+    resume: bool = False
 
 
 @dataclass
@@ -370,6 +373,11 @@ class TranslationService:
             output_path=output_path,
         )
 
+    @staticmethod
+    def _checkpoint_path(output_path: str) -> str:
+        """Return the default checkpoint path for a translation output file."""
+        return f"{output_path}.trans_checkpoint.json"
+
     def _translate_and_export_text_file(
         self,
         job: _TextTranslationJob,
@@ -383,9 +391,35 @@ class TranslationService:
         console.print()
         console.print(f"[bold]Translating: {job.file_path}[/bold]")
 
+        checkpoint_path = self._checkpoint_path(job.output_path)
+        checkpoint = BatchCheckpoint.create(command="trans", config_digest=job.file_path)
+        tasks = job.tasks
+
+        if options.resume and Path(checkpoint_path).exists():
+            checkpoint = BatchCheckpoint.load(checkpoint_path)
+            completed_ids = set(checkpoint.completed_task_ids)
+            tasks = [t for t in job.tasks if t.task_id not in completed_ids]
+            console.print_info(
+                f"Resuming from checkpoint: {len(tasks)}/{len(job.tasks)} chunk(s) remaining"
+            )
+
+        if not tasks:
+            console.print_info("All chunks already translated according to checkpoint.")
+            results = list(checkpoint.successful_results)
+            results.sort(key=lambda r: r.task_id)
+            Path(checkpoint_path).unlink(missing_ok=True)
+            return self._export_text_file(
+                job,
+                results,
+                options.preserve_format,
+                options.include_original,
+                force=force,
+                retries=0,
+            )
+
         try:
-            results, processor = run_global_batch_tasks(
-                job.tasks,
+            new_results, processor = run_global_batch_tasks(
+                tasks,
                 self.config_manager,
                 max_workers=options.threads,
                 max_retries=options.retries,
@@ -404,6 +438,14 @@ class TranslationService:
                 success=False,
                 error=str(e),
             )
+
+        checkpoint.merge([r for r in new_results if r.status == TaskStatus.SUCCESS])
+        failed_results = [r for r in new_results if r.status == TaskStatus.FAILED]
+        checkpoint.mark_all_failed_for_retry(failed_results)
+        checkpoint.save(checkpoint_path)
+
+        results = list(checkpoint.successful_results) + failed_results
+        results.sort(key=lambda r: r.task_id)
 
         failed_count = sum(1 for r in results if r.status.value == "failed")
         successful_chunks = sum(1 for r in results if r.status.value == "success")
@@ -426,6 +468,9 @@ class TranslationService:
 
         retries = getattr(processor, "last_metrics", None)
         retry_count = retries.retried if retries is not None else 0
+
+        if failed_count == 0:
+            Path(checkpoint_path).unlink(missing_ok=True)
 
         return self._export_text_file(
             job,

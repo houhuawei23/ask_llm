@@ -196,6 +196,13 @@ def trans(
             help="Suffix for translated output files (default: config file.translated_suffix)",
         ),
     ] = None,
+    resume: Annotated[
+        bool,
+        typer.Option(
+            "--resume/--no-resume",
+            help="Resume translation from per-file checkpoints (default: False)",
+        ),
+    ] = False,
 ) -> None:
     """
     Translate text files using LLM API.
@@ -266,6 +273,7 @@ def trans(
             translatable_extensions=trans_cfg.translatable_extensions,
             recursive_dir=trans_cfg.recursive_dir,
             prompt_file=prompt_file,
+            resume=resume,
         )
 
         service = TranslationService(

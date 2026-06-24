@@ -38,6 +38,8 @@ ask_llm/
 │   │   ├── concurrent.py     # Bounded single-queue retry runner
 │   │   ├── batch_models.py   # Batch data models (TaskStatus, BatchTask, etc.)
 │   │   ├── batch.py          # Backward-compatible re-exports
+│   │   ├── checkpoint.py     # Generic checkpoint base class
+│   │   ├── batch_checkpoint.py # Concrete checkpoint for batch/translation tasks
 │   │   ├── batch_processor.py # Batch execution engine
 │   │   ├── global_batch_runner.py # Global batch runner
 │   │   ├── translator.py     # Translation utilities

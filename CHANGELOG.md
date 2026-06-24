@@ -1,5 +1,33 @@
 # Changelog
 
+## 2.12.0 (2026-06-24)
+
+### Features
+
+- **Generic checkpoint framework**: added `BaseCheckpoint` and `BatchCheckpoint` for resumable batch/translation workflows.
+- **`ask-llm batch --resume`**: batch runs now persist a checkpoint (`<config>.checkpoint.json`) and can resume from it, skipping completed tasks.
+- **`ask-llm trans --resume`**: per-file translation checkpoints (`<output>.trans_checkpoint.json`) allow resuming long document translations from failed chunks.
+
+### Changed
+
+- `BatchService` manages checkpoint save/load/merge during batch runs.
+- `TranslationService` manages per-file checkpoints during text/markdown translation.
+- Checkpoints are saved atomically via a temporary file and `replace()`.
+
+### Tests
+
+- Added `tests/unit/test_checkpoint.py` for generic checkpoint persistence.
+- Added `tests/integration/test_batch_checkpoint.py` for batch resume behavior.
+- Added `tests/integration/test_trans_checkpoint.py` for translation resume behavior.
+
+### Version
+
+- 2.11.0 → 2.12.0
+
+### Contributors
+
+- Designed and implemented with assistance from **kimi-code** (agent) and **kimi-k2.7** (model).
+
 ## 2.11.0 (2026-06-24)
 
 ### Features

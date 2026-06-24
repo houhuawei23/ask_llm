@@ -93,6 +93,14 @@ def batch(
             help="Skip API key presence check (not recommended)",
         ),
     ] = False,
+    resume: Annotated[
+        str | None,
+        typer.Option(
+            "--resume",
+            "-R",
+            help="Resume from a checkpoint file (auto-generated if omitted)",
+        ),
+    ] = None,
 ) -> None:
     """
     Process batch tasks from YAML configuration file.
@@ -155,6 +163,7 @@ def batch(
             retry_delay_max=batch_cfg.retry_delay_max,
             skip_api_key_check=skip_api_key_check,
             verbose=verbose,
+            resume_checkpoint_path=resume,
         )
 
         service = BatchService(
