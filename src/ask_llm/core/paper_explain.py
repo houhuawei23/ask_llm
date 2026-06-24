@@ -163,10 +163,7 @@ def split_markdown_ordered(
 
     for heading, body in _parse_markdown_heading_blocks(text):
         mk = match_section_key(heading, pipeline=pipeline)
-        if mk:
-            key = mk
-        else:
-            key = _extra_key_from_heading(heading, used_extra)
+        key = mk or _extra_key_from_heading(heading, used_extra)
         if key not in section_headings:
             section_headings[key] = heading
         if key in sections:
@@ -592,10 +589,10 @@ def load_prompt_template(
         if pipeline is not None
         else PaperExplainPipelineConfig.builtin().prompt_files
     )
-    fname = prompt_files.get(pk)
-    if not fname:
+    file_name = prompt_files.get(pk)
+    if not file_name:
         raise KeyError(f"Unknown prompt key: {key}")
-    path = resolve_prompt_path(prompt_dir, fname, project_root=project_root)
+    path = resolve_prompt_path(prompt_dir, file_name, project_root=project_root)
     return path.read_text(encoding="utf-8").strip()
 
 
@@ -848,9 +845,9 @@ def explain_output_filename(
                 return f"{index}-{slug}.explain.md"
             return f"{index}-combo-{combo_id}-{tpl_stem}.explain.md"
         return f"{index}-combo-{key.replace(':', '-')}.explain.md"
-    base, stem = parse_section_job_key(key, pipeline)
-    if base is not None and stem is not None:
-        return f"{index}-{base}-{stem}.explain.md"
+    section_base, section_stem = parse_section_job_key(key, pipeline)
+    if section_base is not None and section_stem is not None:
+        return f"{index}-{section_base}-{section_stem}.explain.md"
     if key.startswith("appendices:h2:"):
         slug = key.split(":", 2)[2]
         return f"d-appendices-{slug}.explain.md"

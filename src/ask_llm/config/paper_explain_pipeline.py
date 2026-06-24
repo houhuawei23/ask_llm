@@ -284,7 +284,7 @@ class PaperExplainPipelineConfig(BaseModel):
                             return p.file
             return None
         base, stem = parse_section_job_key(job_key, self)
-        if stem is None:
+        if base is None or stem is None:
             return None
         for p in self.resolved_section_prompts(base):
             if Path(p.file).stem == stem:

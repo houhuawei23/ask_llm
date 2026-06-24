@@ -7,6 +7,8 @@ import os
 import sys
 from typing import TYPE_CHECKING
 
+import typer
+
 from ask_llm.utils.console import console
 
 if TYPE_CHECKING:
@@ -36,9 +38,7 @@ def api_key_is_missing_or_unresolved(api_key: str) -> bool:
     s = (api_key or "").strip()
     if not s or s.lower() in _INVALID_PLACEHOLDERS:
         return True
-    if "${" in s and "}" in s:
-        return True
-    return False
+    return bool("${" in s and "}" in s)
 
 
 def require_resolved_api_key(config_manager: ConfigManager, provider_name: str) -> None:
@@ -55,7 +55,7 @@ def require_resolved_api_key(config_manager: ConfigManager, provider_name: str) 
         console.print_error(
             f"API 密钥不可用: 请设置环境变量 {env_hint} 或在配置中填写 providers.{provider_name}.api_key。"
         )
-        raise SystemExit(1)
+        raise typer.Exit(1)
 
 
 def ensure_api_key_for_provider(
@@ -96,7 +96,7 @@ def ensure_api_key_for_provider(
 
     if not sys.stdin.isatty():
         console.print_error("当前为非交互式环境: 请设置环境变量或编辑配置文件后重试。")
-        raise SystemExit(1)
+        raise typer.Exit(1)
 
     console.print()
     console.print("请选择:")
@@ -106,7 +106,7 @@ def ensure_api_key_for_provider(
     choice = console.input("请输入 1 / 2 / 3(默认 2): ").strip() or "2"
 
     if choice == "2":
-        raise SystemExit(1)
+        raise typer.Exit(1)
     if choice == "3":
         console.print_warning("已跳过 API 密钥检测, 后续请求可能失败。")
         return False
@@ -114,7 +114,7 @@ def ensure_api_key_for_provider(
         key = getpass.getpass("API Key: ").strip()
         if api_key_is_missing_or_unresolved(key):
             console.print_error("密钥无效或为空, 已退出。")
-            raise SystemExit(1)
+            raise typer.Exit(1)
         config_manager.apply_overrides(api_key=key)
         # llm_engine reloads providers.yml via load_providers_config(); ${DEEPSEEK_API_KEY}
         # must resolve there too — sync session key to the conventional env var.
@@ -122,4 +122,4 @@ def ensure_api_key_for_provider(
         return True
 
     console.print_error("无效选择, 已退出。")
-    raise SystemExit(1)
+    raise typer.Exit(1)

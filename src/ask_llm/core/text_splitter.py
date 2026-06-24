@@ -3,7 +3,6 @@
 import re
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import List, Optional
 
 from loguru import logger
 from pydantic import BaseModel, Field
@@ -34,7 +33,7 @@ class TextSplitter(ABC):
         self.max_chunk_size = max_chunk_size
 
     @abstractmethod
-    def split(self, text: str) -> List[TextChunk]:
+    def split(self, text: str) -> list[TextChunk]:
         """
         Split text into chunks.
 
@@ -65,9 +64,7 @@ class TextSplitter(ABC):
         return "text"
 
     @classmethod
-    def create_splitter(
-        cls, file_path: str, max_chunk_size: Optional[int] = None
-    ) -> "TextSplitter":
+    def create_splitter(cls, file_path: str, max_chunk_size: int | None = None) -> "TextSplitter":
         """
         Create appropriate splitter based on file type.
 
@@ -92,7 +89,7 @@ class MarkdownSplitter(TextSplitter):
     # Regex to match markdown headings: # Title, ## Title, etc.
     HEADING_PATTERN = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
 
-    def split(self, text: str) -> List[TextChunk]:
+    def split(self, text: str) -> list[TextChunk]:
         """
         Split Markdown text using binary splitting strategy.
 
@@ -161,11 +158,11 @@ class MarkdownSplitter(TextSplitter):
     def _split_by_headings_binary(
         self,
         text: str,
-        headings: List[tuple],
+        headings: list[tuple],
         target_level: int,
         start_pos: int,
         start_chunk_id: int,
-    ) -> List[TextChunk]:
+    ) -> list[TextChunk]:
         """
         Split text by headings using binary strategy (split in half).
 
@@ -256,7 +253,7 @@ class MarkdownSplitter(TextSplitter):
 
     def _split_by_paragraphs_binary(
         self, text: str, start_pos: int, start_chunk_id: int
-    ) -> List[TextChunk]:
+    ) -> list[TextChunk]:
         """
         Split text by paragraphs using binary strategy (split in half).
 
@@ -338,7 +335,7 @@ class MarkdownSplitter(TextSplitter):
 
     def _split_long_paragraph(
         self, paragraph: str, start_pos: int, start_chunk_id: int
-    ) -> List[TextChunk]:
+    ) -> list[TextChunk]:
         """
         Split a long paragraph by sentence boundaries.
 
@@ -437,7 +434,7 @@ class MarkdownSplitter(TextSplitter):
 class PlainTextSplitter(TextSplitter):
     """Splitter for plain text files using paragraphs and sentences."""
 
-    def split(self, text: str) -> List[TextChunk]:
+    def split(self, text: str) -> list[TextChunk]:
         """
         Split plain text using binary splitting strategy.
 
@@ -469,7 +466,7 @@ class PlainTextSplitter(TextSplitter):
 
     def _split_by_paragraphs_binary(
         self, text: str, start_pos: int, start_chunk_id: int
-    ) -> List[TextChunk]:
+    ) -> list[TextChunk]:
         """
         Split text by paragraphs using binary strategy (split in half).
 
@@ -551,7 +548,7 @@ class PlainTextSplitter(TextSplitter):
 
     def _split_by_sentences(
         self, text: str, start_pos: int, start_chunk_id: int
-    ) -> List[TextChunk]:
+    ) -> list[TextChunk]:
         """
         Split text by sentence boundaries.
 

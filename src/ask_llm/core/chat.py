@@ -1,18 +1,23 @@
 """Interactive chat session implementation."""
 
+from __future__ import annotations
+
 import json
 import shlex
 import subprocess
 import time
 from datetime import datetime
-from typing import ClassVar, List, Optional
+from typing import TYPE_CHECKING, ClassVar
 
 from loguru import logger
 
 from ask_llm.core.models import ChatHistory, ChatMessage, MessageRole
-from ask_llm.core.protocols import LLMProviderProtocol
+from ask_llm.core.protocols import LLMProviderProtocol, ReasoningChunk
 from ask_llm.utils.console import console
 from ask_llm.utils.token_counter import TokenCounter
+
+if TYPE_CHECKING:
+    from ask_llm.config.manager import ConfigManager
 
 
 class ChatSession:
@@ -38,10 +43,10 @@ class ChatSession:
     def __init__(
         self,
         provider: LLMProviderProtocol,
-        temperature: Optional[float] = None,
-        model: Optional[str] = None,
-        history: Optional[ChatHistory] = None,
-        config_manager=None,
+        temperature: float | None = None,
+        model: str | None = None,
+        history: ChatHistory | None = None,
+        config_manager: ConfigManager | None = None,
     ):
         """
         Initialize chat session.
@@ -60,8 +65,8 @@ class ChatSession:
         self.config_manager = config_manager
 
         # Shell command history
-        self._last_shell_cmd: Optional[str] = None
-        self._shell_history: List[str] = []
+        self._last_shell_cmd: str | None = None
+        self._shell_history: list[str] = []
 
     def start(self) -> None:
         """Start interactive chat session."""
@@ -136,14 +141,18 @@ class ChatSession:
             start_time = time.time()
 
             # Stream response
-            response_parts = []
+            response_parts: list[str] = []
             stream = self.provider.call(
                 messages=messages, temperature=self.temperature, model=self.model, stream=True
             )
 
             for chunk in stream:
-                response_parts.append(chunk)
-                console.print_stream(chunk, end="")
+                if isinstance(chunk, ReasoningChunk):
+                    response_parts.append(chunk.content)
+                    console.print_stream(chunk.content, end="")
+                else:
+                    response_parts.append(chunk)
+                    console.print_stream(chunk, end="")
 
             response = "".join(response_parts)
             latency = time.time() - start_time

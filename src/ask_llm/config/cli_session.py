@@ -60,3 +60,54 @@ def resolve_default_model_or_exit(config_manager: ConfigManager) -> str:
         )
         raise typer.Exit(1)
     return default_model
+
+
+def resolve_provider_and_model_or_exit(
+    config_manager: ConfigManager,
+    *,
+    cli_provider: str | None = None,
+    cli_model: str | None = None,
+) -> tuple[str, str]:
+    """Resolve provider and model from CLI args and config, exiting if either is missing.
+
+    Priority:
+        1. CLI --provider / --model
+        2. Configured default provider / model
+
+    Args:
+        config_manager: Active config manager.
+        cli_provider: Provider passed on the CLI.
+        cli_model: Model passed on the CLI.
+
+    Returns:
+        Tuple of (resolved_provider, resolved_model).
+
+    Raises:
+        typer.Exit: If provider or model cannot be resolved.
+    """
+    provider = cli_provider or config_manager.config.default_provider
+    if not provider:
+        console.print_error(
+            "No provider specified. Use --provider or configure a default provider."
+        )
+        raise typer.Exit(1)
+
+    try:
+        config_manager.set_provider(provider)
+    except ValueError as e:
+        console.print_error(str(e))
+        raise typer.Exit(1) from e
+
+    try:
+        model = cli_model or config_manager.get_default_model()
+    except ValueError as e:
+        console.print_error(str(e))
+        raise typer.Exit(1) from e
+
+    if not model:
+        console.print_error(
+            "No model specified. Use --model or configure a default model for the provider."
+        )
+        raise typer.Exit(1)
+
+    return provider, model

@@ -1,7 +1,7 @@
 """Batch configuration file loader."""
 
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 import yaml
 from loguru import logger
@@ -14,7 +14,7 @@ class BatchConfigLoader:
     """Load and parse batch configuration files."""
 
     @classmethod
-    def load(cls, config_path: str) -> Dict[str, Any]:
+    def load(cls, config_path: str) -> dict[str, Any]:
         """
         Load batch configuration from file.
 
@@ -50,7 +50,7 @@ class BatchConfigLoader:
             return cls._load_prompt_contents(content, config_path)
 
     @classmethod
-    def _load_prompt_contents(cls, content: str, _config_path: str) -> Dict[str, Any]:
+    def _load_prompt_contents(cls, content: str, _config_path: str) -> dict[str, Any]:
         """
         Load prompt-contents format.
 
@@ -101,7 +101,7 @@ class BatchConfigLoader:
                 raise ValueError("'contents' list cannot be empty")
 
             # Extract provider-models (optional)
-            provider_models: List[ModelConfig] = []
+            provider_models: list[ModelConfig] = []
             if "provider-models" in data:
                 provider_models = cls._parse_provider_models(data["provider-models"])
 
@@ -148,7 +148,7 @@ class BatchConfigLoader:
             raise ValueError(f"Invalid YAML in config file: {e}") from e
 
     @classmethod
-    def _load_prompt_content_pairs(cls, content: str, _config_path: str) -> Dict[str, Any]:
+    def _load_prompt_content_pairs(cls, content: str, _config_path: str) -> dict[str, Any]:
         """
         Load prompt-content-pairs format.
 
@@ -175,7 +175,7 @@ class BatchConfigLoader:
                 raise ValueError("Configuration file is empty")
 
             # Extract provider-models from first document if present
-            provider_models: List[ModelConfig] = []
+            provider_models: list[ModelConfig] = []
             first_doc = documents[0]
             if isinstance(first_doc, dict) and "provider-models" in first_doc:
                 provider_models = cls._parse_provider_models(first_doc["provider-models"])
@@ -224,7 +224,7 @@ class BatchConfigLoader:
             raise ValueError(f"Invalid YAML in config file: {e}") from e
 
     @classmethod
-    def _parse_provider_models(cls, provider_models_data: Any) -> List[ModelConfig]:
+    def _parse_provider_models(cls, provider_models_data: Any) -> list[ModelConfig]:
         """
         Parse provider-models configuration.
 
@@ -237,7 +237,7 @@ class BatchConfigLoader:
         if not isinstance(provider_models_data, list):
             raise ValueError("'provider-models' must be a list")
 
-        model_configs: List[ModelConfig] = []
+        model_configs: list[ModelConfig] = []
 
         for provider_item in provider_models_data:
             if not isinstance(provider_item, dict):

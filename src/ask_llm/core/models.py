@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -20,7 +20,7 @@ class ChatMessage(BaseModel):
 
     role: MessageRole = Field(..., description="Message role")
     content: str = Field(..., description="Message content")
-    timestamp: Optional[datetime] = Field(
+    timestamp: datetime | None = Field(
         default_factory=datetime.now, description="Message timestamp"
     )
 
@@ -40,16 +40,16 @@ class ChatMessage(BaseModel):
 class ChatHistory(BaseModel):
     """Chat conversation history."""
 
-    messages: List[ChatMessage] = Field(default_factory=list)
-    provider: Optional[str] = None
-    model: Optional[str] = None
+    messages: list[ChatMessage] = Field(default_factory=list)
+    provider: str | None = None
+    model: str | None = None
     created_at: datetime = Field(default_factory=datetime.now)
 
     def add_message(self, role: MessageRole, content: str) -> None:
         """Add a message to the history."""
         self.messages.append(ChatMessage(role=role, content=content))
 
-    def get_messages(self, include_system: bool = True) -> List[Dict[str, str]]:
+    def get_messages(self, include_system: bool = True) -> list[dict[str, str]]:
         """Get messages as dictionaries for API calls."""
         msgs = self.messages
         if not include_system:
@@ -63,7 +63,7 @@ class ChatHistory(BaseModel):
         else:
             self.messages.clear()
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
             "provider": self.provider,
@@ -86,12 +86,12 @@ class ProviderConfig(BaseModel):
     api_provider: str = Field(..., description="Provider identifier")
     api_key: str = Field(default="", description="API key for authentication")
     api_base: str = Field(..., description="API base URL")
-    models: List[str] = Field(default_factory=list, description="Available models")
+    models: list[str] = Field(default_factory=list, description="Available models")
     api_temperature: float = Field(default=0.7, ge=0.0, le=2.0, description="Sampling temperature")
-    api_top_p: Optional[float] = Field(
+    api_top_p: float | None = Field(
         default=None, ge=0.0, le=1.0, description="Nucleus sampling parameter"
     )
-    max_tokens: Optional[int] = Field(default=None, gt=0, description="Maximum tokens to generate")
+    max_tokens: int | None = Field(default=None, gt=0, description="Maximum tokens to generate")
     timeout: float = Field(default=60.0, gt=0, description="API timeout in seconds")
 
     @field_validator("api_base")
@@ -107,18 +107,18 @@ class AppConfig(BaseModel):
     """Application configuration."""
 
     default_provider: str = Field(..., description="Default provider name")
-    default_model: Optional[str] = Field(default=None, description="Default model name")
-    providers: Dict[str, ProviderConfig] = Field(..., description="Provider configurations")
+    default_model: str | None = Field(default=None, description="Default model name")
+    providers: dict[str, ProviderConfig] = Field(..., description="Provider configurations")
 
     @field_validator("providers")
     @classmethod
-    def validate_providers(cls, v: Dict[str, ProviderConfig]) -> Dict[str, ProviderConfig]:
+    def validate_providers(cls, v: dict[str, ProviderConfig]) -> dict[str, ProviderConfig]:
         """Validate providers dictionary is not empty."""
         if not v:
             raise ValueError("At least one provider must be configured")
         return v
 
-    def get_provider_config(self, name: Optional[str] = None) -> ProviderConfig:
+    def get_provider_config(self, name: str | None = None) -> ProviderConfig:
         """Get configuration for a provider."""
         provider_name = name or self.default_provider
         if provider_name not in self.providers:
@@ -163,9 +163,9 @@ class ProcessingResult(BaseModel):
     """Result of processing a request."""
 
     content: str = Field(..., description="Response content")
-    metadata: Optional[RequestMetadata] = None
-    output_path: Optional[str] = None
-    reasoning: Optional[str] = Field(
+    metadata: RequestMetadata | None = None
+    output_path: str | None = None
+    reasoning: str | None = Field(
         default=None,
         description="Chain-of-thought / reasoning_content when using reasoner models",
     )

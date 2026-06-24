@@ -12,7 +12,7 @@ import copy
 import os
 import re
 from pathlib import Path
-from typing import Any, ClassVar, Dict, Optional, Tuple, Union
+from typing import Any, ClassVar
 
 import yaml
 from loguru import logger
@@ -25,13 +25,15 @@ from ask_llm.core.models import AppConfig, ProviderConfig
 # Log each missing ${VAR} at most once per process (avoid duplicate warnings).
 _WARNED_UNSET_ENV_VARS: set[str] = set()
 
-ENV_TO_CONFIG: ClassVar[Dict[str, Tuple[str, ...]]] = {
+ENV_TO_CONFIG: dict[str, tuple[str, ...]] = {
     "ASK_LLM_DEFAULT_PROVIDER": ("default_provider",),
     "ASK_LLM_DEFAULT_MODEL": ("default_model",),
     "ASK_LLM_TRANSLATION_TARGET_LANGUAGE": ("translation", "target_language"),
     "ASK_LLM_TRANSLATION_SOURCE_LANGUAGE": ("translation", "source_language"),
     "ASK_LLM_TRANSLATION_STYLE": ("translation", "style"),
-    "ASK_LLM_TRANSLATION_THREADS": ("translation", "threads"),
+    # ASK_LLM_TRANSLATION_THREADS controls the per-file chunk concurrency used by trans.
+    # It maps to the active field max_concurrent_api_calls; "threads" is a legacy alias.
+    "ASK_LLM_TRANSLATION_THREADS": ("translation", "max_concurrent_api_calls"),
     "ASK_LLM_TRANSLATION_MAX_PARALLEL_FILES": ("translation", "max_parallel_files"),
     "ASK_LLM_TRANSLATION_MAX_CONCURRENT_API_CALLS": (
         "translation",
@@ -54,7 +56,7 @@ ENV_TO_CONFIG: ClassVar[Dict[str, Tuple[str, ...]]] = {
 }
 
 
-def _parse_env_value(value: str, key_path: Tuple[str, ...]) -> Any:
+def _parse_env_value(value: str, key_path: tuple[str, ...]) -> Any:
     """Parse env var string to appropriate type for the config key."""
     if value.lower() in ("null", "none", ""):
         return None
@@ -80,7 +82,7 @@ def _parse_env_value(value: str, key_path: Tuple[str, ...]) -> Any:
     return value
 
 
-def _deep_merge(base: Dict[str, Any], overlay: Dict[str, Any]) -> Dict[str, Any]:
+def _deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
     """Deep merge overlay into base. Overlay values take precedence.
     For 'providers', individual provider settings are deep-merged instead of
     replacing the entire providers dictionary.
@@ -115,7 +117,7 @@ def _deep_merge(base: Dict[str, Any], overlay: Dict[str, Any]) -> Dict[str, Any]
     return result
 
 
-def _set_nested(data: Dict[str, Any], path: Tuple[str, ...], value: Any) -> None:
+def _set_nested(data: dict[str, Any], path: tuple[str, ...], value: Any) -> None:
     """Set a nested key in data. Creates intermediate dicts as needed."""
     current = data
     for part in path[:-1]:
@@ -125,7 +127,7 @@ def _set_nested(data: Dict[str, Any], path: Tuple[str, ...], value: Any) -> None
     current[path[-1]] = value
 
 
-def _apply_env_overrides(data: Dict[str, Any]) -> Dict[str, Any]:
+def _apply_env_overrides(data: dict[str, Any]) -> dict[str, Any]:
     """Apply ASK_LLM_* environment variable overrides to config data."""
     result = copy.deepcopy(data)
     legacy_chunk = os.getenv("ASK_LLM_TRANSLATION_MAX_CHUNK_SIZE")
@@ -205,7 +207,7 @@ def _candidate_providers_yml_paths() -> list[Path]:
     return paths
 
 
-def _load_providers_yml() -> Dict[str, Any]:
+def _load_providers_yml() -> dict[str, Any]:
     """
     Load provider runtime config from the first existing providers.yml.
 
@@ -240,7 +242,7 @@ def _load_providers_yml() -> Dict[str, Any]:
             if not providers:
                 continue
 
-            cleaned_providers: Dict[str, Any] = {}
+            cleaned_providers: dict[str, Any] = {}
             for prov_id, prov_cfg in providers.items():
                 if not isinstance(prov_cfg, dict):
                     continue
@@ -307,7 +309,7 @@ class ConfigLoader:
         return Path(__file__).parent / cls.DEFAULT_CONFIG_FILENAME
 
     @classmethod
-    def _load_yaml(cls, path: Path) -> Dict[str, Any]:
+    def _load_yaml(cls, path: Path) -> dict[str, Any]:
         """Load and parse a YAML config file. Resolves ${VAR} references."""
         if path.suffix not in (".yml", ".yaml"):
             raise ValueError(
@@ -319,7 +321,10 @@ class ConfigLoader:
                 data = yaml.safe_load(f)
                 if not data:
                     data = {}
-                return resolve_env_vars(data)
+                resolved = resolve_env_vars(data)
+                if not isinstance(resolved, dict):
+                    resolved = {}
+                return resolved
         except yaml.YAMLError as e:
             raise ValueError(
                 f"Invalid YAML in config file: {e}\nPlease check the syntax of {path}"
@@ -328,7 +333,7 @@ class ConfigLoader:
             raise OSError(f"Failed to read config file: {e}") from e
 
     @classmethod
-    def load(cls, config_path: Optional[Union[str, Path]] = None) -> LoadResult:
+    def load(cls, config_path: str | Path | None = None) -> LoadResult:
         """
         Load configuration from default_config.yml.
 
@@ -434,7 +439,7 @@ class ConfigLoader:
         )
 
     @classmethod
-    def _resolve_config_path(cls, config_path: Optional[Union[str, Path]] = None) -> Path:
+    def _resolve_config_path(cls, config_path: str | Path | None = None) -> Path:
         """Resolve configuration file path."""
         if config_path:
             return Path(config_path)
@@ -453,7 +458,7 @@ class ConfigLoader:
         return cls.DEFAULT_CONFIG_PATHS[0]
 
     @classmethod
-    def _convert_providers_format(cls, data: Dict[str, Any]) -> Dict[str, Any]:
+    def _convert_providers_format(cls, data: dict[str, Any]) -> dict[str, Any]:
         """
         Convert providers section to AppConfig format.
 
@@ -548,7 +553,7 @@ class ConfigLoader:
         }
 
     @classmethod
-    def _parse_app_config(cls, data: Dict[str, Any]) -> AppConfig:
+    def _parse_app_config(cls, data: dict[str, Any]) -> AppConfig:
         """Parse provider data into AppConfig."""
         if "providers" not in data:
             raise ValueError("Config must contain 'providers' key")

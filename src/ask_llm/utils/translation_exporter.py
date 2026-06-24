@@ -1,8 +1,9 @@
 """Translation result exporter."""
 
+import contextlib
 import json
 from pathlib import Path
-from typing import List, Optional
+from typing import Any
 
 from loguru import logger
 
@@ -95,8 +96,8 @@ class TranslationExporter:
 
     def __init__(
         self,
-        chunks: List[TextChunk],
-        results: List[BatchResult],
+        chunks: list[TextChunk],
+        results: list[BatchResult],
         preserve_format: bool = True,
         include_original: bool = False,
     ):
@@ -155,26 +156,20 @@ class TranslationExporter:
         obj = None
 
         # 1) First JSON value from first ``{`` (handles trailing garbage after ``}``).
-        try:
+        with contextlib.suppress(json.JSONDecodeError):
             obj, _end = json.JSONDecoder().raw_decode(raw, brace)
-        except json.JSONDecodeError:
-            pass
 
         # 2) Slice from first ``{`` to last ``}`` (some models emit extra junk only at end).
         if obj is None:
-            try:
+            with contextlib.suppress(json.JSONDecodeError):
                 last = raw.rfind("}")
                 if last > brace:
                     obj = json.loads(raw[brace : last + 1])
-            except json.JSONDecodeError:
-                pass
 
         # 3) Whole blob (e.g. already trimmed to a single object).
         if obj is None and raw.startswith("{"):
-            try:
+            with contextlib.suppress(json.JSONDecodeError):
                 obj = json.loads(raw)
-            except json.JSONDecodeError:
-                pass
 
         # 4) JSON with invalid escape sequences (e.g. \mathcal, \beta in LaTeX).
         #    LLMs sometimes wrap translations in {"translation": "..."} even when
@@ -190,7 +185,7 @@ class TranslationExporter:
                     return val.strip()
         return original
 
-    def export(self, output_path: str, format_type: Optional[str] = None) -> str:
+    def export(self, output_path: str, format_type: str | None = None) -> str:
         """
         Export translation results to file.
 
@@ -330,7 +325,7 @@ class TranslationExporter:
         Returns:
             Path to exported file
         """
-        export_data = {
+        export_data: dict[str, Any] = {
             "chunks": [],
             "statistics": {
                 "total_chunks": len(self.chunks),

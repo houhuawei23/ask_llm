@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 import time
+from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
@@ -11,11 +12,10 @@ from rich.progress import Progress, TaskID
 
 if TYPE_CHECKING:
     from ask_llm.config.manager import ConfigManager
-
-from llm_engine.concurrent import run_thread_pool_with_retries
+    from ask_llm.config.unified_config import RateLimitConfig
 
 from ask_llm.config.context import get_config_or_none
-from ask_llm.core.batch import (
+from ask_llm.core.batch_models import (
     BatchResult,
     BatchStatistics,
     BatchTask,
@@ -23,11 +23,15 @@ from ask_llm.core.batch import (
     TaskStatus,
     sort_batch_tasks_by_estimated_input,
 )
+from ask_llm.core.concurrent import BoundedRetryRunner, RunMetrics, run_bounded_with_retries
 from ask_llm.core.models import RequestMetadata
 from ask_llm.core.processor import RequestProcessor
 from ask_llm.core.protocols import LLMProviderProtocol, ReasoningChunk
 from ask_llm.utils.rate_limiter import get_global_rate_limiter
 from ask_llm.utils.token_counter import TokenCounter
+
+if TYPE_CHECKING:
+    from ask_llm.config.unified_config import RateLimitConfig
 
 
 def estimate_output_tokens(task_kind: str, input_tokens: int) -> int:
@@ -141,12 +145,13 @@ class BatchProcessor:
                 max_tokens=self.model_config.max_tokens,
                 stream=True,
             ):
-                response_parts.append(chunk)
+                text_chunk = chunk.content if isinstance(chunk, ReasoningChunk) else chunk
+                response_parts.append(text_chunk)
                 # Incremental token counting (avoid O(N^2) re-encode)
                 if encoding is not None:
-                    output_token_count += len(encoding.encode(chunk))
+                    output_token_count += len(encoding.encode(text_chunk))
                 else:
-                    output_token_count += TokenCounter.count_words(chunk)
+                    output_token_count += TokenCounter.count_words(text_chunk)
 
                 # Update progress with token count
                 if progress and progress_task_id is not None:
@@ -186,6 +191,7 @@ class BatchProcessor:
                 )
 
             logger.debug(f"Task {task.task_id} completed successfully")
+            return result
 
         except Exception as e:
             error_msg = str(e)
@@ -304,7 +310,7 @@ class BatchProcessor:
                     error=f"Unexpected error: {exc!s}",
                 )
 
-            results = run_thread_pool_with_retries(
+            results = run_bounded_with_retries(
                 pending_tasks,
                 _worker,
                 max_workers=self.max_workers,
@@ -367,6 +373,7 @@ class GlobalBatchProcessor:
         retry_delay_max: float = 10.0,
         verbose: bool = False,
         stream_api: bool = True,
+        rate_limit_config: RateLimitConfig | None = None,
     ):
         """
         Initialize global batch processor.
@@ -378,6 +385,7 @@ class GlobalBatchProcessor:
             retry_delay_max: Maximum retry delay cap in seconds
             verbose: Enable verbose output with detailed API call information
             stream_api: Use streaming API calls; disable for higher batch throughput.
+            rate_limit_config: Optional rate-limit configuration from default_config.yml
         """
         self.max_workers = max_workers
         self.max_retries = max_retries
@@ -385,8 +393,20 @@ class GlobalBatchProcessor:
         self.retry_delay_max = retry_delay_max
         self.verbose = verbose
         self.stream_api = stream_api
+        self.rate_limit_config = rate_limit_config or self._load_rate_limit_config()
         self._auth_error_lock = threading.Lock()
         self._auth_error_logged = False
+        self.last_metrics: RunMetrics | None = None
+
+    @staticmethod
+    def _load_rate_limit_config() -> RateLimitConfig | None:
+        """Load rate-limit configuration from the active config context, if any."""
+        from ask_llm.config.context import get_config_or_none
+
+        config = get_config_or_none()
+        if config is None:
+            return None
+        return config.unified_config.rate_limits
 
     @staticmethod
     def _is_authentication_error(error_msg: str) -> bool:
@@ -410,6 +430,20 @@ class GlobalBatchProcessor:
         if lr is None:
             return 600.0
         return float(lr.unified_config.paper.request_timeout_seconds)
+
+    def _effective_max_workers(self, tasks: list[BatchTask]) -> int:
+        """Return ``max_workers`` capped by the tightest burst limit among tasks."""
+        limiter = get_global_rate_limiter(self.rate_limit_config)
+        min_burst: int | None = None
+        for task in tasks:
+            if task.task_model_config is None:
+                continue
+            burst = limiter.burst_for(task.task_model_config.provider, task.task_model_config.model)
+            if min_burst is None or burst < min_burst:
+                min_burst = burst
+        if min_burst is None:
+            return self.max_workers
+        return max(1, min(self.max_workers, min_burst))
 
     def _update_global_task_progress_failed(
         self,
@@ -487,7 +521,7 @@ class GlobalBatchProcessor:
 
     def _stream_and_collect(
         self,
-        stream_iter,
+        stream_iter: Iterator[str | ReasoningChunk],
         task: BatchTask,
         model_config: ModelConfig,
         progress: Progress | None,
@@ -845,6 +879,7 @@ class GlobalBatchProcessor:
             self._update_global_task_progress_failed(
                 progress, progress_task_id, model_key, task.task_id, progress_tokens
             )
+            return result
 
     def process_global_tasks(
         self,
@@ -872,6 +907,10 @@ class GlobalBatchProcessor:
 
         # Pre-build provider cache to avoid per-task adapter creation and ConfigManager mutation
         provider_cache = self._build_provider_cache(pending_tasks, config_manager)
+
+        # Cap the thread pool size to the smallest configured burst limit so that
+        # workers do not sit blocked on the rate limiter waiting for tokens.
+        effective_max_workers = self._effective_max_workers(pending_tasks)
 
         # Create per-task progress bars (one per concurrent worker)
         if show_progress:
@@ -970,13 +1009,15 @@ class GlobalBatchProcessor:
                     error=f"Unexpected error: {exc!s}",
                 )
 
-            results = run_thread_pool_with_retries(
-                pending_tasks,
-                _worker,
-                max_workers=self.max_workers,
+            runner: BoundedRetryRunner[BatchTask, BatchResult] = BoundedRetryRunner(
+                max_workers=effective_max_workers,
                 max_retries=self.max_retries,
                 retry_delay=self.retry_delay,
                 retry_delay_max=self.retry_delay_max,
+            )
+            results, self.last_metrics = runner.run_with_metrics(
+                pending_tasks,
+                _worker,
                 is_failed=lambda r: r.status == TaskStatus.FAILED,
                 error_message=lambda r: r.error or "",
                 retry_count_from_result=lambda r: r.retry_count,

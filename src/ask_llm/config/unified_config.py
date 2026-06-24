@@ -1,6 +1,6 @@
 """Unified configuration model for default_config.yml."""
 
-from typing import Any, List, Optional
+from typing import Any
 
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -85,17 +85,17 @@ class TranslationConfig(BaseModel):
         default=False,
         description="Whether to include original text in translation export",
     )
-    temperature: Optional[float] = Field(
+    temperature: float | None = Field(
         default=None,
         ge=0.0,
         le=2.0,
         description="Sampling temperature for translation (null uses provider default)",
     )
-    default_prompt_file: Optional[str] = Field(
+    default_prompt_file: str | None = Field(
         default=None,
         description="Default prompt template file for translation (null for style-based)",
     )
-    translatable_extensions: List[str] = Field(
+    translatable_extensions: list[str] = Field(
         default_factory=lambda: [".md", ".markdown", ".txt", ".ipynb"],
         description="File extensions to include when translating a directory",
     )
@@ -103,6 +103,24 @@ class TranslationConfig(BaseModel):
         default=False,
         description="When translating a directory, include files from subdirectories",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _sync_threads_and_max_concurrent_api_calls(cls, data: Any) -> Any:
+        """Keep ``threads`` and ``max_concurrent_api_calls`` in sync.
+
+        ``threads`` is the user-facing/legacy name; ``max_concurrent_api_calls`` is the
+        internal alias. If only one is provided, copy its value to the other so that
+        callers can read either field consistently.
+        """
+        if isinstance(data, dict):
+            has_threads = "threads" in data
+            has_max = "max_concurrent_api_calls" in data
+            if has_threads and not has_max:
+                data["max_concurrent_api_calls"] = data["threads"]
+            elif has_max and not has_threads:
+                data["threads"] = data["max_concurrent_api_calls"]
+        return data
 
     @model_validator(mode="before")
     @classmethod
@@ -329,6 +347,50 @@ class PaperConfig(BaseModel):
     )
 
 
+class ProviderRateLimitConfig(BaseModel):
+    """Rate limit configuration for a provider or provider/model pair."""
+
+    requests_per_minute: int = Field(
+        default=60,
+        ge=1,
+        description="Maximum allowed requests per minute",
+    )
+    burst_size: int = Field(
+        default=10,
+        ge=1,
+        description="Maximum concurrent requests allowed in a burst",
+    )
+
+
+class RateLimitConfig(BaseModel):
+    """Global rate limit configuration keyed by provider or provider/model."""
+
+    model_config = ConfigDict(extra="allow")
+
+    default_limits: ProviderRateLimitConfig = Field(
+        default_factory=ProviderRateLimitConfig,
+        description="Default limits when no provider-specific entry matches",
+    )
+
+    def get_limits(self, provider: str, model: str | None = None) -> ProviderRateLimitConfig:
+        """Return the most specific limits available for provider/model.
+
+        Lookup order:
+        1. ``provider/model`` (e.g. ``deepseek/deepseek-reasoner``)
+        2. ``provider``
+        3. ``default_limits``
+        """
+        provider = provider.lower()
+        extras = self.model_extra or {}
+        if model:
+            key = f"{provider}/{model.lower()}"
+            if key in extras:
+                return ProviderRateLimitConfig.model_validate(extras[key])
+        if provider in extras:
+            return ProviderRateLimitConfig.model_validate(extras[provider])
+        return self.default_limits
+
+
 class UnifiedConfig(BaseModel):
     """Unified configuration loaded from default_config.yml."""
 
@@ -341,7 +403,8 @@ class UnifiedConfig(BaseModel):
     text_splitter: TextSplitterConfig = Field(default_factory=TextSplitterConfig)
     token: TokenConfig = Field(default_factory=TokenConfig)
     paper: PaperConfig = Field(default_factory=PaperConfig)
-    project_root_markers: List[str] = Field(
+    rate_limits: RateLimitConfig = Field(default_factory=RateLimitConfig)
+    project_root_markers: list[str] = Field(
         default_factory=lambda: ["pyproject.toml", "setup.py", ".git", "default_config.yml"],
         description="Markers to detect project root for @ path resolution",
     )

@@ -2,7 +2,6 @@
 
 import os
 from pathlib import Path
-from typing import List
 
 from loguru import logger
 
@@ -32,7 +31,7 @@ class InteractiveConfigHelper:
         """
         self.config_manager = config_manager
 
-    def select_provider_and_models(self, allow_multiple: bool = True) -> List[ModelConfig]:
+    def select_provider_and_models(self, allow_multiple: bool = True) -> list[ModelConfig]:
         """
         Interactively select provider and models.
 
@@ -85,7 +84,7 @@ class InteractiveConfigHelper:
             model_choice = console.input(f"Select model (1-{len(available_models)}): ").strip()
 
         # Parse model selection
-        selected_models: List[str] = []
+        selected_models: list[str] = []
         if model_choice.lower() == "all":
             selected_models = available_models
         else:

@@ -112,8 +112,11 @@ class Console:
         # If end is not newline, we need special handling since Rich's print() may not support end
         if end != "\n":
             # Render with Rich but write to stdout directly
+            from rich.console import RenderableType
+
+            rendered: RenderableType
             if panel:
-                rendered = Panel(message, title=panel_title, border_style=style)
+                rendered = Panel(message, title=panel_title, border_style=style or "none")
             else:
                 rendered = Text(str(message), style=style) if style else str(message)
 
@@ -129,7 +132,7 @@ class Console:
         else:
             # Normal print with newline
             if panel:
-                self._console.print(Panel(message, title=panel_title, border_style=style))
+                self._console.print(Panel(message, title=panel_title, border_style=style or "none"))
             else:
                 self._console.print(message, style=style)
 

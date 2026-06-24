@@ -420,9 +420,7 @@ class TestTransPerFileBatching:
 
         return fake_run_global_batch_tasks
 
-    def test_each_file_gets_own_batch_call(
-        self, temp_dir, sample_config_file, monkeypatch
-    ):
+    def test_each_file_gets_own_batch_call(self, temp_dir, sample_config_file, monkeypatch):
         """Each text file is translated in its own batch call and exported."""
         from typer.testing import CliRunner
 
@@ -437,7 +435,7 @@ class TestTransPerFileBatching:
         captured_calls: list[list[BatchTask]] = []
         fake = self._make_fake_run_global_batch_tasks(captured_calls)
         monkeypatch.setattr(
-            "ask_llm.cli.commands.trans.run_global_batch_tasks",
+            "ask_llm.services.translation_service.run_global_batch_tasks",
             fake,
         )
 
@@ -518,7 +516,7 @@ class TestTransPerFileBatching:
             return results, _FakeProcessor()
 
         monkeypatch.setattr(
-            "ask_llm.cli.commands.trans.run_global_batch_tasks",
+            "ask_llm.services.translation_service.run_global_batch_tasks",
             fake_run_global_batch_tasks,
         )
 

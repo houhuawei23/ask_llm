@@ -19,23 +19,48 @@ ask_llm/
 ├── src/ask_llm/              # Main package
 │   ├── __init__.py           # Version info
 │   ├── __main__.py           # python -m entry point
-│   ├── cli.py                # Typer CLI implementation (main entry)
+│   ├── cli/                  # Typer CLI package
+│   │   ├── app.py            # Typer app assembly and global callback
+│   │   ├── commands/         # Per-command modules
+│   │   │   ├── ask.py
+│   │   │   ├── chat.py
+│   │   │   ├── batch.py
+│   │   │   ├── trans.py
+│   │   │   ├── format_cmd.py
+│   │   │   ├── paper.py
+│   │   │   └── config.py
+│   │   ├── common.py         # Shared CLI helpers
+│   │   └── errors.py         # CLI error mapping
 │   ├── core/                 # Core business logic
 │   │   ├── models.py         # Pydantic data models
 │   │   ├── processor.py      # Request processing
 │   │   ├── chat.py           # Interactive chat session
-│   │   ├── batch.py          # Batch processing
+│   │   ├── concurrent.py     # Bounded single-queue retry runner
+│   │   ├── batch_models.py   # Batch data models (TaskStatus, BatchTask, etc.)
+│   │   ├── batch.py          # Backward-compatible re-exports
+│   │   ├── batch_processor.py # Batch execution engine
+│   │   ├── global_batch_runner.py # Global batch runner
 │   │   ├── translator.py     # Translation utilities
 │   │   ├── text_splitter.py  # Text splitting logic
+│   │   ├── markdown_token_splitter.py # Markdown-aware token splitting
 │   │   ├── md_heading_formatter.py  # Markdown heading formatting
 │   │   ├── md_body_formatter.py     # Markdown body formatting
 │   │   ├── format_checkpoint.py     # Checkpoint persistence for resume
-│   │   └── format_markdown_file.py  # Single-file format workflow
+│   │   ├── format_markdown_file.py  # Single-file format workflow
+│   │   └── paper_explain.py  # Paper explanation pipeline
+│   ├── services/             # Use-case / orchestration services
+│   │   ├── __init__.py
+│   │   ├── format_service.py # Format orchestration (moved from format_cmd)
+│   │   ├── batch_service.py  # Batch orchestration (moved from batch command)
+│   │   ├── translation_service.py # Translation orchestration (moved from trans command)
+│   │   └── paper_service.py  # Paper explain orchestration (moved from paper command)
 │   ├── config/               # Configuration management
 │   │   ├── loader.py         # Loads default_config.yml
 │   │   ├── unified_config.py # UnifiedConfig model
 │   │   ├── context.py        # Config context for current command
-│   │   └── manager.py        # Config management
+│   │   ├── manager.py        # Config management
+│   │   ├── cli_session.py    # CLI bootstrap helper
+│   │   └── paper_explain_pipeline.py # Paper pipeline config
 │   └── utils/                # Utility modules
 │       ├── console.py        # Rich console wrapper
 │       ├── file_handler.py   # File I/O with progress bars
@@ -43,7 +68,11 @@ ask_llm/
 │       ├── batch_exporter.py # Batch result export
 │       ├── batch_loader.py   # Batch config loading
 │       ├── notebook_translator.py  # Jupyter notebook support
-│       └── translation_exporter.py # Translation export
+│       ├── translation_exporter.py # Translation export
+│       ├── pricing.py        # Pricing lookup
+│       ├── provider_specs.py # Provider model limits
+│       ├── rate_limiter.py   # Global API rate limiter
+│       └── api_key_gate.py   # API key validation
 ├── tests/                    # Tests
 │   ├── unit/                 # Unit tests
 │   ├── integration/          # Integration tests
@@ -51,6 +80,7 @@ ask_llm/
 ├── docs/                     # Documentation
 ├── pyproject.toml            # Modern Python project config
 ├── requirements.txt          # Dependencies
+├── providers.yml             # Provider runtime catalog
 └── default_config.yml       # Unified configuration (providers, translation, batch, etc.)
 ```
 
@@ -60,25 +90,24 @@ ask_llm/
 
 - **Formatter**: Ruff (replaces Black)
 - **Line length**: 100 characters
-- **Target Python**: 3.8+
+- **Target Python**: 3.10+
 - **Quote style**: Double quotes
 - **Import style**: Use `isort` compatible imports (handled by Ruff)
 
 ### Type Hints
 
 - Use type hints for function signatures
-- Use `Optional[Type]` for nullable values
+- Use `X | None` for nullable values (Python 3.10+ syntax)
 - Use `Annotated[Type, ...]` for Typer CLI arguments
 - Pydantic models for data validation
 
 Example:
 ```python
-from typing import Optional
-from typing_extensions import Annotated
+from typing import Annotated
 
 def process(
     content: str,
-    model: Optional[str] = None,
+    model: str | None = None,
     temperature: Annotated[float, typer.Option()] = 0.7
 ) -> ProcessingResult:
     ...
@@ -204,8 +233,11 @@ The tool uses a single `default_config.yml` for all settings. Run `ask-llm confi
 
 Search order: `--config` > `./default_config.yml` > `~/.config/ask_llm/` > `/etc/ask_llm/` > package built-in.
 
-Sections: `providers`, `general`, `translation`, `batch`, `file`, `format_heading`, `format_body`, `text_splitter`, `token`, `paper`, `project_root_markers`.
+Sections: `providers`, `general`, `translation`, `batch`, `file`, `format_heading`, `format_body`, `text_splitter`, `token`, `paper`, `rate_limits`, `project_root_markers`.
 Use `${VAR}` in YAML for environment variable substitution.
+
+Provider runtime configuration (base_url, api_key, models, max_output, etc.) lives in `providers.yml`.
+Run `ask-llm config init` to generate both `default_config.yml` and `providers.yml` templates.
 
 ### CLI Commands
 
@@ -266,6 +298,59 @@ set_config(load_result)  # required for modules using get_config()
 manager = ConfigManager(load_result.app_config)
 manager.set_provider("deepseek")
 manager.apply_overrides(model="gpt-4", temperature=0.5)
+```
+
+### Service Layer
+
+CLI commands are thin adapters. Heavy workflows (batch, format, translation, paper explain)
+are orchestrated by modules under `ask_llm.services.*`, which receive a prepared
+`ConfigManager` and return structured results for the CLI to print/export:
+
+```python
+from ask_llm.config.cli_session import load_cli_session, resolve_provider_and_model_or_exit
+from ask_llm.services.translation_service import TranslationService, TranslationOptions
+
+load_result, config_manager = load_cli_session(config_path)
+provider, model = resolve_provider_and_model_or_exit(config_manager, cli_provider=provider)
+service = TranslationService(
+    config_manager, load_result.unified_config, provider=provider, model=model
+)
+service.translate_files(files, TranslationOptions(...))
+```
+
+### Bounded Concurrency
+
+All I/O-bound batch work (batch, format, translation chunks) should go through the shared
+`BoundedRetryRunner` so retries/backoff and in-flight limits live in one place:
+
+```python
+from ask_llm.core.concurrent import run_bounded_with_retries
+
+results = run_bounded_with_retries(
+    tasks,
+    worker,
+    max_workers=8,
+    max_retries=3,
+    retry_delay=1.0,
+    retry_delay_max=10.0,
+    is_failed=lambda r: r.status == TaskStatus.FAILED,
+    error_message=lambda r: r.error or "",
+    retry_count_from_result=lambda r: r.retry_count,
+    order_key=lambda r: r.task_id,
+)
+```
+
+### Rate Limiting
+
+`GlobalBatchProcessor` reads `rate_limits` from the active config and caps its thread pool to
+the smallest configured `burst_size` among the tasks, preventing workers from blocking on the
+rate limiter waiting for tokens.
+
+```python
+from ask_llm.utils.rate_limiter import get_global_rate_limiter
+
+limiter = get_global_rate_limiter(config.unified_config.rate_limits)
+limiter.acquire("deepseek", "deepseek-chat", timeout=60.0)
 ```
 
 ### Console Output

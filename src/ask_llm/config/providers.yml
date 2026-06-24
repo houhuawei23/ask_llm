@@ -1,0 +1,185 @@
+providers:
+  deepseek:
+    base_url: "https://api.deepseek.com/v1"
+    api_key: ${DEEPSEEK_API_KEY}
+    # default_model: "deepseek-v4-flash"
+    default_model: "deepseek-chat"
+    models:
+      - name: "deepseek-v4-flash"
+        context_length: 1_000_000 # 1M
+        max_output:
+          default: 384_000
+          maximum: 384_000
+        token_per_character:
+          english: 0.3
+          chinese: 0.6
+        pricing_per_million_tokens: # 人民币/元
+          input_cache_hit: 0.02 # ￥/百万
+          input: 1 # ￥/百万，cache miss
+          output: 2 # ￥/百万
+        functions:
+          json_output: true
+      - name: "deepseek-v4-pro"
+        context_length: 1_000_000 # 1M
+        max_output:
+          default: 384_000
+          maximum: 384_000
+        token_per_character:
+          english: 0.3
+          chinese: 0.6
+        pricing_per_million_tokens: # 人民币/元
+          input_cache_hit: 0.025 # ￥/百万
+          input: 3 # ￥/百万，cache miss
+          output: 6 # ￥/百万
+        functions:
+          json_output: true
+      - name: "deepseek-chat"
+        context_length: 128_000
+        max_output:
+          default: 4096
+          maximum: 8192
+        speed_tokens_per_second: 30
+        token_per_character:
+          english: 0.3
+          chinese: 0.6
+        pricing_per_million_tokens: # 人民币/元
+          input: 2 # ￥/百万，cache miss
+          input_cache_hit: 0.2 # ￥/百万
+          output: 3 # ￥/百万
+        functions:
+          json_output: true
+      - name: "deepseek-reasoner"
+        context_length: 128_000
+        max_output:
+          default: 4096
+          maximum: 65536 # API allows max_tokens up to 65536 for this model (chat is 8192)
+        speed_tokens_per_second: 30
+        token_per_character:
+          english: 0.3
+          chinese: 0.6
+        pricing_per_million_tokens: # 人民币/元
+          input: 2 # ￥/百万，cache miss
+          input_cache_hit: 0.2 # ￥/百万
+          output: 3 # ￥/百万
+        functions:
+          json_output: true
+
+  siliconflow:
+    base_url: "https://api.siliconflow.cn/v1/"
+    api_key: ${SILICONFLOW_API_KEY}
+    default_model: "deepseek-ai/DeepSeek-V4-Flash"
+    timeout: 300.0
+    models:
+      - name: "Pro/deepseek-ai/DeepSeek-V3.2"
+      - name: "deepseek-ai/DeepSeek-V4-Flash"
+        context_length: 128000
+        max_output:
+          default: 4096
+          maximum: 8192
+        speed_tokens_per_second: 30
+        token_per_character:
+          english: 0.3
+          chinese: 0.6
+        pricing_per_million_tokens: # 人民币/元
+          input: 2 # ￥/百万，cache miss
+          input_cache_hit: 0.2 # ￥/百万
+          output: 3 # ￥/百万
+        functions:
+          json_output: true
+
+  aliyun:
+    base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    api_key: ${ALIYUN_API_KEY}
+    default_model: "qwen3.5-flash"
+    timeout: 300.0
+    models:
+      - name: "qwen3.5-27b" # runout
+      - name: "qwen3.5-flash" # runout
+      - name: "qwen3.6-27b"
+      - name: "qwen3.6-flash"
+      - name: "qwen3.6-plus"
+      - name: "qwen3.6-max-preview"
+      - name: "deepseek-v4-flash"
+      - name: "deepseek-v4-pro"
+      - name: "MiniMax-M2.5"
+      - name: "kimi-k2.6"
+      - name: "glm-5.1"
+
+  ollama:
+    base_url: "http://localhost:11434/v1"
+    api_key: null
+    default_model: "qwen3.6"
+    models:
+      - name: "qwen3.6"
+        context_length: 131072
+        max_output:
+          default: 4096
+          maximum: 32768
+        speed_tokens_per_second: 50
+        token_per_character:
+          english: 0.3
+          chinese: 0.6
+        pricing_per_million_tokens:
+          input: 0
+          output: 0
+      - name: "qwen3.5"
+        context_length: 131072
+        max_output:
+          default: 4096
+          maximum: 32768
+        speed_tokens_per_second: 50
+        token_per_character:
+          english: 0.3
+          chinese: 0.6
+        pricing_per_million_tokens:
+          input: 0
+          output: 0
+
+  kimi-code:
+    base_url: "https://api.kimi.com/coding/v1"
+    api_key: ${KIMI_CODE_API_KEY}
+    default_model: "kimi-k2-0711-preview"
+    timeout: 120.0
+    models:
+      - name: "kimi-k2-0711-preview"
+        context_length: 256000
+        max_output:
+          default: 8000
+          maximum: 32000
+        speed_tokens_per_second: 40
+        token_per_character:
+          english: 0.3
+          chinese: 0.6
+        pricing_per_million_tokens: # 人民币/元
+          input: 3 # ￥/百万
+          output: 6 # ￥/百万
+        functions:
+          json_output: true
+      - name: "kimi-k2-0711-preview-longcontext"
+        context_length: 2000000
+        max_output:
+          default: 8000
+          maximum: 32000
+        speed_tokens_per_second: 30
+        token_per_character:
+          english: 0.3
+          chinese: 0.6
+        pricing_per_million_tokens: # 人民币/元
+          input: 5 # ￥/百万
+          output: 10 # ￥/百万
+        functions:
+          json_output: true
+      - name: "kimi-k2.5-preview"
+        context_length: 256000
+        max_output:
+          default: 8000
+          maximum: 32000
+        speed_tokens_per_second: 50
+        token_per_character:
+          english: 0.3
+          chinese: 0.6
+        pricing_per_million_tokens: # 人民币/元
+          input: 2 # ￥/百万
+          output: 4 # ￥/百万
+        functions:
+          json_output: true

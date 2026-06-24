@@ -2,14 +2,12 @@
 
 from enum import Enum
 from pathlib import Path
-from typing import ClassVar, Optional
+from typing import ClassVar
 
 from loguru import logger
 
-from ask_llm.config.context import get_config
 from ask_llm.core.batch import BatchTask, ModelConfig
 from ask_llm.core.text_splitter import TextChunk
-from ask_llm.utils.file_handler import FileHandler
 from ask_llm.utils.token_counter import TokenCounter
 
 
@@ -34,7 +32,7 @@ class Translator:
         "不得省略原文中的任何内容，包括标题、公式、图片链接等。"
     )
 
-    PROMPT_TEMPLATES: ClassVar[dict[TranslationStyle, tuple[str, str]]] = {
+    PROMPT_TEMPLATES: ClassVar[dict[TranslationStyle, str]] = {
         TranslationStyle.FORMAL: (
             "请将以下{source_lang}文本翻译成{target_lang}，使用正式、专业的语言风格，"
             + _PRESERVE_INSTRUCTION
@@ -60,9 +58,9 @@ class Translator:
         target_language: str = "zh",
         source_language: str = "auto",
         style: str = TranslationStyle.FORMAL,
-        custom_prompt_template: Optional[str] = None,
-        prompt_file: Optional[str] = None,
-        glossary_pairs: Optional[list[tuple[str, str]]] = None,
+        custom_prompt_template: str | None = None,
+        prompt_file: str | None = None,
+        glossary_pairs: list[tuple[str, str]] | None = None,
     ):
         """
         Initialize translator.
@@ -97,7 +95,8 @@ class Translator:
         if self.custom_prompt_template:
             template = self.custom_prompt_template
         else:
-            template = self.PROMPT_TEMPLATES.get(self.style, self.DEFAULT_TEMPLATE)
+            style = TranslationStyle(self.style)
+            template = self.PROMPT_TEMPLATES.get(style, self.DEFAULT_TEMPLATE)
 
         source_lang = self._format_language_name(self.source_language)
         target_lang = self._format_language_name(self.target_language)
@@ -184,43 +183,9 @@ class Translator:
             FileNotFoundError: If prompt file not found
             OSError: If file cannot be read
         """
-        # Handle @ prefix (relative to project root)
-        if prompt_path.startswith("@"):
-            # Remove @ prefix
-            relative_path = prompt_path[1:]
-            # Try to find project root by looking for common markers
-            current_dir = Path.cwd()
-            project_root = None
-            markers = get_config().unified_config.project_root_markers
-            for marker in markers:
-                for parent in [current_dir, *list(current_dir.parents)]:
-                    if (parent / marker).exists():
-                        project_root = parent
-                        break
-                if project_root:
-                    break
+        from ask_llm.utils.prompt_resolver import load_prompt_template
 
-            if project_root:
-                prompt_file = project_root / relative_path.lstrip("/")
-            else:
-                # Fallback to current directory
-                prompt_file = Path(relative_path.lstrip("/"))
-        else:
-            prompt_file = Path(prompt_path)
-
-        # Resolve absolute path
-        if not prompt_file.is_absolute():
-            prompt_file = prompt_file.resolve()
-
-        if not prompt_file.exists():
-            raise FileNotFoundError(f"Prompt file not found: {prompt_file}")
-
-        logger.debug(f"Loading prompt template from: {prompt_file}")
-        try:
-            content = FileHandler.read(str(prompt_file))
-            return content.strip()
-        except Exception as e:
-            raise OSError(f"Failed to read prompt file {prompt_file}: {e}") from e
+        return load_prompt_template(prompt_path)
 
     @staticmethod
     def load_glossary(path: str) -> list[tuple[str, str]]:

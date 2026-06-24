@@ -4,7 +4,7 @@ import csv
 import json
 import re
 from pathlib import Path
-from typing import Any, ClassVar, Dict, List, Optional
+from typing import Any, ClassVar
 
 import yaml
 from loguru import logger
@@ -16,13 +16,13 @@ from ask_llm.utils.file_handler import FileHandler
 class BatchResultExporter:
     """Export batch processing results to various formats."""
 
-    SUPPORTED_FORMATS: ClassVar[List[str]] = ["json", "yaml", "csv", "markdown"]
+    SUPPORTED_FORMATS: ClassVar[list[str]] = ["json", "yaml", "csv", "markdown"]
 
     def __init__(
         self,
-        results: List[BatchResult],
+        results: list[BatchResult],
         statistics: BatchStatistics,
-        batch_mode: Optional[str] = None,
+        batch_mode: str | None = None,
     ):
         """
         Initialize exporter.
@@ -52,7 +52,7 @@ class BatchResultExporter:
 
         return "prompt-contents" if all_same_prompt else "prompt-content-pairs"
 
-    def export(self, output_path: str, format_type: Optional[str] = None) -> str:
+    def export(self, output_path: str, format_type: str | None = None) -> str:
         """
         Export results to file.
 
@@ -209,7 +209,7 @@ class BatchResultExporter:
         lines.append("")
 
         # Group results by model
-        results_by_model: Dict[str, List[BatchResult]] = {}
+        results_by_model: dict[str, list[BatchResult]] = {}
         for result in self.results:
             model_key = f"{result.model_settings.provider}/{result.model_settings.model}"
             if model_key not in results_by_model:
@@ -238,7 +238,7 @@ class BatchResultExporter:
         return "\n".join(lines)
 
     def _export_markdown_prompt_contents(
-        self, lines: List[str], successful: List[BatchResult], failed: List[BatchResult]
+        self, lines: list[str], successful: list[BatchResult], failed: list[BatchResult]
     ) -> None:
         """Export prompt-contents format: one prompt + multiple content+answer pairs."""
         if successful:
@@ -288,7 +288,7 @@ class BatchResultExporter:
                 lines.append("")
 
     def _export_markdown_prompt_content_pairs(
-        self, lines: List[str], successful: List[BatchResult], failed: List[BatchResult]
+        self, lines: list[str], successful: list[BatchResult], failed: list[BatchResult]
     ) -> None:
         """Export prompt-content-pairs format: multiple prompt+content+answer pairs."""
         if successful:
@@ -334,7 +334,7 @@ class BatchResultExporter:
                 lines.append("---")
                 lines.append("")
 
-    def _prepare_data(self) -> Dict[str, Any]:
+    def _prepare_data(self) -> dict[str, Any]:
         """
         Prepare data structure for export.
 
@@ -385,12 +385,12 @@ class BatchResultExporter:
     @classmethod
     def export_multiple_models(
         cls,
-        results_by_model: Dict[str, List[BatchResult]],
-        statistics_by_model: Dict[str, BatchStatistics],
+        results_by_model: dict[str, list[BatchResult]],
+        statistics_by_model: dict[str, BatchStatistics],
         output_dir: str,
         format_type: str = "json",
-        batch_mode: Optional[str] = None,
-    ) -> List[str]:
+        batch_mode: str | None = None,
+    ) -> list[str]:
         """
         Export results grouped by model to separate files.
 
@@ -427,10 +427,10 @@ class BatchResultExporter:
     @classmethod
     def export_split_files(
         cls,
-        results: List[BatchResult],
+        results: list[BatchResult],
         output_dir: str,
-        batch_mode: Optional[str] = None,  # noqa: ARG003
-    ) -> List[str]:
+        batch_mode: str | None = None,  # noqa: ARG003
+    ) -> list[str]:
         """
         Export each task result to a separate file.
         File content contains only the LLM response.
@@ -447,7 +447,7 @@ class BatchResultExporter:
         output_path.mkdir(parents=True, exist_ok=True)
 
         exported_files = []
-        filename_counter: Dict[str, int] = {}  # Track filename usage for conflict resolution
+        filename_counter: dict[str, int] = {}  # Track filename usage for conflict resolution
 
         for idx, result in enumerate(results):
             # Determine filename

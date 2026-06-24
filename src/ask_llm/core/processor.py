@@ -1,7 +1,7 @@
 """Request processing logic."""
 
 import time
-from typing import Generator, Iterator, Optional, Union
+from collections.abc import Iterator
 
 from loguru import logger
 
@@ -22,7 +22,7 @@ class RequestProcessor:
     def __init__(
         self,
         provider: LLMProviderProtocol,
-        default_prompt_template: Optional[str] = None,
+        default_prompt_template: str | None = None,
     ):
         """
         Initialize processor with provider.
@@ -41,7 +41,7 @@ class RequestProcessor:
             return self._default_prompt_template
         return get_config().unified_config.general.default_prompt_template
 
-    def _format_prompt(self, content: str, prompt_template: Optional[str] = None) -> str:
+    def _format_prompt(self, content: str, prompt_template: str | None = None) -> str:
         """
         Format prompt with content.
 
@@ -64,13 +64,13 @@ class RequestProcessor:
     def process(
         self,
         content: str,
-        prompt_template: Optional[str] = None,
-        temperature: Optional[float] = None,
-        model: Optional[str] = None,
-        max_tokens: Optional[int] = None,
+        prompt_template: str | None = None,
+        temperature: float | None = None,
+        model: str | None = None,
+        max_tokens: int | None = None,
         stream: bool = False,
-        system_prompt: Optional[str] = None,
-    ) -> Generator[str, None, None]:
+        system_prompt: str | None = None,
+    ) -> Iterator[str | ReasoningChunk]:
         """
         Process content with LLM.
 
@@ -105,26 +105,27 @@ class RequestProcessor:
         else:
             call_kwargs["prompt"] = prompt
 
-        if stream:
-            yield from self.provider.call(
-                temperature=temperature, model=model, stream=True, **call_kwargs
-            )
-        else:
-            response = self.provider.call(
-                temperature=temperature, model=model, stream=False, **call_kwargs
-            )
+        response = self.provider.call(
+            temperature=temperature, model=model, stream=stream, **call_kwargs
+        )
+        if isinstance(response, str):
             yield response
+            return
+        if isinstance(response, ReasoningChunk):
+            yield response
+            return
+        yield from response
 
     def iter_process_raw_stream(
         self,
         prompt_template: str,
         *,
-        temperature: Optional[float] = None,
-        model: Optional[str] = None,
-        max_tokens: Optional[int] = None,
+        temperature: float | None = None,
+        model: str | None = None,
+        max_tokens: int | None = None,
         return_reasoning: bool = False,
-        system_prompt: Optional[str] = None,
-    ) -> Iterator[Union[str, ReasoningChunk]]:
+        system_prompt: str | None = None,
+    ) -> Iterator[str | ReasoningChunk]:
         """
         Stream a full user prompt (paper / raw mode) and yield chunks.
 
@@ -156,6 +157,12 @@ class RequestProcessor:
             call_kw["return_reasoning"] = True
 
         gen = self.provider.call(**call_kw)
+        if isinstance(gen, str):
+            yield gen
+            return
+        if isinstance(gen, ReasoningChunk):
+            yield gen
+            return
         for item in gen:
             if isinstance(item, tuple) and len(item) == 2:
                 yield ReasoningChunk(content=item[0], reasoning=item[1])
@@ -165,13 +172,13 @@ class RequestProcessor:
     def process_with_metadata(
         self,
         content: str,
-        prompt_template: Optional[str] = None,
-        temperature: Optional[float] = None,
-        model: Optional[str] = None,
-        max_tokens: Optional[int] = None,
+        prompt_template: str | None = None,
+        temperature: float | None = None,
+        model: str | None = None,
+        max_tokens: int | None = None,
         return_reasoning: bool = False,
         raw_prompt: bool = False,
-        system_prompt: Optional[str] = None,
+        system_prompt: str | None = None,
     ) -> ProcessingResult:
         """
         Process content and return result with metadata.
@@ -226,7 +233,7 @@ class RequestProcessor:
             call_kw["return_reasoning"] = True
 
         raw = self.provider.call(**call_kw)
-        reasoning: Optional[str] = None
+        reasoning: str | None = None
         if isinstance(raw, ReasoningChunk):
             response, reasoning = raw.content, raw.reasoning
         else:
@@ -265,9 +272,9 @@ class RequestProcessor:
 
     def create_chat_history(
         self,
-        system_prompt: Optional[str] = None,
-        initial_context: Optional[str] = None,
-        prompt_template: Optional[str] = None,
+        system_prompt: str | None = None,
+        initial_context: str | None = None,
+        prompt_template: str | None = None,
     ) -> ChatHistory:
         """
         Create chat history with optional system prompt and initial context.

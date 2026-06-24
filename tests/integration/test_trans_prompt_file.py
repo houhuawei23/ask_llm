@@ -16,7 +16,8 @@ class TestTransPromptFileIntegration:
         """Test TranslationConfig default values."""
         config = TranslationConfig()
         assert config.target_language == "zh"
-        assert config.threads == 20
+        assert config.threads == 12
+        assert config.max_concurrent_api_calls == 12
         assert config.max_parallel_files == 3
         assert config.retries == 3
 

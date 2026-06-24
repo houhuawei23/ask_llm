@@ -4,34 +4,15 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
+from typing import Annotated
 
 import typer
 from loguru import logger
-from typing_extensions import Annotated
 
 from ask_llm.cli.errors import raise_unexpected_cli_error
-from ask_llm.config.cli_session import (
-    load_cli_session,
-)
-from ask_llm.core.batch import (
-    BatchTask,
-    ModelConfig,
-)
-from ask_llm.core.global_batch_runner import run_global_batch_tasks
-from ask_llm.utils.api_key_gate import (
-    api_key_is_missing_or_unresolved,
-    ensure_api_key_for_provider,
-    require_resolved_api_key,
-)
+from ask_llm.config.cli_session import load_cli_session
+from ask_llm.services.batch_service import run_batch_from_config
 from ask_llm.utils.console import console
-
-try:
-    from llm_engine import create_provider_adapter
-except ImportError:
-    console.print_error(
-        "llm_engine is required but not installed. Please install it with: pip install llm-engine"
-    )
-    raise
 
 
 def batch(
@@ -126,20 +107,9 @@ def batch(
     """
     try:
         _t0 = time.perf_counter()
-        from ask_llm.core.batch import (
-            BatchStatistics,
-            BatchTask,
-        )
+        from ask_llm.core.batch import BatchStatistics
         from ask_llm.utils.batch_exporter import BatchResultExporter
-        from ask_llm.utils.batch_loader import BatchConfigLoader
-        from ask_llm.utils.interactive_config import InteractiveConfigHelper
         from ask_llm.utils.pricing import format_cost_estimate, load_providers_pricing
-
-        # Setup console with verbose mode
-        if verbose:
-            console.setup(quiet=False, debug=True)
-        else:
-            console.setup(quiet=False, debug=False)
 
         # Load configuration first (required for batch defaults)
         load_result, config_manager = load_cli_session(config_path)
@@ -148,18 +118,10 @@ def batch(
         effective_threads = threads if threads is not None else batch_cfg.threads
         effective_retries = retries if retries is not None else batch_cfg.retries
 
-        # Load batch configuration
-        console.print_info(f"Loading batch configuration from: {config_file}")
-        batch_config = BatchConfigLoader.load(config_file)
-
-        tasks = batch_config["tasks"]
-        provider_models = batch_config.get("provider_models", [])
-
         # Auto-detect output format from file extension if not specified
         if output_format is None and output:
             output_path_obj = Path(output)
             suffix = output_path_obj.suffix.lower()
-            # Map file extensions to formats
             extension_to_format = {
                 ".json": "json",
                 ".yaml": "yaml",
@@ -175,166 +137,39 @@ def batch(
         elif output_format is None:
             output_format = batch_cfg.default_output_format
 
-        console.print_success(f"Loaded {len(tasks)} tasks from configuration")
+        # Promote verbosity to debug mode without downgrading global --debug/--quiet.
+        if verbose:
+            console.setup(quiet=False, debug=True)
 
-        # If no models specified, use interactive selection
-        if not provider_models:
-            console.print_info("No models specified in configuration. Using interactive selection.")
-            helper = InteractiveConfigHelper(config_manager)
-            provider_models = helper.select_provider_and_models(allow_multiple=True)
-
-        batch_mode = batch_config.get("mode", batch_cfg.mode)
-        app_config = load_result.app_config
-
-        unique_providers = sorted({m.provider for m in provider_models})
-        for pname in unique_providers:
-            strict_gate = ensure_api_key_for_provider(
-                config_manager,
-                pname,
-                skip_api_key_check=skip_api_key_check,
-            )
-            if strict_gate:
-                require_resolved_api_key(config_manager, pname)
-
-        # Step 1: Validate all models and test connections
-        console.print()
-        console.print("[bold]Validating models and testing connections...[/bold]")
-        validated_models: list[ModelConfig] = []
-        skipped_providers: list[str] = []
-
-        for model_config in provider_models:
-            model_key = f"{model_config.provider}/{model_config.model}"
-            console.print(f"  Checking {model_key}...", end=" ")
-
-            try:
-                # Check if provider exists
-                if model_config.provider not in app_config.providers:
-                    console.print("[red]✗[/red] Provider not found")
-                    skipped_providers.append(model_key)
-                    continue
-
-                # Get provider config
-                provider_config = app_config.providers[model_config.provider]
-
-                # Check API key
-                if api_key_is_missing_or_unresolved(provider_config.api_key):
-                    console.print("[red]✗[/red] API key not configured")
-                    skipped_providers.append(model_key)
-                    continue
-
-                # Check if model is available for this provider
-                if provider_config.models and model_config.model not in provider_config.models:
-                    console.print(
-                        f"[red]✗[/red] Model not available. Available: {', '.join(provider_config.models)}"
-                    )
-                    skipped_providers.append(model_key)
-                    continue
-
-                # Set provider in config manager
-                config_manager.set_provider(model_config.provider)
-
-                # Apply model-specific overrides
-                config_manager.apply_overrides(
-                    model=model_config.model,
-                    temperature=model_config.temperature,
-                    max_tokens=model_config.max_tokens,
-                    top_p=model_config.top_p,
-                )
-
-                provider_config_with_overrides = config_manager.get_provider_config()
-                default_model = (
-                    config_manager.get_model_override() or config_manager.get_default_model()
-                )
-
-                # Test connection
-                try:
-                    test_provider = create_provider_adapter(
-                        provider_config_with_overrides, default_model=default_model
-                    )
-                    success, message, latency = test_provider.test_connection()
-
-                    if not success:
-                        console.print(f"[red]✗[/red] Connection test failed: {message}")
-                        skipped_providers.append(model_key)
-                        continue
-
-                    console.print(f"[green]✓ ({latency:.2f}s)[/green]")
-                    validated_models.append(model_config)
-
-                except Exception as e:
-                    console.print(f"[red]✗[/red] Connection test error: {e}")
-                    skipped_providers.append(model_key)
-                    continue
-
-            except Exception as e:
-                console.print(f"[red]✗[/red] Error: {e}")
-                skipped_providers.append(model_key)
-                continue
-
-        # Display summary of skipped providers
-        if skipped_providers:
-            console.print()
-            console.print_warning(f"Skipped {len(skipped_providers)} provider(s):")
-            for skipped in skipped_providers:
-                console.print(f"  - {skipped}")
-
-        # Check if we have any validated models
-        if not validated_models:
-            console.print_error("No providers were successfully validated. Cannot process tasks.")
-            raise typer.Exit(1)
-
-        # Step 2: Create global task list (each task with model_config)
-        console.print()
-        console.print(
-            f"[bold]Processing {len(validated_models)} model(s) with {len(tasks)} task(s) each...[/bold]"
-        )
-        global_tasks: list[BatchTask] = []
-        task_id_counter = 0
-
-        for model_config in validated_models:
-            for original_task in tasks:
-                # Create a new task with task_model_config attached
-                # Preserve original task_id for split mode filename generation
-                # Use a composite ID: (model_index * num_tasks + original_task_id) for unique identification
-                # But for split mode, we'll use original_task_id directly
-                global_task = BatchTask(
-                    task_id=task_id_counter,
-                    prompt=original_task.prompt,
-                    content=original_task.content,
-                    output_filename=original_task.output_filename,  # Preserve output_filename
-                    task_model_config=model_config,
-                )
-                global_tasks.append(global_task)
-                task_id_counter += 1
-
-        all_results_list, global_processor = run_global_batch_tasks(
-            global_tasks,
+        run_result = run_batch_from_config(
+            config_file,
+            load_result.app_config,
             config_manager,
-            max_workers=effective_threads,
-            max_retries=effective_retries,
+            batch_cfg,
+            output_format=output_format,
+            threads=effective_threads,
+            retries=effective_retries,
             retry_delay=batch_cfg.retry_delay,
             retry_delay_max=batch_cfg.retry_delay_max,
+            skip_api_key_check=skip_api_key_check,
             verbose=verbose,
-            show_progress=True,
-            clamp_workers_to_task_count=False,
         )
 
-        # Step 4: Group results by model and calculate statistics
-        all_results: dict[str, list] = {}
-        all_statistics: dict[str, BatchStatistics] = {}
+        all_results_list = run_result.all_results
+        all_statistics = run_result.model_statistics
+        validated_models = run_result.validated_models
+        skipped_providers = run_result.skipped_models
+        tasks = run_result.original_tasks
+        batch_mode = run_result.batch_mode
 
         # Group results by model
+        all_results: dict[str, list] = {}
         for result in all_results_list:
             model_key = f"{result.model_settings.provider}/{result.model_settings.model}"
             if model_key not in all_results:
                 all_results[model_key] = []
             all_results[model_key].append(result)
 
-        # Calculate statistics for each model
-        model_statistics = global_processor.calculate_statistics(all_results_list)
-        all_statistics = model_statistics
-
-        # Display statistics for each model
         console.print()
         for model_key, statistics in all_statistics.items():
             console.print(f"[bold]Statistics for {model_key}:[/bold]")

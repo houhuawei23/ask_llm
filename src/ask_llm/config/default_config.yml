@@ -98,7 +98,23 @@ paper:
   full_model: deepseek-reasoner    # full-text job only; saves reasoning_content when API returns it
   request_timeout_seconds: 600.0  # HTTP timeout (default provider timeout is often 60s; reasoner needs more)
 
-# === 10. Project Root Markers ===
+# === 10. Rate Limiting ===
+# The global rate limiter uses these defaults and caps the batch thread pool to
+# the smallest burst_size among the tasks being run, so workers do not block
+# waiting for tokens. Override per provider (e.g. "deepseek:") or per
+# provider/model (e.g. "deepseek/deepseek-reasoner:") as needed.
+rate_limits:
+  default_limits:
+    requests_per_minute: 60
+    burst_size: 10
+  # deepseek:
+  #   requests_per_minute: 100
+  #   burst_size: 20
+  # deepseek/deepseek-reasoner:
+  #   requests_per_minute: 50
+  #   burst_size: 5
+
+# === 11. Project Root Markers ===
 project_root_markers:
   - pyproject.toml
   - setup.py

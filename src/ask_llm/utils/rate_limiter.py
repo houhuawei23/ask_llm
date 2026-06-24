@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import ClassVar, Optional
+from typing import TYPE_CHECKING, ClassVar
+
+from loguru import logger
+
+if TYPE_CHECKING:
+    from ask_llm.config.unified_config import RateLimitConfig
 
 
 class _SyncTokenBucket:
@@ -47,7 +52,11 @@ class _SyncTokenBucket:
 
 
 class GlobalRateLimiter:
-    """按 provider/model 共享的同步速率限制器。"""
+    """按 provider/model 共享的同步速率限制器。
+
+    支持从 ``RateLimitConfig`` 读取限流参数，从而让用户通过 ``default_config.yml``
+    或环境变量覆盖 provider/model 级别的 RPM 与 burst。
+    """
 
     # provider 名称 -> (requests_per_minute, burst_size)
     DEFAULT_LIMITS: ClassVar[dict[str, tuple[int, int]]] = {
@@ -58,17 +67,26 @@ class GlobalRateLimiter:
         "qwen": (300, 30),
     }
 
-    _instance: ClassVar[Optional["GlobalRateLimiter"]] = None
+    _instance: ClassVar[GlobalRateLimiter | None] = None
     _instance_lock: ClassVar[threading.Lock] = threading.Lock()
+    _limiters: dict[str, _SyncTokenBucket]
+    _lock: threading.Lock
+    _config: RateLimitConfig | None
 
-    def __new__(cls) -> "GlobalRateLimiter":
+    def __new__(cls) -> GlobalRateLimiter:
         if cls._instance is None:
             with cls._instance_lock:
                 if cls._instance is None:
                     cls._instance = super().__new__(cls)
-                    cls._instance._limiters: dict[str, _SyncTokenBucket] = {}
+                    cls._instance._limiters = {}
                     cls._instance._lock = threading.Lock()
+                    cls._instance._config = None
         return cls._instance
+
+    def configure(self, config: RateLimitConfig | None) -> None:
+        """Set the active rate-limit configuration."""
+        with self._lock:
+            self._config = config
 
     def _key(self, provider: str, model: str | None = None) -> str:
         provider = provider.lower()
@@ -76,8 +94,15 @@ class GlobalRateLimiter:
             return f"{provider}:{model.lower()}"
         return provider
 
-    def _get_limit(self, provider: str) -> tuple[int, int]:
+    def _get_limit(self, provider: str, model: str | None = None) -> tuple[int, int]:
+        if self._config is not None:
+            limits = self._config.get_limits(provider, model)
+            return limits.requests_per_minute, limits.burst_size
         return self.DEFAULT_LIMITS.get(provider.lower(), (60, 10))
+
+    def burst_for(self, provider: str, model: str | None = None) -> int:
+        """Return the configured burst size for provider/model."""
+        return self._get_limit(provider, model)[1]
 
     def acquire(
         self,
@@ -90,10 +115,26 @@ class GlobalRateLimiter:
         with self._lock:
             limiter = self._limiters.get(key)
             if limiter is None:
-                rpm, burst = self._get_limit(provider)
+                rpm, burst = self._get_limit(provider, model)
                 limiter = _SyncTokenBucket(rpm, burst)
                 self._limiters[key] = limiter
-        return limiter.acquire(timeout=timeout)
+            else:
+                # If config changed, recreate the bucket with new limits.
+                rpm, burst = self._get_limit(provider, model)
+                if limiter._capacity != max(1, burst) or limiter._rate != rpm / 60.0:
+                    limiter = _SyncTokenBucket(rpm, burst)
+                    self._limiters[key] = limiter
+
+        start = time.monotonic()
+        acquired = limiter.acquire(timeout=timeout)
+        elapsed = time.monotonic() - start
+        if acquired and elapsed > 0.05:
+            rpm, burst = self._get_limit(provider, model)
+            logger.warning(
+                f"Rate limiter waited {elapsed:.2f}s for {key} "
+                f"(RPM={rpm}, burst={burst}). Consider lowering concurrency or raising limits."
+            )
+        return acquired
 
     def set_limit(
         self,
@@ -108,5 +149,9 @@ class GlobalRateLimiter:
             self._limiters[key] = _SyncTokenBucket(requests_per_minute, burst_size)
 
 
-def get_global_rate_limiter() -> GlobalRateLimiter:
-    return GlobalRateLimiter()
+def get_global_rate_limiter(config: RateLimitConfig | None = None) -> GlobalRateLimiter:
+    """Return the singleton rate limiter, optionally configuring it."""
+    limiter = GlobalRateLimiter()
+    if config is not None:
+        limiter.configure(config)
+    return limiter

@@ -1,7 +1,7 @@
 """Jupyter Notebook translation - translate markdown cells only, preserve code cells."""
 
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 import nbformat
 from loguru import logger
@@ -14,7 +14,7 @@ from ask_llm.core.translator import Translator
 from ask_llm.utils.chunk_balance import rebalance_translation_chunks
 
 
-def _split_markdown_cell_tokens(text: str, model: str, max_chunk_tokens: int) -> List[str]:
+def _split_markdown_cell_tokens(text: str, model: str, max_chunk_tokens: int) -> list[str]:
     """Split long markdown cell text by token budget (structure-aware)."""
     if not text.strip():
         return []
@@ -24,7 +24,7 @@ def _split_markdown_cell_tokens(text: str, model: str, max_chunk_tokens: int) ->
 
 def _is_markdown_cell(cell: NotebookNode) -> bool:
     """Check if a cell is a markdown cell."""
-    return cell.cell_type == "markdown"
+    return bool(cell.cell_type == "markdown")
 
 
 class NotebookTranslator:
@@ -55,7 +55,7 @@ class NotebookTranslator:
         max_chunk_tokens: int = 2400,
         min_chunk_merge_tokens: int = 400,
         stream_api: bool = True,
-    ) -> Tuple[int, int, int, int]:
+    ) -> tuple[int, int, int, int]:
         """
         Translate a Jupyter notebook.
 
@@ -85,7 +85,7 @@ class NotebookTranslator:
             notebook = nbformat.read(f, as_version=4)
 
         # Build translation tasks: (cell_index, chunk_content) for markdown cells
-        tasks_data: List[Tuple[int, str]] = []
+        tasks_data: list[tuple[int, str]] = []
         model = self.model_config.model
         for i, cell in enumerate(notebook.cells):
             if not _is_markdown_cell(cell):
@@ -121,7 +121,7 @@ class NotebookTranslator:
 
         # Create BatchTasks (template keeps {content}; processor merges once)
         prompt_template = self.translator.prompt_template_for_batch()
-        tasks: List[BatchTask] = []
+        tasks: list[BatchTask] = []
         for task_id, (_, chunk_content) in enumerate(tasks_data):
             tasks.append(
                 BatchTask(
@@ -147,7 +147,7 @@ class NotebookTranslator:
 
         # Build cell_index -> list of translated chunks (in order)
         result_map = {r.task_id: r for r in results}
-        cell_translations: Dict[int, List[str]] = {}
+        cell_translations: dict[int, list[str]] = {}
         for task_id, (cell_idx, _) in enumerate(tasks_data):
             result = result_map.get(task_id)
             if result and result.response and result.status.value == "success":

@@ -1,5 +1,42 @@
 # Changelog
 
+## 2.10.0 (2026-06-24)
+
+### Features
+
+- **Service layer extraction**: introduced `TranslationService` and `PaperService` under `ask_llm.services/`, moving core orchestration out of `trans.py` and `paper.py` CLI modules.
+- **Unified provider/model resolution**: added `resolve_provider_and_model_or_exit()` in `ask_llm.config.cli_session`, used by `ask`, `chat`, `trans`, and `paper` commands.
+- **Runner metrics**: `BoundedRetryRunner.run_with_metrics()` returns `RunMetrics` (total/successful/failed/retried, latency), surfaced through `GlobalBatchProcessor.last_metrics` and translation session totals.
+- **Rate-limiter visibility**: `GlobalRateLimiter.acquire()` now logs a warning when it waits for a token, including configured RPM/burst and a tuning hint.
+
+### Changed
+
+- `trans.py` reduced from ~696 lines to ~175 lines; `paper.py` reduced from ~574 lines to ~175 lines.
+- `ASK_LLM_TRANSLATION_THREADS` now maps directly to `translation.max_concurrent_api_calls`, the field actually used by `trans`.
+- `mypy` is now a required CI gate (`continue-on-error: true` removed).
+
+### Fixed
+
+- Resolved 14 remaining `mypy` errors across `utils/console.py`, `config/loader.py`, `utils/token_counter.py`, `config/paper_explain_pipeline.py`, `core/chat.py`, `cli/commands/ask.py`, `core/batch_processor.py`, and `core/paper_explain.py`.
+- Fixed `ReasoningChunk` handling in streaming paths so token counting and output joining receive `str` content.
+
+### Tests
+
+- Added unit tests for `resolve_provider_and_model_or_exit()`.
+- Added `RunMetrics` unit tests covering retries and failures.
+
+### Documentation
+
+- Updated `AGENTS.md` with the Service layer and updated project structure.
+
+### Version
+
+- 2.9.0 → 2.10.0
+
+### Contributors
+
+- Designed and implemented with assistance from **kimi-code** (agent) and **kimi-k2.7** (model).
+
 ## 2.9.0 (2026-06-22)
 
 ### Features

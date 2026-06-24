@@ -1,6 +1,6 @@
 """Token counting utilities."""
 
-from typing import Any, ClassVar, Optional
+from typing import Any, ClassVar
 
 from loguru import logger
 
@@ -75,7 +75,7 @@ class TokenCounter:
         return len(text)
 
     @classmethod
-    def get_encoding(cls, model: Optional[str] = None):
+    def get_encoding(cls, model: str | None = None) -> Any | None:
         """
         Get tiktoken encoding object for a model.
 
@@ -100,7 +100,7 @@ class TokenCounter:
             return None
 
     @classmethod
-    def count_tokens(cls, text: str, model: Optional[str] = None) -> int:
+    def count_tokens(cls, text: str, model: str | None = None) -> int:
         """
         Count tokens in text using tiktoken.
 
@@ -127,7 +127,7 @@ class TokenCounter:
             return cls.count_words(text)
 
     @classmethod
-    def estimate_tokens(cls, text: str, model: Optional[str] = None) -> dict:
+    def estimate_tokens(cls, text: str, model: str | None = None) -> dict:
         """
         Estimate various text metrics.
 
@@ -145,7 +145,7 @@ class TokenCounter:
         }
 
     @classmethod
-    def _get_encoding(cls, model: Optional[str]) -> str:
+    def _get_encoding(cls, model: str | None) -> str:
         """
         Get encoding name for a model.
 
@@ -173,7 +173,7 @@ class TokenCounter:
 
     @classmethod
     def split_hard_by_max_tokens(
-        cls, text: str, max_tokens: int, model: Optional[str] = None
+        cls, text: str, max_tokens: int, model: str | None = None
     ) -> list[str]:
         """
         Greedy split: each returned segment has at most max_tokens (tiktoken), snapping at newlines when possible.
@@ -214,7 +214,7 @@ class TokenCounter:
         return out
 
     @classmethod
-    def truncate_to_tokens(cls, text: str, max_tokens: int, model: Optional[str] = None) -> str:
+    def truncate_to_tokens(cls, text: str, max_tokens: int, model: str | None = None) -> str:
         """
         Truncate text to maximum token count.
 
@@ -234,20 +234,20 @@ class TokenCounter:
         try:
             encoding = cls.get_encoding(model)
             if encoding is None:
-                return text[:max_tokens * 4]
+                return text[: max_tokens * 4]
             tokens = encoding.encode(text)
 
             if len(tokens) <= max_tokens:
                 return text
 
             truncated = encoding.decode(tokens[:max_tokens])
-            return truncated
+            return str(truncated)
         except Exception as e:
             logger.warning(f"Token truncation failed: {e}")
             return text
 
     @classmethod
-    def format_stats(cls, text: str, model: Optional[str] = None) -> str:
+    def format_stats(cls, text: str, model: str | None = None) -> str:
         """
         Format text statistics as a string.
 

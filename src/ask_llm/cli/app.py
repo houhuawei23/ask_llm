@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from typing import Annotated
+
 import typer
-from typing_extensions import Annotated
 
 from ask_llm import __version__
 from ask_llm.cli.commands.ask import ask

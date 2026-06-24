@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import glob
 import os
+from collections.abc import Iterable, Sequence
 from pathlib import Path
-from typing import Iterable, Sequence
 
 from loguru import logger
 

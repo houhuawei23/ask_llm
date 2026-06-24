@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Annotated
 
 import typer
-from typing_extensions import Annotated
 
 from ask_llm.cli.errors import cli_errors
-from ask_llm.config.context import set_config
-from ask_llm.config.loader import ConfigLoader
-from ask_llm.config.manager import ConfigManager
+from ask_llm.config.cli_session import load_cli_session, resolve_provider_and_model_or_exit
 from ask_llm.core.chat import ChatSession
 from ask_llm.utils.api_key_gate import (
     ensure_api_key_for_provider,
@@ -106,36 +104,31 @@ def chat(
     try:
         with cli_errors("chat"):
             # Load configuration
-            load_result = ConfigLoader.load(config_path)
-            set_config(load_result)
-            config_manager = ConfigManager(load_result.app_config)
+            _load_result, config_manager = load_cli_session(config_path)
 
-            # Set provider
-            if provider:
-                config_manager.set_provider(provider)
+            final_provider, final_model = resolve_provider_and_model_or_exit(
+                config_manager,
+                cli_provider=provider,
+                cli_model=model,
+            )
 
             config_manager.apply_overrides(
-                model=model,
+                model=final_model,
                 temperature=temperature,
             )
 
             strict_gate = ensure_api_key_for_provider(
                 config_manager,
-                config_manager.current_provider_name,
+                final_provider,
                 skip_api_key_check=skip_api_key_check,
             )
             if strict_gate:
-                require_resolved_api_key(config_manager, config_manager.current_provider_name)
+                require_resolved_api_key(config_manager, final_provider)
 
             provider_config = config_manager.get_provider_config()
 
-            # Get default model (use override if set, otherwise use default from config)
-            default_model = (
-                config_manager.get_model_override() or config_manager.get_default_model()
-            )
-
             # Initialize provider using llm_engine factory
-            llm_provider = create_provider_adapter(provider_config, default_model=default_model)
+            llm_provider = create_provider_adapter(provider_config, default_model=final_model)
 
             # Load initial context
             initial_context = None

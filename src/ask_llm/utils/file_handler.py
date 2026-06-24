@@ -1,7 +1,6 @@
 """File handling utilities with progress bars."""
 
 from pathlib import Path
-from typing import Optional, Union
 
 from loguru import logger
 from tqdm import tqdm
@@ -23,7 +22,7 @@ class FileHandler:
         return get_config().unified_config.file.tqdm_ncols
 
     @classmethod
-    def read(cls, path: Union[str, Path], show_progress: bool = False) -> str:
+    def read(cls, path: str | Path, show_progress: bool = False) -> str:
         """
         Read content from a file.
 
@@ -67,13 +66,16 @@ class FileHandler:
         """Read file with progress bar."""
         content_parts = []
 
-        with open(path, encoding="utf-8") as f, tqdm(
-            total=total_size,
-            unit="B",
-            unit_scale=True,
-            desc=f"Reading {path.name}",
-            ncols=cls._get_tqdm_ncols(),
-        ) as pbar:
+        with (
+            open(path, encoding="utf-8") as f,
+            tqdm(
+                total=total_size,
+                unit="B",
+                unit_scale=True,
+                desc=f"Reading {path.name}",
+                ncols=cls._get_tqdm_ncols(),
+            ) as pbar,
+        ):
             while True:
                 chunk = f.read(cls._get_chunk_size())
                 if not chunk:
@@ -85,7 +87,7 @@ class FileHandler:
 
     @classmethod
     def write(
-        cls, path: Union[str, Path], content: str, force: bool = False, show_progress: bool = False
+        cls, path: str | Path, content: str, force: bool = False, show_progress: bool = False
     ) -> None:
         """
         Write content to a file.
@@ -129,13 +131,16 @@ class FileHandler:
         total = len(content)
         written = 0
 
-        with open(path, "w", encoding="utf-8") as f, tqdm(
-            total=total,
-            unit="B",
-            unit_scale=True,
-            desc=f"Writing {path.name}",
-            ncols=cls._get_tqdm_ncols(),
-        ) as pbar:
+        with (
+            open(path, "w", encoding="utf-8") as f,
+            tqdm(
+                total=total,
+                unit="B",
+                unit_scale=True,
+                desc=f"Writing {path.name}",
+                ncols=cls._get_tqdm_ncols(),
+            ) as pbar,
+        ):
             while written < total:
                 chunk = content[written : written + cls._get_chunk_size()]
                 f.write(chunk)
@@ -145,9 +150,9 @@ class FileHandler:
     @classmethod
     def generate_output_path(
         cls,
-        input_path: Union[str, Path],
-        custom_path: Optional[Union[str, Path]] = None,
-        suffix: Optional[str] = None,
+        input_path: str | Path,
+        custom_path: str | Path | None = None,
+        suffix: str | None = None,
     ) -> str:
         """
         Generate output file path based on input path.
@@ -174,7 +179,7 @@ class FileHandler:
         return str(input_file.parent / output_name)
 
     @classmethod
-    def detect_type(cls, path: Union[str, Path]) -> str:
+    def detect_type(cls, path: str | Path) -> str:
         """
         Detect file type based on extension.
 
@@ -187,7 +192,7 @@ class FileHandler:
         return Path(path).suffix.lower()
 
     @classmethod
-    def is_text_file(cls, path: Union[str, Path]) -> bool:
+    def is_text_file(cls, path: str | Path) -> bool:
         """
         Check if file is a text file based on extension.
 

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping, Optional
 
 import yaml
 from loguru import logger
@@ -20,7 +20,7 @@ _DEEPSEEK_API_MAX_TOKENS: dict[str, int] = {
 }
 
 
-def _deepseek_http_max_tokens_cap(model: Optional[str]) -> Optional[int]:
+def _deepseek_http_max_tokens_cap(model: str | None) -> int | None:
     """Return API ``max_tokens`` ceiling for known DeepSeek model ids; ``None`` if not DeepSeek."""
     if not model:
         return None
@@ -109,9 +109,9 @@ def _parse_max_output(mo: object) -> tuple[int, int]:
 
 
 def resolve_paper_max_tokens(
-    model: Optional[str],
+    model: str | None,
     requested: int,
-    limits_by_model: Optional[Mapping[str, ModelLimits]] = None,
+    limits_by_model: Mapping[str, ModelLimits] | None = None,
 ) -> int:
     """
     Effective ``max_tokens`` for a completion:
@@ -135,9 +135,9 @@ def resolve_paper_max_tokens(
 
 
 def get_model_limits(
-    model: Optional[str],
-    limits_by_model: Optional[Mapping[str, ModelLimits]],
-) -> Optional[ModelLimits]:
+    model: str | None,
+    limits_by_model: Mapping[str, ModelLimits] | None,
+) -> ModelLimits | None:
     """Return limits for ``model`` if present in the catalog."""
     if not model or not limits_by_model:
         return None

@@ -3,29 +3,18 @@
 from __future__ import annotations
 
 import os
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any
+from typing import Annotated
 
 import typer
-from loguru import logger
-from rich.progress import (
-    BarColumn,
-    MofNCompleteColumn,
-    Progress,
-    SpinnerColumn,
-    TextColumn,
-    TimeElapsedColumn,
-)
-from typing_extensions import Annotated
 
 from ask_llm.cli.errors import raise_unexpected_cli_error
 from ask_llm.config.context import set_config
 from ask_llm.config.loader import ConfigLoader
 from ask_llm.config.manager import ConfigManager
-from ask_llm.core.format_markdown_file import format_body_markdown_file, format_one_markdown_file
 from ask_llm.core.md_body_formatter import BodyFormatter
 from ask_llm.core.processor import RequestProcessor
+from ask_llm.services.format_service import run_parallel_format, run_sequential_format
 from ask_llm.utils.console import console
 from ask_llm.utils.file_handler import FileHandler
 from ask_llm.utils.md_path_discovery import discover_markdown_files
@@ -254,11 +243,8 @@ def format_cmd(
         ask-llm format doc.md --type body --resume doc.md.body_checkpoint.json
     """
     try:
-        # Handle --resume mode first
-        if resume:
-            _handle_resume(resume, output=output, inplace=inplace, force=force)
-            raise typer.Exit(0)
-
+        # Load config and apply CLI overrides first so that --resume respects
+        # --config, --provider, --model, and --temperature.
         load_result = ConfigLoader.load(config_path)
         set_config(load_result)
         config_manager = ConfigManager(load_result.app_config)
@@ -270,6 +256,17 @@ def format_cmd(
             model=model,
             temperature=temperature,
         )
+
+        # Handle --resume mode after config is ready
+        if resume:
+            _handle_resume(
+                resume,
+                config_manager=config_manager,
+                output=output,
+                inplace=inplace,
+                force=force,
+            )
+            raise typer.Exit(0)
 
         type_lower = type_.lower()
         if type_lower not in ("title", "body"):
@@ -313,7 +310,7 @@ def format_cmd(
         use_parallel = len(resolved_files) > 1 and file_workers > 1
 
         if use_parallel:
-            _run_parallel_format(
+            run_parallel_format(
                 resolved_files,
                 format_type=type_lower,
                 processor=processor,
@@ -332,7 +329,7 @@ def format_cmd(
                 retry_delay_max=retry_delay_max,
             )
         else:
-            _run_sequential_format(
+            run_sequential_format(
                 resolved_files,
                 format_type=type_lower,
                 processor=processor,
@@ -369,6 +366,7 @@ def format_cmd(
 def _handle_resume(
     checkpoint_path: str,
     *,
+    config_manager: ConfigManager,
     output: str | None,
     inplace: bool,
     force: bool,
@@ -387,12 +385,8 @@ def _handle_resume(
         f"成功 chunk 数: {len(checkpoint.successful_chunks)}"
     )
 
-    # Load config and create provider
-    load_result = ConfigLoader.load()
-    set_config(load_result)
-    config_manager = ConfigManager(load_result.app_config)
     provider_config = config_manager.get_provider_config()
-    default_model = config_manager.get_default_model()
+    default_model = config_manager.get_model_override() or config_manager.get_default_model()
 
     if not default_model:
         console.print_error("未指定模型。请使用 --model 或在配置中设置默认模型。")
@@ -447,229 +441,3 @@ def _handle_resume(
             console.print_info(f"已删除 checkpoint: {checkpoint_path}")
         except OSError:
             pass
-
-
-def _run_sequential_format(
-    resolved_files: list[str],
-    *,
-    format_type: str,
-    processor: RequestProcessor,
-    model: str,
-    prompt_file_resolved: str,
-    heading_batch_size: int | None,
-    heading_concurrency: int | None,
-    body_max_chunk_tokens: int | None,
-    body_concurrency: int | None,
-    output: str | None,
-    inplace: bool,
-    force: bool,
-    retries: int | None,
-    retry_delay: float | None,
-    retry_delay_max: float | None,
-) -> None:
-    """Single-worker path: verbose per-file logging (legacy UX)."""
-    successful_count = 0
-    failed_count = 0
-    skipped_count = 0
-    total_input_tokens = 0
-    total_output_tokens = 0
-
-    for file_path in resolved_files:
-        console.print()
-        console.print(f"[bold]处理: {file_path}[/bold]")
-
-        if format_type == "title":
-            outcome = format_one_markdown_file(
-                file_path,
-                processor=processor,
-                prompt_file_resolved=prompt_file_resolved,
-                heading_batch_size=heading_batch_size,
-                heading_concurrency=heading_concurrency,
-                output=output,
-                inplace=inplace,
-                force=force,
-            )
-        else:
-            outcome = format_body_markdown_file(
-                file_path,
-                processor=processor,
-                model=model,
-                prompt_file_resolved=prompt_file_resolved,
-                body_max_chunk_tokens=body_max_chunk_tokens,
-                body_concurrency=body_concurrency,
-                output=output,
-                inplace=inplace,
-                force=force,
-            )
-
-        if outcome.ok:
-            successful_count += 1
-            if inplace:
-                console.print_success(f"已原地写入: {outcome.output_path}")
-            else:
-                console.print_success(f"已保存: {outcome.output_path}")
-            if format_type == "title":
-                console.print(f"  共格式化 {outcome.heading_count} 个标题")
-            else:
-                total_input_tokens += outcome.total_input_tokens
-                total_output_tokens += outcome.total_output_tokens
-                if outcome.total_input_tokens or outcome.total_output_tokens:
-                    console.print(
-                        f"  消耗 tokens: {outcome.total_input_tokens} -> {outcome.total_output_tokens}"
-                    )
-            if outcome.failed_chunks:
-                console.print_warning(
-                    f"  部分失败: {len(outcome.failed_chunks)} 个 chunk/batch 失败，原始内容已保留"
-                )
-                if outcome.checkpoint_path:
-                    console.print_info(f"  可使用 --resume {outcome.checkpoint_path} 再次尝试")
-        elif outcome.skipped:
-            skipped_count += 1
-            console.print_warning(f"跳过 {file_path}: {outcome.message}")
-        else:
-            failed_count += 1
-            console.print_error(f"{file_path}: {outcome.message}")
-
-    _print_format_summary(
-        successful_count, failed_count, skipped_count, total_input_tokens, total_output_tokens
-    )
-
-
-def _run_parallel_format(
-    resolved_files: list[str],
-    *,
-    format_type: str,
-    processor: RequestProcessor,
-    model: str,
-    prompt_file_resolved: str,
-    heading_batch_size: int | None,
-    heading_concurrency: int | None,
-    body_max_chunk_tokens: int | None,
-    body_concurrency: int | None,
-    output: str | None,
-    inplace: bool,
-    force: bool,
-    max_workers: int,
-    retries: int | None,
-    retry_delay: float | None,
-    retry_delay_max: float | None,
-) -> None:
-    """Process many files with a thread pool and a Rich progress bar."""
-    successful_count = 0
-    failed_count = 0
-    skipped_count = 0
-    total_input_tokens = 0
-    total_output_tokens = 0
-
-    workers = min(max_workers, len(resolved_files))
-
-    progress_columns = (
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        MofNCompleteColumn(),
-        TimeElapsedColumn(),
-    )
-
-    def _submit_file(pool: ThreadPoolExecutor, fp: str) -> Any:
-        if format_type == "title":
-            return pool.submit(
-                format_one_markdown_file,
-                fp,
-                processor=processor,
-                prompt_file_resolved=prompt_file_resolved,
-                heading_batch_size=heading_batch_size,
-                heading_concurrency=heading_concurrency,
-                output=output,
-                inplace=inplace,
-                force=force,
-            )
-        else:
-            return pool.submit(
-                format_body_markdown_file,
-                fp,
-                processor=processor,
-                model=model,
-                prompt_file_resolved=prompt_file_resolved,
-                body_max_chunk_tokens=body_max_chunk_tokens,
-                body_concurrency=body_concurrency,
-                output=output,
-                inplace=inplace,
-                force=force,
-            )
-
-    with Progress(*progress_columns, console=console.rich_console, transient=False) as progress:
-        task_id = progress.add_task(
-            "[cyan]格式化 Markdown[/cyan]",
-            total=len(resolved_files),
-        )
-        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="format-md") as pool:
-            future_map = {_submit_file(pool, fp): fp for fp in resolved_files}
-            for fut in as_completed(future_map):
-                fp = future_map[fut]
-                try:
-                    outcome = fut.result()
-                except Exception as exc:
-                    logger.exception("未捕获异常: {}", fp)
-                    failed_count += 1
-                    console.print_error(f"{fp}: {exc}")
-                else:
-                    if outcome.ok:
-                        successful_count += 1
-                        if format_type == "title":
-                            logger.info(
-                                "完成 [{}] -> {} ({} 标题)",
-                                fp,
-                                outcome.output_path,
-                                outcome.heading_count,
-                            )
-                        else:
-                            total_input_tokens += outcome.total_input_tokens
-                            total_output_tokens += outcome.total_output_tokens
-                            logger.info(
-                                "完成 [{}] -> {} (tokens: {} -> {})",
-                                fp,
-                                outcome.output_path,
-                                outcome.total_input_tokens,
-                                outcome.total_output_tokens,
-                            )
-                        if outcome.failed_chunks:
-                            logger.warning(
-                                "部分失败 [{}]: {} 个 chunk/batch 失败，"
-                                "可使用 --resume {} 再次尝试",
-                                fp,
-                                len(outcome.failed_chunks),
-                                outcome.checkpoint_path,
-                            )
-                    elif outcome.skipped:
-                        skipped_count += 1
-                        logger.warning("跳过 [{}]: {}", fp, outcome.message)
-                    else:
-                        failed_count += 1
-                        logger.error("{}: {}", fp, outcome.message)
-                progress.advance(task_id)
-
-    _print_format_summary(
-        successful_count, failed_count, skipped_count, total_input_tokens, total_output_tokens
-    )
-
-
-def _print_format_summary(
-    successful: int,
-    failed: int,
-    skipped: int,
-    total_input_tokens: int = 0,
-    total_output_tokens: int = 0,
-) -> None:
-    console.print()
-    if successful:
-        console.print_success(f"成功: {successful} 个文件")
-    if skipped:
-        console.print_warning(f"跳过: {skipped} 个文件")
-    if failed:
-        console.print_warning(f"失败: {failed} 个文件")
-    if total_input_tokens or total_output_tokens:
-        console.print(
-            f"[dim]总 token 消耗: {total_input_tokens} -> {total_output_tokens} "
-            f"(共 {total_input_tokens + total_output_tokens} tokens)[/dim]"
-        )

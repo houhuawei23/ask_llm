@@ -1,6 +1,6 @@
 """Configuration management and CLI overrides."""
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from loguru import logger
 
@@ -19,7 +19,7 @@ class ConfigManager:
         """
         self._base_config = config
         self._current_provider: str = config.default_provider
-        self._overrides: Dict[str, Any] = {}
+        self._overrides: dict[str, Any] = {}
 
     @property
     def config(self) -> AppConfig:
@@ -47,7 +47,7 @@ class ConfigManager:
         self._current_provider = name
         logger.debug(f"Switched to provider: {name}")
 
-    def get_provider_config(self, provider_name: Optional[str] = None) -> ProviderConfig:
+    def get_provider_config(self, provider_name: str | None = None) -> ProviderConfig:
         """
         Get provider configuration with overrides applied.
 
@@ -68,11 +68,11 @@ class ConfigManager:
 
     def apply_overrides(
         self,
-        model: Optional[str] = None,
-        temperature: Optional[float] = None,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-        **kwargs,
+        model: str | None = None,
+        temperature: float | None = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
+        **kwargs: Any,
     ) -> None:
         """
         Apply CLI argument overrides.
@@ -105,7 +105,7 @@ class ConfigManager:
                 self._overrides[key] = value
                 logger.debug(f"Override: {key} = {value}")
 
-    def get_model_override(self) -> Optional[str]:
+    def get_model_override(self) -> str | None:
         """
         Get model override if set.
 
@@ -114,7 +114,7 @@ class ConfigManager:
         """
         return self._overrides.get("_model_override")
 
-    def get_default_model(self, provider_name: Optional[str] = None) -> str:
+    def get_default_model(self, provider_name: str | None = None) -> str:
         """
         Get default model for a provider.
 
@@ -147,11 +147,11 @@ class ConfigManager:
         self._overrides.clear()
         logger.debug("Cleared all configuration overrides")
 
-    def get_available_providers(self) -> List[str]:
+    def get_available_providers(self) -> list[str]:
         """Get list of available provider names."""
         return list(self._base_config.providers.keys())
 
-    def get_available_models(self, provider_name: Optional[str] = None) -> List[str]:
+    def get_available_models(self, provider_name: str | None = None) -> list[str]:
         """
         Get list of available models for a provider.
 

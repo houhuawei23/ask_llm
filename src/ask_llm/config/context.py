@@ -1,10 +1,8 @@
 """Configuration context for current command - set at CLI entry, used by deep modules."""
 
-from typing import Optional
-
 from ask_llm.config.loader import LoadResult
 
-_current: Optional[LoadResult] = None
+_current: LoadResult | None = None
 
 
 def set_config(load_result: LoadResult) -> None:
@@ -28,6 +26,6 @@ def get_config() -> LoadResult:
     return _current
 
 
-def get_config_or_none() -> Optional[LoadResult]:
+def get_config_or_none() -> LoadResult | None:
     """Get the current configuration, or None if not set."""
     return _current

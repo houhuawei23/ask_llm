@@ -143,6 +143,9 @@ def format_one_markdown_file(
     prompt_file_resolved: str,
     heading_batch_size: int | None,
     heading_concurrency: int | None,
+    retries: int | None = None,
+    retry_delay: float | None = None,
+    retry_delay_max: float | None = None,
     output: str | None,
     inplace: bool,
     force: bool,
@@ -165,6 +168,7 @@ def format_one_markdown_file(
     content, error = _validate_and_read(file_path)
     if error:
         return error
+    assert content is not None
 
     headings = HeadingExtractor.extract(content)
     if not headings:
@@ -181,6 +185,9 @@ def format_one_markdown_file(
             prompt_file=prompt_file_resolved,
             batch_size=heading_batch_size,
             concurrency=heading_concurrency,
+            retries=retries,
+            retry_delay=retry_delay,
+            retry_delay_max=retry_delay_max,
         )
         result = formatter.format_headings(headings, source_file=file_path)
     except Exception as exc:
@@ -232,6 +239,9 @@ def format_body_markdown_file(
     prompt_file_resolved: str,
     body_max_chunk_tokens: int | None,
     body_concurrency: int | None,
+    retries: int | None = None,
+    retry_delay: float | None = None,
+    retry_delay_max: float | None = None,
     output: str | None,
     inplace: bool,
     force: bool,
@@ -255,6 +265,7 @@ def format_body_markdown_file(
     content, error = _validate_and_read(file_path)
     if error:
         return error
+    assert content is not None
 
     try:
         formatter = BodyFormatter(
@@ -263,6 +274,9 @@ def format_body_markdown_file(
             prompt_file=prompt_file_resolved,
             max_chunk_tokens=body_max_chunk_tokens,
             concurrency=body_concurrency,
+            retries=retries,
+            retry_delay=retry_delay,
+            retry_delay_max=retry_delay_max,
         )
         result = formatter.format_body(content, source_file=file_path)
     except Exception as exc:

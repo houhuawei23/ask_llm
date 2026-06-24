@@ -3,15 +3,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Annotated
 
 import typer
-from typing_extensions import Annotated
 
 from ask_llm.cli.errors import cli_errors
-from ask_llm.config.context import set_config
-from ask_llm.config.loader import ConfigLoader
-from ask_llm.config.manager import ConfigManager
+from ask_llm.config.cli_session import load_cli_session, resolve_provider_and_model_or_exit
 from ask_llm.core.processor import RequestProcessor
+from ask_llm.core.protocols import ReasoningChunk
 from ask_llm.utils.api_key_gate import (
     ensure_api_key_for_provider,
     require_resolved_api_key,
@@ -164,21 +163,18 @@ def ask(
 
     with cli_errors("ask"):
         # Load configuration
-        load_result = ConfigLoader.load(config_path)
-        set_config(load_result)
-        config_manager = ConfigManager(load_result.app_config)
+        load_result, config_manager = load_cli_session(config_path)
 
-        # Set provider and apply overrides
-        if provider:
-            config_manager.set_provider(provider)
-
-        config_manager.apply_overrides(
-            model=model,
-            temperature=temperature,
+        _final_provider, final_model = resolve_provider_and_model_or_exit(
+            config_manager,
+            cli_provider=provider,
+            cli_model=model,
         )
 
-        # Get default model (use override if set, otherwise use default from config)
-        default_model = config_manager.get_model_override() or config_manager.get_default_model()
+        config_manager.apply_overrides(
+            model=final_model,
+            temperature=temperature,
+        )
 
         # Get input content (needed for dry-run before API key check)
         input_path = Path(source)
@@ -215,14 +211,14 @@ def ask(
                 final_prompt = template.replace("{content}", content)
             else:
                 final_prompt = f"{template}\n\n{content}"
-            stats = TokenCounter.estimate_tokens(final_prompt, default_model)
+            stats = TokenCounter.estimate_tokens(final_prompt, final_model)
             console.print("[bold]--- Dry Run Preview ---[/bold]")
-            console.print(f"Model: {default_model}")
+            console.print(f"Model: {final_model}")
             console.print(
                 f"Estimated input: {stats['token_count']} tokens ({stats['word_count']} words)"
             )
             if system:
-                system_stats = TokenCounter.estimate_tokens(system, default_model)
+                system_stats = TokenCounter.estimate_tokens(system, final_model)
                 console.print(f"System prompt: {system_stats['token_count']} tokens")
             console.print(
                 f"\nPrompt (first 500 chars):\n{final_prompt[:500]}{'...' if len(final_prompt) > 500 else ''}"
@@ -241,7 +237,7 @@ def ask(
         provider_config = config_manager.get_provider_config()
 
         # Initialize provider using llm_engine factory
-        llm_provider = create_provider_adapter(provider_config, default_model=default_model)
+        llm_provider = create_provider_adapter(provider_config, default_model=final_model)
         processor = RequestProcessor(llm_provider)
 
         # Determine output mode
@@ -283,11 +279,9 @@ def ask(
             if stream:
                 if include_reasoning:
                     # Use raw stream to capture reasoning
-                    from ask_llm.core.protocols import ReasoningChunk
-
                     final_prompt = processor._format_prompt(content, prompt_template)
                     console.print("[bold blue]Response:[/bold blue] ", end="")
-                    reasoning_parts = []
+                    reasoning_parts: list[str] = []
                     for chunk in processor.iter_process_raw_stream(
                         final_prompt,
                         temperature=temperature,
@@ -314,7 +308,8 @@ def ask(
                         stream=True,
                         system_prompt=system,
                     ):
-                        console.print_stream(chunk, end="")
+                        stream_chunk = chunk.content if isinstance(chunk, ReasoningChunk) else chunk
+                        console.print_stream(stream_chunk, end="")
                     console.print()
             else:
                 result = processor.process_with_metadata(

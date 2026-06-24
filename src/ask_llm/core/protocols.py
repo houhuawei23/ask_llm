@@ -1,6 +1,9 @@
 """Protocol definitions for type checking."""
 
-from typing import Dict, Generator, List, NamedTuple, Optional, Protocol, Union
+from collections.abc import Generator
+from typing import Any, NamedTuple, Protocol
+
+from ask_llm.core.models import ProviderConfig
 
 
 class ReasoningChunk(NamedTuple):
@@ -13,19 +16,19 @@ class ReasoningChunk(NamedTuple):
 class LLMProviderProtocol(Protocol):
     """Protocol for LLM providers compatible with ask_llm."""
 
-    config: object
+    config: ProviderConfig
     name: str
     default_model: str
-    available_models: List[str]
+    available_models: list[str]
 
     def call(
         self,
-        prompt: Optional[str] = None,
-        messages: Optional[List[Dict[str, str]]] = None,
-        temperature: Optional[float] = None,
-        model: Optional[str] = None,
+        prompt: str | None = None,
+        messages: list[dict[str, str]] | None = None,
+        temperature: float | None = None,
+        model: str | None = None,
         stream: bool = False,
-        **kwargs,
-    ) -> Union[str, Generator[Union[str, "ReasoningChunk"], None, None]]:
+        **kwargs: Any,
+    ) -> str | ReasoningChunk | Generator[str | ReasoningChunk, None, None]:
         """Call the LLM API."""
         ...
