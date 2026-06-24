@@ -14,7 +14,6 @@ from pathlib import Path
 
 from loguru import logger
 
-from ask_llm.cli.common import _is_directory_output, _resolve_trans_input_paths
 from ask_llm.config.manager import ConfigManager
 from ask_llm.config.unified_config import UnifiedConfig
 from ask_llm.core.batch import BatchResult, BatchTask, ModelConfig
@@ -22,6 +21,7 @@ from ask_llm.core.batch_checkpoint import BatchCheckpoint
 from ask_llm.core.batch_models import TaskStatus
 from ask_llm.core.global_batch_runner import run_global_batch_tasks
 from ask_llm.core.markdown_token_splitter import MarkdownTokenSplitter
+from ask_llm.core.models import AppConfig
 from ask_llm.core.text_splitter import TextChunk, TextSplitter
 from ask_llm.core.translator import Translator
 from ask_llm.utils.chunk_balance import plain_text_chunks_by_tokens, rebalance_translation_chunks
@@ -29,6 +29,7 @@ from ask_llm.utils.console import console
 from ask_llm.utils.file_handler import FileHandler
 from ask_llm.utils.notebook_translator import NotebookTranslator
 from ask_llm.utils.pricing import format_cost_estimate
+from ask_llm.utils.provider_router import build_fallback_chain
 from ask_llm.utils.translation_exporter import TranslationExporter
 
 PricingMap = dict[tuple[str, str], dict[str, float]]
@@ -55,6 +56,7 @@ class TranslationOptions:
     recursive_dir: bool
     prompt_file: str | None = None
     resume: bool = False
+    use_fallback: bool = True
 
 
 @dataclass
@@ -105,6 +107,7 @@ class TranslationService:
         model: str,
         pricing_map: PricingMap | None = None,
         pricing_source: Path | None = None,
+        app_config: AppConfig | None = None,
     ) -> None:
         """Initialize the translation service.
 
@@ -115,6 +118,7 @@ class TranslationService:
             model: Resolved model name.
             pricing_map: Optional pricing data for cost estimates.
             pricing_source: Optional path/label of the pricing source.
+            app_config: Loaded application config; required for provider fallback chain.
         """
         self.config_manager = config_manager
         self.unified_config = unified_config
@@ -122,6 +126,7 @@ class TranslationService:
         self.model = model
         self.pricing_map = pricing_map or {}
         self.pricing_source = pricing_source
+        self.app_config = app_config
 
     def translate_files(
         self,
@@ -154,6 +159,9 @@ class TranslationService:
             FileNotFoundError: If no input files are found.
             ValueError: If input or configuration is invalid.
         """
+        # Import CLI helpers locally to avoid a top-level circular import with cli.app.
+        from ask_llm.cli.common import _is_directory_output, _resolve_trans_input_paths
+
         session_result = TranslationSessionResult()
         _t0 = time.perf_counter()
 
@@ -361,6 +369,10 @@ class TranslationService:
         )
 
         tasks = translator.create_translation_tasks(chunks, model_config)
+        if options.use_fallback and self.app_config is not None:
+            fallback_configs = build_fallback_chain(self.app_config, model_config)
+            for task in tasks:
+                task.fallback_model_configs = fallback_configs
         output_path = self._resolve_output_path(
             file_path, output=output, output_is_dir=output_is_dir, suffix=effective_suffix
         )
@@ -644,9 +656,14 @@ class TranslationService:
             max_tokens=options.max_output_tokens,
         )
 
+        fallback_configs: list[ModelConfig] = []
+        if options.use_fallback and self.app_config is not None:
+            fallback_configs = build_fallback_chain(self.app_config, model_config)
+
         notebook_translator = NotebookTranslator(
             translator=translator,
             model_config=model_config,
+            fallback_configs=fallback_configs,
         )
 
         try:

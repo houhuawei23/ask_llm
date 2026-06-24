@@ -203,6 +203,13 @@ def trans(
             help="Resume translation from per-file checkpoints (default: False)",
         ),
     ] = False,
+    fallback: Annotated[
+        bool,
+        typer.Option(
+            "--fallback/--no-fallback",
+            help="Enable fallback to alternate providers/models on failure",
+        ),
+    ] = True,
 ) -> None:
     """
     Translate text files using LLM API.
@@ -274,6 +281,7 @@ def trans(
             recursive_dir=trans_cfg.recursive_dir,
             prompt_file=prompt_file,
             resume=resume,
+            use_fallback=fallback,
         )
 
         service = TranslationService(
@@ -283,6 +291,7 @@ def trans(
             model=final_model,
             pricing_map=pricing_map,
             pricing_source=pricing_source,
+            app_config=load_result.app_config,
         )
 
         service.translate_files(

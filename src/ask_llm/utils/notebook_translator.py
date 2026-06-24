@@ -38,9 +38,11 @@ class NotebookTranslator:
         self,
         translator: Translator,
         model_config: ModelConfig,
+        fallback_configs: list[ModelConfig] | None = None,
     ):
         self.translator = translator
         self.model_config = model_config
+        self.fallback_configs = fallback_configs or []
 
     def translate_notebook(
         self,
@@ -129,6 +131,7 @@ class NotebookTranslator:
                     prompt=prompt_template,
                     content=chunk_content,
                     task_model_config=self.model_config,
+                    fallback_model_configs=self.fallback_configs,
                 )
             )
 

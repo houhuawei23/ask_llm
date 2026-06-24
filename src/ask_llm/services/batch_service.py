@@ -32,6 +32,7 @@ from ask_llm.utils.batch_loader import BatchConfigLoader
 from ask_llm.utils.console import console
 from ask_llm.utils.interactive_config import InteractiveConfigHelper
 from ask_llm.utils.pricing import format_cost_estimate
+from ask_llm.utils.provider_router import build_fallback_chain
 
 try:
     from llm_engine import create_provider_adapter
@@ -183,6 +184,7 @@ def run_batch_from_config(
     skip_api_key_check: bool = False,
     verbose: bool = False,
     resume_checkpoint_path: str | None = None,
+    use_fallback: bool = True,
 ) -> BatchRunResult:
     """Load a batch YAML config, validate models, and execute all tasks.
 
@@ -198,6 +200,7 @@ def run_batch_from_config(
         retry_delay_max: Max retry delay cap.
         skip_api_key_check: Skip API key validation.
         verbose: Enable verbose provider output.
+        use_fallback: Whether to enable fallback to alternate providers/models.
 
     Returns:
         BatchRunResult with all results, statistics and metadata for export.
@@ -263,6 +266,7 @@ def run_batch_from_config(
     task_id_counter = 0
 
     for model_config in validation.validated:
+        fallback_configs = build_fallback_chain(app_config, model_config) if use_fallback else []
         for original_task in tasks:
             global_task = BatchTask(
                 task_id=task_id_counter,
@@ -270,6 +274,7 @@ def run_batch_from_config(
                 content=original_task.content,
                 output_filename=original_task.output_filename,
                 task_model_config=model_config,
+                fallback_model_configs=fallback_configs,
             )
             global_tasks.append(global_task)
             task_id_counter += 1
@@ -448,9 +453,7 @@ class BatchService:
         grouped = self._group_results_by_model()
 
         if not grouped:
-            raise ValueError(
-                "No providers were successfully processed. Cannot generate results."
-            )
+            raise ValueError("No providers were successfully processed. Cannot generate results.")
 
         if split:
             return self._export_split(output, output_format, grouped)
@@ -501,9 +504,7 @@ class BatchService:
             deduped_results, output_dir, self.run_result.batch_mode
         )
         console.print()
-        console.print_success(
-            f"Results exported to {len(exported_files)} files in: {output_dir}"
-        )
+        console.print_success(f"Results exported to {len(exported_files)} files in: {output_dir}")
         for file_path in exported_files:
             console.print(f"  - {file_path}")
         return BatchExportResult(exported_paths=exported_files, export_mode="split")
@@ -562,9 +563,7 @@ class BatchService:
                 / f"{config_file_path.stem}{self.batch_cfg.output_suffix}.{output_format}"
             )
 
-        exporter = BatchResultExporter(
-            combined_results, combined_stats, self.run_result.batch_mode
-        )
+        exporter = BatchResultExporter(combined_results, combined_stats, self.run_result.batch_mode)
         exported_file = exporter.export(output_path, output_format)
         console.print()
         console.print_success(f"Results exported to: {exported_file}")

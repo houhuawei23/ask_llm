@@ -14,12 +14,12 @@ from ask_llm.services.batch_service import run_batch_from_config
 def _make_batch_config(tmp_path: Path) -> Path:
     config_path = tmp_path / "batch.yml"
     config_path.write_text(
-        'provider-models:\n'
-        '  - provider: openai\n'
-        '    models:\n'
-        '      - gpt-4\n'
+        "provider-models:\n"
+        "  - provider: openai\n"
+        "    models:\n"
+        "      - gpt-4\n"
         'prompt: "Translate: {content}"\n'
-        'contents:\n'
+        "contents:\n"
         '  - "hello"\n',
         encoding="utf-8",
     )

@@ -39,6 +39,10 @@ class BatchTask(BaseModel):
     task_model_config: ModelConfig | None = (
         None  # Optional for backward compatibility (renamed from model_config to avoid Pydantic reserved keyword)
     )
+    fallback_model_configs: list[ModelConfig] = Field(
+        default_factory=list,
+        description="Ordered list of fallback provider/model configs to try on failure",
+    )
     task_kind: Literal["translation_chunk", "paper_explain"] = "translation_chunk"
     paper_mode: bool = False  # legacy; if True, task_kind is coerced to paper_explain
     return_reasoning: bool = False

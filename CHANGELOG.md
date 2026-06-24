@@ -1,5 +1,41 @@
 # Changelog
 
+## 2.13.0 (2026-06-24)
+
+### Features
+
+- **Provider fallback chain**: tasks can now retry with alternate providers/models when the primary fails.
+  - `BatchTask` gained `fallback_model_configs` for an ordered fallback chain.
+  - `ProviderConfig` gained `fallback_to` with `FallbackConfig` entries.
+  - New `ask_llm.utils.provider_router.build_fallback_chain()` resolves fallbacks from app config.
+- **`GlobalBatchProcessor` fallback execution**: `_process_single_global_task` now tries the primary config and each fallback until one succeeds.
+- **`--fallback/--no-fallback` CLI flag**: added to `ask-llm batch`, `ask-llm trans`, and `ask-llm paper` (default: enabled).
+
+### Changed
+
+- `BatchService.run_batch_from_config` accepts `use_fallback` and populates task fallback chains.
+- `TranslationService` and `PaperService` accept `app_config` and populate fallback chains for text/markdown and notebook translation tasks.
+- `NotebookTranslator` accepts `fallback_configs` and applies them to notebook chunk tasks.
+- `build_paper_explain_task` accepts `fallback_model_configs`.
+
+### Fixed
+
+- Resolved a top-level circular import between `translation_service.py` and `cli.app` by moving CLI helper imports into `translate_files()`.
+
+### Tests
+
+- Added `tests/unit/test_batch_processor.py` for fallback execution paths.
+- Added `tests/unit/test_translation_service.py` for translation fallback wiring.
+- Extended `tests/unit/test_batch_service.py` with fallback chain application tests.
+
+### Version
+
+- 2.12.0 → 2.13.0
+
+### Contributors
+
+- Designed and implemented with assistance from **kimi-code** (agent) and **kimi-k2.7** (model).
+
 ## 2.12.0 (2026-06-24)
 
 ### Features

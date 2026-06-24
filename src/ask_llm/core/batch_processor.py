@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
@@ -487,17 +487,14 @@ class GlobalBatchProcessor:
         shared ConfigManager inside worker threads.
         """
         cache: dict[str, LLMProviderProtocol] = {}
-        seen: set[str] = set()
-        for task in tasks:
-            if not task.task_model_config:
-                continue
-            mc = task.task_model_config
+
+        def _add_config(mc: ModelConfig) -> None:
             key = f"{mc.provider}/{mc.model}"
             if task.task_kind == "paper_explain":
                 timeout = self._paper_request_timeout_seconds()
                 key += f" / timeout={timeout}"
             if key in seen:
-                continue
+                return
             seen.add(key)
 
             base_cfg = config_manager.config.get_provider_config(mc.provider)
@@ -517,6 +514,14 @@ class GlobalBatchProcessor:
 
             provider = create_provider_adapter(provider_cfg, default_model=default_model)
             cache[key] = provider
+
+        seen: set[str] = set()
+        for task in tasks:
+            if not task.task_model_config:
+                continue
+            _add_config(task.task_model_config)
+            for fallback_config in task.fallback_model_configs:
+                _add_config(fallback_config)
         return cache
 
     def _stream_and_collect(
@@ -764,35 +769,21 @@ class GlobalBatchProcessor:
         logger.debug(f"Task {task.task_id} ({model_key}) completed successfully")
         return result, progress_tokens
 
-    def _process_single_global_task(
+    def _try_run_with_config(
         self,
         task: BatchTask,
-        provider_cache: dict[str, LLMProviderProtocol],
-        retry_count: int = 0,
-        progress: Progress | None = None,
-        progress_task_id: TaskID | None = None,
-        input_tokens: int | None = None,
+        model_config: ModelConfig,
+        provider_cache: Mapping[str, LLMProviderProtocol],
+        retry_count: int,
+        progress: Progress | None,
+        progress_task_id: TaskID | None,
+        input_tokens: int | None,
     ) -> BatchResult:
+        """Attempt to process a task with a single provider/model config.
+
+        Returns a ``BatchResult`` (success or failure) without raising.
         """
-        Process a single task with its associated model configuration.
-
-        Args:
-            task: Batch task with task_model_config
-            provider_cache: Pre-built provider adapter cache
-            retry_count: Current retry count
-            progress: Rich Progress object for updating progress
-            progress_task_id: Task ID in progress bar
-
-        Returns:
-            Batch result
-        """
-        if not task.task_model_config:
-            raise ValueError("Task must have task_model_config for global batch processing")
-
-        model_config = task.task_model_config
         model_key = f"{model_config.provider}/{model_config.model}"
-
-        # Initialize display_input_tokens early for use in error handling
         display_input_tokens = input_tokens if input_tokens is not None else 0
 
         result = BatchResult(
@@ -808,7 +799,6 @@ class GlobalBatchProcessor:
         progress_tokens = f"body≈{body_tokens} input≈{display_input_tokens}"
 
         try:
-            # 全局速率限制：按 provider/model 限制跨文件/跨实例的并发请求
             limiter = get_global_rate_limiter()
             acquired = limiter.acquire(
                 model_config.provider,
@@ -833,7 +823,7 @@ class GlobalBatchProcessor:
             processor = RequestProcessor(provider)
 
             if task.task_kind == "paper_explain":
-                result, progress_tokens = self._run_paper_explain_global_task(
+                result, _ = self._run_paper_explain_global_task(
                     task,
                     model_config,
                     model_key,
@@ -846,7 +836,7 @@ class GlobalBatchProcessor:
                     result,
                 )
             else:
-                result, progress_tokens = self._run_translation_chunk_global_task(
+                result, _ = self._run_translation_chunk_global_task(
                     task,
                     model_config,
                     model_key,
@@ -864,7 +854,6 @@ class GlobalBatchProcessor:
             error_msg = str(e)
             self._log_global_task_failure(task.task_id, model_key, error_msg)
 
-            # Log detailed error information in verbose mode
             if self.verbose:
                 logger.error(
                     f"[Task {task.task_id}] API Call Failed: "
@@ -880,6 +869,58 @@ class GlobalBatchProcessor:
                 progress, progress_task_id, model_key, task.task_id, progress_tokens
             )
             return result
+
+    def _process_single_global_task(
+        self,
+        task: BatchTask,
+        provider_cache: Mapping[str, LLMProviderProtocol],
+        retry_count: int = 0,
+        progress: Progress | None = None,
+        progress_task_id: TaskID | None = None,
+        input_tokens: int | None = None,
+    ) -> BatchResult:
+        """
+        Process a single task, trying the primary config and any fallbacks.
+
+        Args:
+            task: Batch task with task_model_config
+            provider_cache: Pre-built provider adapter cache
+            retry_count: Current retry count
+            progress: Rich Progress object for updating progress
+            progress_task_id: Task ID in progress bar
+
+        Returns:
+            Batch result
+        """
+        if not task.task_model_config:
+            raise ValueError("Task must have task_model_config for global batch processing")
+
+        configs = [task.task_model_config, *task.fallback_model_configs]
+        last_result: BatchResult | None = None
+
+        for model_config in configs:
+            result = self._try_run_with_config(
+                task,
+                model_config,
+                provider_cache,
+                retry_count,
+                progress,
+                progress_task_id,
+                input_tokens,
+            )
+            if result.status == TaskStatus.SUCCESS:
+                return result
+            last_result = result
+
+        return last_result or BatchResult(
+            task_id=task.task_id,
+            prompt=task.prompt,
+            content=task.content,
+            output_filename=task.output_filename,
+            model_settings=task.task_model_config,
+            status=TaskStatus.FAILED,
+            error="All provider/model configurations failed",
+        )
 
     def process_global_tasks(
         self,

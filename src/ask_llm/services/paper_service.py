@@ -21,6 +21,7 @@ from ask_llm.config.paper_explain_pipeline import (
 from ask_llm.config.unified_config import UnifiedConfig
 from ask_llm.core.batch import BatchResult, BatchStatistics, BatchTask, ModelConfig, TaskStatus
 from ask_llm.core.global_batch_runner import run_global_batch_tasks
+from ask_llm.core.models import AppConfig
 from ask_llm.core.paper_explain import (
     PaperBundle,
     build_bundle_from_directory,
@@ -39,6 +40,7 @@ from ask_llm.core.tasks.builders import build_paper_explain_task
 from ask_llm.utils.console import console
 from ask_llm.utils.file_handler import FileHandler
 from ask_llm.utils.pricing import format_cost_estimate
+from ask_llm.utils.provider_router import build_fallback_chain
 from ask_llm.utils.provider_specs import (
     load_providers_model_limits,
     resolve_paper_max_tokens,
@@ -61,6 +63,7 @@ class PaperExplainOptions:
     dry_run: bool
     resume: bool
     pipeline_path: str | None
+    use_fallback: bool = True
 
 
 @dataclass
@@ -97,6 +100,7 @@ class PaperService:
         model: str,
         pricing_map: PricingMap,
         pricing_source: Path | None = None,
+        app_config: AppConfig | None = None,
     ) -> None:
         """Initialize the paper-explain service.
 
@@ -107,6 +111,7 @@ class PaperService:
             model: Resolved model name.
             pricing_map: Pricing data for cost estimates.
             pricing_source: Optional path/label of the pricing source.
+            app_config: Loaded application config; required for provider fallback chain.
         """
         self.config_manager = config_manager
         self.unified_config = unified_config
@@ -114,6 +119,7 @@ class PaperService:
         self.model = model
         self.pricing_map = pricing_map
         self.pricing_source = pricing_source
+        self.app_config = app_config
 
     def explain_paper(
         self,
@@ -216,19 +222,24 @@ class PaperService:
                 f"paper job: key={key!r} model={job_model!r} max_tokens={eff_max} "
                 f"(paper.max_output_tokens={paper_max_tokens})"
             )
+            model_config = ModelConfig(
+                provider=current_provider,
+                model=job_model,
+                temperature=options.temperature,
+                max_tokens=eff_max,
+            )
+            fallback_configs: list[ModelConfig] = []
+            if options.use_fallback and self.app_config is not None:
+                fallback_configs = build_fallback_chain(self.app_config, model_config)
             idx_to_meta[orig_idx] = (key, template, appendix_h2)
             paper_tasks.append(
                 build_paper_explain_task(
                     orig_idx,
                     full_prompt,
-                    task_model_config=ModelConfig(
-                        provider=current_provider,
-                        model=job_model,
-                        temperature=options.temperature,
-                        max_tokens=eff_max,
-                    ),
+                    task_model_config=model_config,
                     output_filename=f"paper:{key}",
                     return_reasoning=(key.startswith("full")),
+                    fallback_model_configs=fallback_configs,
                 )
             )
 

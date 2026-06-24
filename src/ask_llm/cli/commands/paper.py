@@ -118,6 +118,13 @@ def paper(
             help="Path to paper-explain-pipeline.yml (overrides paper.pipeline_config in config)",
         ),
     ] = None,
+    fallback: Annotated[
+        bool,
+        typer.Option(
+            "--fallback/--no-fallback",
+            help="Enable fallback to alternate providers/models on failure",
+        ),
+    ] = True,
 ) -> None:
     """
     Explain a paper: split Markdown by headings (or load arxiv2md-beta dir), call LLM per section,
@@ -182,6 +189,7 @@ def paper(
             dry_run=dry_run,
             resume=resume,
             pipeline_path=pipeline,
+            use_fallback=fallback,
         )
 
         service = PaperService(
@@ -191,6 +199,7 @@ def paper(
             model=final_model,
             pricing_map=pricing_map,
             pricing_source=pricing_source,
+            app_config=load_result.app_config,
         )
 
         service.explain_paper(path, options)

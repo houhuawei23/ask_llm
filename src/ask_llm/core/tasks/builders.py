@@ -12,6 +12,7 @@ def build_paper_explain_task(
     task_model_config: ModelConfig,
     output_filename: str,
     return_reasoning: bool,
+    fallback_model_configs: list[ModelConfig] | None = None,
 ) -> BatchTask:
     """Single paper-explain job (streaming API, optional reasoning channel)."""
     return BatchTask(
@@ -22,4 +23,5 @@ def build_paper_explain_task(
         task_model_config=task_model_config,
         task_kind="paper_explain",
         return_reasoning=return_reasoning,
+        fallback_model_configs=fallback_model_configs or [],
     )

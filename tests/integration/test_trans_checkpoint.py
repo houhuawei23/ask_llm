@@ -10,7 +10,7 @@ from ask_llm.core.batch_checkpoint import BatchCheckpoint
 from ask_llm.core.batch_models import TaskStatus
 
 # Import CLI first to resolve the trans/service circular import at module load time.
-import ask_llm.cli.app  # noqa: F401
+import ask_llm.cli.app
 from ask_llm.services.translation_service import (
     TranslationOptions,
     TranslationService,
@@ -118,16 +118,18 @@ def test_translation_resume_skips_completed_chunks(tmp_path):
     checkpoint.merge([prior_result])
     checkpoint.save(f"{job.output_path}.trans_checkpoint.json")
 
-    with patch("ask_llm.services.translation_service.run_global_batch_tasks") as mock_run:
-        with patch.object(service, "_export_text_file") as mock_export:
-            mock_export.return_value = MagicMock(success=True)
-            service._translate_and_export_text_file(
-                job,
-                _make_options(resume=True),
-                force=False,
-                stream=False,
-                stream_api=True,
-            )
+    with (
+        patch("ask_llm.services.translation_service.run_global_batch_tasks") as mock_run,
+        patch.object(service, "_export_text_file") as mock_export,
+    ):
+        mock_export.return_value = MagicMock(success=True)
+        service._translate_and_export_text_file(
+            job,
+            _make_options(resume=True),
+            force=False,
+            stream=False,
+            stream_api=True,
+        )
 
     mock_run.assert_not_called()
     mock_export.assert_called_once()

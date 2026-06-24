@@ -251,6 +251,8 @@ def run_parallel_format(
     _print_format_summary(
         successful_count, failed_count, skipped_count, total_input_tokens, total_output_tokens
     )
+
+
 class FormatService:
     """High-level service for format command orchestration, including resume."""
 
@@ -306,9 +308,7 @@ class FormatService:
                 model=self.model,
             )
         else:
-            raise ValueError(
-                "标题格式化暂不支持 checkpoint 恢复，请直接重新运行 format 命令。"
-            )
+            raise ValueError("标题格式化暂不支持 checkpoint 恢复，请直接重新运行 format 命令。")
 
         if inplace:
             out_path = source_file

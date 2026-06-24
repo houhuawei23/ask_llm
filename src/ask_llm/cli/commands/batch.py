@@ -101,6 +101,13 @@ def batch(
             help="Resume from a checkpoint file (auto-generated if omitted)",
         ),
     ] = None,
+    fallback: Annotated[
+        bool,
+        typer.Option(
+            "--fallback/--no-fallback",
+            help="Enable fallback to alternate providers/models on failure",
+        ),
+    ] = True,
 ) -> None:
     """
     Process batch tasks from YAML configuration file.
@@ -164,6 +171,7 @@ def batch(
             skip_api_key_check=skip_api_key_check,
             verbose=verbose,
             resume_checkpoint_path=resume,
+            use_fallback=fallback,
         )
 
         service = BatchService(
