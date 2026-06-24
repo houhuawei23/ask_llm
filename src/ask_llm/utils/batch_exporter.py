@@ -105,26 +105,32 @@ class BatchResultExporter:
 
         # Export based on format
         if format_type == "json":
-            content = self._export_json()
+            self._export_json(str(output_file))
         elif format_type == "yaml":
             content = self._export_yaml()
+            FileHandler.write(str(output_file), content, force=True)
         elif format_type == "csv":
             content = self._export_csv()
+            FileHandler.write(str(output_file), content, force=True)
         elif format_type == "markdown":
             content = self._export_markdown()
+            FileHandler.write(str(output_file), content, force=True)
         else:
             raise ValueError(f"Unsupported format: {format_type}")
-
-        # Write to file
-        FileHandler.write(str(output_file), content, force=True)
 
         logger.info(f"Exported {len(self.results)} results to {output_file}")
         return str(output_file)
 
-    def _export_json(self) -> str:
-        """Export results as JSON."""
-        data = self._prepare_data()
-        return json.dumps(data, indent=2, ensure_ascii=False, default=str)
+    def _export_json(self, output_path: str) -> None:
+        """Export results as JSON using a streaming encoder.
+
+        For large result sets this avoids materializing the entire JSON string in
+        memory before writing it to disk.
+        """
+        encoder = json.JSONEncoder(indent=2, ensure_ascii=False, default=str)
+        with open(output_path, "w", encoding="utf-8") as f:
+            for chunk in encoder.iterencode(self._prepare_data()):
+                f.write(chunk)
 
     def _export_yaml(self) -> str:
         """Export results as YAML."""

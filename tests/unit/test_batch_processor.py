@@ -232,7 +232,7 @@ def test_build_provider_cache_includes_fallbacks():
     base_cfg = MagicMock()
     cm.config.get_provider_config.return_value = base_cfg
 
-    with patch("llm_engine.create_provider_adapter") as mock_create:
+    with patch("ask_llm.utils.provider_cache.create_provider_adapter") as mock_create:
         mock_create.return_value = MagicMock()
         cache = processor._build_provider_cache([task], cm)
 

@@ -1,5 +1,29 @@
 # Changelog
 
+## 2.15.0 (2026-06-24)
+
+### Features
+
+- **Performance optimizations (Phase G)**:
+  - New `ask_llm.utils.provider_cache.ProviderAdapterCache`: process-wide LRU cache for llm-engine provider adapters so repeated batch/trans/paper runs reuse the same HTTP client and warm connections.
+  - `GlobalBatchProcessor` and batch model validation now use the shared adapter cache.
+  - JSON batch exports use `json.JSONEncoder.iterencode()` and stream directly to disk, reducing peak memory for large result sets.
+  - Stream collection in `GlobalBatchProcessor` avoids an unconditional `str(chunk)` conversion when chunks are already strings.
+
+### Tests
+
+- Added `tests/unit/test_provider_cache.py` for cache hit/miss, clear, and dict/object config support.
+- Added `tests/benchmarks/test_performance.py` with benchmarks for provider-adapter cache access and JSON export (streaming vs `json.dumps`).
+- Updated existing tests to patch the cached adapter creation path.
+
+### Version
+
+- 2.14.0 → 2.15.0
+
+### Contributors
+
+- Designed and implemented with assistance from **kimi-code** (agent) and **kimi-k2.7** (model).
+
 ## 2.14.0 (2026-06-24)
 
 ### Features

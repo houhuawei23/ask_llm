@@ -33,6 +33,7 @@ from ask_llm.core.telemetry import (
     classify_error,
     should_fallback_for_error,
 )
+from ask_llm.utils.provider_cache import ProviderAdapterCache
 from ask_llm.utils.rate_limiter import get_global_rate_limiter
 from ask_llm.utils.token_counter import TokenCounter
 
@@ -540,9 +541,7 @@ class GlobalBatchProcessor:
             provider_cfg = base_cfg.model_copy(update=overrides)
             default_model = mc.model
 
-            from llm_engine import create_provider_adapter
-
-            provider = create_provider_adapter(provider_cfg, default_model=default_model)
+            provider = ProviderAdapterCache.get(provider_cfg, default_model=default_model)
             cache[key] = provider
 
         seen: set[str] = set()
@@ -587,12 +586,12 @@ class GlobalBatchProcessor:
                     else:
                         output_token_count += TokenCounter.count_words(chunk.reasoning)
             else:
-                chunk_str = str(chunk)
-                response_parts.append(chunk_str)
+                text_chunk = chunk if isinstance(chunk, str) else str(chunk)
+                response_parts.append(text_chunk)
                 if encoding is not None:
-                    output_token_count += len(encoding.encode(chunk_str))
+                    output_token_count += len(encoding.encode(text_chunk))
                 else:
-                    output_token_count += TokenCounter.count_words(chunk_str)
+                    output_token_count += TokenCounter.count_words(text_chunk)
 
             if progress and progress_task_id is not None:
                 progress.update(

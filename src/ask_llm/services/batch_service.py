@@ -33,13 +33,8 @@ from ask_llm.utils.batch_loader import BatchConfigLoader
 from ask_llm.utils.console import console
 from ask_llm.utils.interactive_config import InteractiveConfigHelper
 from ask_llm.utils.pricing import format_cost_estimate
+from ask_llm.utils.provider_cache import ProviderAdapterCache
 from ask_llm.utils.provider_router import build_fallback_chain
-
-try:
-    from llm_engine import create_provider_adapter
-except ImportError:  # pragma: no cover - guarded by package deps
-    create_provider_adapter = None
-
 
 PricingMap = dict[tuple[str, str], dict[str, float]]
 
@@ -113,14 +108,15 @@ def _validate_models(
                 config_manager.get_model_override() or config_manager.get_default_model()
             )
 
-            if create_provider_adapter is None:
-                console.print("[red]✗[/red] llm_engine not available")
+            try:
+                test_provider = ProviderAdapterCache.get(
+                    provider_config_with_overrides, default_model=default_model
+                )
+            except Exception as e:
+                console.print(f"[red]✗[/red] Failed to create provider adapter: {e}")
                 result.skipped.append(model_key)
                 continue
 
-            test_provider = create_provider_adapter(
-                provider_config_with_overrides, default_model=default_model
-            )
             success, message, latency = test_provider.test_connection()
 
             if not success:

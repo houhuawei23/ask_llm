@@ -64,7 +64,7 @@ def test_batch_run_creates_checkpoint_for_failed_task(tmp_path):
 
     with patch("ask_llm.services.batch_service.run_global_batch_tasks") as mock_run:
         mock_run.return_value = ([result], processor)
-        with patch("ask_llm.services.batch_service.create_provider_adapter") as mock_adapter:
+        with patch("ask_llm.utils.provider_cache.create_provider_adapter") as mock_adapter:
             mock_provider = MagicMock()
             mock_provider.test_connection.return_value = (True, "ok", 0.1)
             mock_adapter.return_value = mock_provider
@@ -114,7 +114,7 @@ def test_batch_resume_skips_completed_tasks(tmp_path):
 
     with (
         patch("ask_llm.services.batch_service.run_global_batch_tasks") as mock_run,
-        patch("ask_llm.services.batch_service.create_provider_adapter") as mock_adapter,
+        patch("ask_llm.utils.provider_cache.create_provider_adapter") as mock_adapter,
     ):
         mock_provider = MagicMock()
         mock_provider.test_connection.return_value = (True, "ok", 0.1)

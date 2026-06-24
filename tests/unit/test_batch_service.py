@@ -261,7 +261,7 @@ def test_run_batch_from_config_applies_fallback_chain(tmp_path):
 
     with (
         patch("ask_llm.services.batch_service.run_global_batch_tasks") as mock_run,
-        patch("ask_llm.services.batch_service.create_provider_adapter") as mock_adapter,
+        patch("ask_llm.utils.provider_cache.create_provider_adapter") as mock_adapter,
     ):
         mock_provider = MagicMock()
         mock_provider.test_connection.return_value = (True, "ok", 0.1)
@@ -304,7 +304,7 @@ def test_run_batch_from_config_skips_fallback_when_disabled(tmp_path):
 
     with (
         patch("ask_llm.services.batch_service.run_global_batch_tasks") as mock_run,
-        patch("ask_llm.services.batch_service.create_provider_adapter") as mock_adapter,
+        patch("ask_llm.utils.provider_cache.create_provider_adapter") as mock_adapter,
     ):
         mock_provider = MagicMock()
         mock_provider.test_connection.return_value = (True, "ok", 0.1)
