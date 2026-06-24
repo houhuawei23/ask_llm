@@ -28,6 +28,7 @@ ask_llm/
 │   │   │   ├── trans.py
 │   │   │   ├── format_cmd.py
 │   │   │   ├── paper.py
+│   │   │   ├── diagnose.py
 │   │   │   └── config.py
 │   │   ├── common.py         # Shared CLI helpers
 │   │   └── errors.py         # CLI error mapping
@@ -42,6 +43,8 @@ ask_llm/
 │   │   ├── batch_checkpoint.py # Concrete checkpoint for batch/translation tasks
 │   │   ├── batch_processor.py # Batch execution engine
 │   │   ├── global_batch_runner.py # Global batch runner
+│   │   ├── telemetry.py      # Observability: LogContext, error classification
+│   │   └── execution_report.py # Structured execution reports
 │   │   ├── translator.py     # Translation utilities
 │   │   ├── text_splitter.py  # Text splitting logic
 │   │   ├── markdown_token_splitter.py # Markdown-aware token splitting
@@ -74,6 +77,7 @@ ask_llm/
 │       ├── translation_exporter.py # Translation export
 │       ├── pricing.py        # Pricing lookup
 │       ├── provider_specs.py # Provider model limits
+│       ├── provider_cache.py # Process-wide provider adapter cache
 │       ├── rate_limiter.py   # Global API rate limiter
 │       └── api_key_gate.py   # API key validation
 ├── tests/                    # Tests
@@ -405,6 +409,41 @@ def test_heavy_computation():
     pass
 ```
 
+## Observability and Performance
+
+### Structured Logging
+
+Use `LogContext` and `bind_context` to inject task/request correlation into Loguru logs:
+
+```python
+from ask_llm.core.telemetry import LogContext, bind_context
+
+ctx = LogContext(task_id=task.task_id, provider="deepseek", model="deepseek-chat")
+bind_context(ctx).info("Task started")
+```
+
+Enable JSON log output with the global `--log-format json` flag.
+
+### Execution Reports
+
+Batch, translation, and paper commands support `--report report.json` to export a
+structured report. Inspect reports with:
+
+```bash
+ask-llm diagnose report.json
+```
+
+### Provider Adapter Cache
+
+`ProviderAdapterCache` keeps HTTP clients warm across runs. Prefer it over creating
+adapters directly:
+
+```python
+from ask_llm.utils.provider_cache import ProviderAdapterCache
+
+adapter = ProviderAdapterCache.get(provider_config, default_model="gpt-4")
+```
+
 ## Common Tasks
 
 ### Adding a New Command
@@ -431,3 +470,7 @@ Providers are handled externally by `llm-api-engine`. Update configuration in `p
 - Run pre-commit hooks before committing: `pre-commit run --all-files`
 - The project uses modern Python packaging with `pyproject.toml`
 - All CLI output should go through `console` utility for consistent formatting
+
+## Contributors
+
+- Designed and implemented with assistance from **kimi-code** (agent) and **kimi-k2.7** (model).

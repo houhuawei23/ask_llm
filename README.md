@@ -1,4 +1,4 @@
-# Ask LLM v2.7.0
+# Ask LLM v2.15.0
 
 A modern command-line tool for calling multiple LLM APIs (DeepSeek, Qwen, etc.) with an elegant interface.
 
@@ -11,11 +11,14 @@ A modern command-line tool for calling multiple LLM APIs (DeepSeek, Qwen, etc.) 
 - ✨ **Modern CLI** - Built with [Typer](https://typer.tiangolo.com/) and [Rich](https://rich.readthedocs.io/)
 - 🔧 **Type Safe** - Full type hints and Pydantic validation
 - 📊 **Progress Bars** - Visual feedback for file operations
-- 📝 **Rich Logging** - Powered by Loguru
+- 📝 **Rich Logging** - Powered by Loguru, with optional JSON output
 - 💬 **Interactive Chat** - Multi-turn conversations with command support
 - 🔌 **Multiple Providers** - Support for DeepSeek, Kimi, Ollama (local), and OpenAI-compatible APIs
 - 📦 **Batch Processing** - Process multiple tasks concurrently with multi-threading
-- ⚡ **Performance Tuning** - Optional non-streaming API calls, tiktoken encoding cache, and a global per-provider rate limiter to reduce 429 retries and improve batch throughput
+- 🔄 **Checkpoint / Resume** - Resume interrupted batch, translation, and paper runs
+- 🛡️ **Provider Fallback** - Automatic fallback to alternate providers/models on failure
+- 📈 **Observability** - Structured execution reports and `ask-llm diagnose` for failure analysis
+- ⚡ **Performance Tuning** - Optional non-streaming API calls, tiktoken encoding cache, global per-provider rate limiter, and a shared provider adapter cache
 
 ## Quick Start
 
@@ -93,6 +96,17 @@ ask-llm paper -i paper.md --dry-run
 
 # Resume interrupted paper processing
 ask-llm paper -i paper.md --resume
+
+# Export an execution report for later diagnosis
+ask-llm batch config.yml --report report.json
+ask-llm trans document.md --report report.json
+ask-llm paper -i paper.md --report report.json
+
+# Diagnose a previously exported report
+ask-llm diagnose report.json
+
+# Machine-readable JSON logs
+ask-llm batch config.yml --log-format json
 ```
 
 ## Commands
@@ -113,6 +127,7 @@ ask-llm paper -i paper.md --resume
 | `ask-llm paper --dry-run`       | Preview sections and token estimates                                      |
 | `ask-llm paper --resume`        | Skip completed sections when resuming                                     |
 | `ask-llm batch [CONFIG]`        | Process batch tasks from YAML config                                      |
+| `ask-llm diagnose REPORT`       | Summarize an execution report produced by `--report`                      |
 | `ask-llm config show`           | Display configuration                                                     |
 | `ask-llm config test`           | Test API connections                                                      |
 | `ask-llm config init`           | Create example config                                                     |
@@ -199,7 +214,7 @@ The Typer entry point is `ask_llm.cli:run_cli` (see `pyproject.toml` scripts). T
 | Module          | Role                                                                                                         |
 | --------------- | ------------------------------------------------------------------------------------------------------------ |
 | `cli/app.py`    | `Typer` app, global `--version` / `--debug` / `--quiet` callback, registers subcommands                      |
-| `cli/commands/` | One module per command: `ask`, `chat`, `config`, `batch`, `trans`, `format_cmd` (CLI name `format`), `paper` |
+| `cli/commands/` | One module per command: `ask`, `chat`, `config`, `batch`, `trans`, `format_cmd` (CLI name `format`), `paper`, `diagnose` |
 | `cli/common.py` | Shared helpers (`_config_init`, `_resolve_trans_input_paths`, notebook translation helper)                   |
 | `cli/errors.py` | `raise_unexpected_cli_error`, optional `cli_errors` context manager for consistent exit codes and logging    |
 
@@ -223,6 +238,10 @@ ruff format src/ask_llm
 ## Documentation
 
 See [docs/README_ask_llm.md](docs/README_ask_llm.md) for detailed documentation.
+
+## Contributors
+
+- Designed and implemented with assistance from **kimi-code** (agent) and **kimi-k2.7** (model).
 
 ## License
 

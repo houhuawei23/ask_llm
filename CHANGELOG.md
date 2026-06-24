@@ -16,6 +16,11 @@
 - Added `tests/benchmarks/test_performance.py` with benchmarks for provider-adapter cache access and JSON export (streaming vs `json.dumps`).
 - Updated existing tests to patch the cached adapter creation path.
 
+### Documentation
+
+- Updated `README.md` to v2.15.0, added observability/fallback/checkpoint features, `diagnose` command examples, and Contributors section.
+- Updated `AGENTS.md` project structure to include `telemetry.py`, `execution_report.py`, `provider_cache.py`, and `diagnose` command; added Observability and Performance section.
+
 ### Version
 
 - 2.14.0 → 2.15.0
