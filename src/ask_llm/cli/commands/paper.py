@@ -125,6 +125,13 @@ def paper(
             help="Enable fallback to alternate providers/models on failure",
         ),
     ] = True,
+    report: Annotated[
+        str | None,
+        typer.Option(
+            "--report",
+            help="Export a structured execution report (JSON) to the given path",
+        ),
+    ] = None,
 ) -> None:
     """
     Explain a paper: split Markdown by headings (or load arxiv2md-beta dir), call LLM per section,
@@ -202,7 +209,10 @@ def paper(
             app_config=load_result.app_config,
         )
 
-        service.explain_paper(path, options)
+        try:
+            service.explain_paper(path, options)
+        finally:
+            service.export_report(report)
 
     except FileNotFoundError as e:
         console.print_error(str(e))

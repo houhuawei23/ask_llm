@@ -19,6 +19,7 @@ from ask_llm.config.unified_config import UnifiedConfig
 from ask_llm.core.batch import BatchResult, BatchTask, ModelConfig
 from ask_llm.core.batch_checkpoint import BatchCheckpoint
 from ask_llm.core.batch_models import TaskStatus
+from ask_llm.core.execution_report import ExecutionReport, build_report_from_batch_results
 from ask_llm.core.global_batch_runner import run_global_batch_tasks
 from ask_llm.core.markdown_token_splitter import MarkdownTokenSplitter
 from ask_llm.core.models import AppConfig
@@ -82,6 +83,7 @@ class TranslationSessionResult:
     successful_files: int = 0
     failed_files: int = 0
     total_retries: int = 0
+    report: ExecutionReport | None = None
 
 
 @dataclass
@@ -127,6 +129,7 @@ class TranslationService:
         self.pricing_map = pricing_map or {}
         self.pricing_source = pricing_source
         self.app_config = app_config
+        self._batch_results: list[BatchResult] = []
 
     def translate_files(
         self,
@@ -291,6 +294,11 @@ class TranslationService:
                     self._accumulate(session_result, result)
 
         self._print_session_total(session_result)
+        session_result.report = build_report_from_batch_results(
+            "trans",
+            self._batch_results,
+            metadata={"files": files},
+        )
         logger.debug("TranslationService wall time: {:.2f}s", time.perf_counter() - _t0)
         return session_result
 
@@ -419,6 +427,7 @@ class TranslationService:
             console.print_info("All chunks already translated according to checkpoint.")
             results = list(checkpoint.successful_results)
             results.sort(key=lambda r: r.task_id)
+            self._batch_results.extend(results)
             Path(checkpoint_path).unlink(missing_ok=True)
             return self._export_text_file(
                 job,
@@ -439,6 +448,7 @@ class TranslationService:
                 clamp_workers_to_task_count=True,
                 stream_api=stream_api,
             )
+            self._batch_results.extend(new_results)
         except Exception as e:
             console.print_error(f"Failed to translate {job.file_path}: {e}")
             logger.exception("Translation error")
@@ -679,6 +689,7 @@ class TranslationService:
                 min_chunk_merge_tokens=options.min_chunk_merge_tokens,
                 stream_api=stream_api,
             )
+            self._batch_results.extend(notebook_translator.last_results)
         except RuntimeError as e:
             if "API authentication failed" in str(e):
                 console.print_error(str(e))
@@ -797,3 +808,26 @@ class TranslationService:
             session_result.total_output_tokens += job_result.output_tokens
         else:
             session_result.failed_files += 1
+
+    def export_report(self, report_path: str | None) -> str | None:
+        """Export the execution report to ``report_path`` if available.
+
+        Args:
+            report_path: Destination path for the JSON report.
+
+        Returns:
+            The exported path, or ``None`` if no report was generated or no path
+            was requested.
+        """
+        if not report_path:
+            return None
+        if self._batch_results:
+            report = build_report_from_batch_results(
+                "trans",
+                self._batch_results,
+                metadata={"provider": self.provider, "model": self.model},
+            )
+            report.to_json_file(report_path)
+            console.print_info(f"Execution report saved to: {report_path}")
+            return report_path
+        return None

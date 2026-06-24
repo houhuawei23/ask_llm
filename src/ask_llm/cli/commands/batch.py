@@ -108,6 +108,13 @@ def batch(
             help="Enable fallback to alternate providers/models on failure",
         ),
     ] = True,
+    report: Annotated[
+        str | None,
+        typer.Option(
+            "--report",
+            help="Export a structured execution report (JSON) to the given path",
+        ),
+    ] = None,
 ) -> None:
     """
     Process batch tasks from YAML configuration file.
@@ -188,6 +195,7 @@ def batch(
             split=split,
             separate_files=separate_files,
         )
+        service.export_report(report)
 
     except FileNotFoundError as e:
         console.print_error(str(e))

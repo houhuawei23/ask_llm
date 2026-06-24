@@ -210,6 +210,13 @@ def trans(
             help="Enable fallback to alternate providers/models on failure",
         ),
     ] = True,
+    report: Annotated[
+        str | None,
+        typer.Option(
+            "--report",
+            help="Export a structured execution report (JSON) to the given path",
+        ),
+    ] = None,
 ) -> None:
     """
     Translate text files using LLM API.
@@ -304,6 +311,7 @@ def trans(
             glossary=glossary,
             translated_suffix=translated_suffix,
         )
+        service.export_report(report)
 
     except FileNotFoundError as e:
         console.print_error(str(e))

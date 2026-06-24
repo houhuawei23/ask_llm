@@ -7,6 +7,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ask_llm.core.models import RequestMetadata
+from ask_llm.core.telemetry import ErrorCategory
 from ask_llm.utils.token_counter import TokenCounter
 
 
@@ -98,6 +99,14 @@ class BatchResult(BaseModel):
     reasoning: str | None = None  # e.g. DeepSeek reasoner when paper_mode + return_reasoning
     status: TaskStatus = TaskStatus.PENDING
     error: str | None = None
+    error_category: ErrorCategory | None = Field(
+        default=None,
+        description="Classified failure category when status is FAILED",
+    )
+    attempt_history: list["BatchResult"] = Field(
+        default_factory=list,
+        description="Historical attempts for this task (e.g. fallback chain)",
+    )
     timestamp: datetime = Field(default_factory=datetime.now)
     retry_count: int = 0
 

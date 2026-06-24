@@ -20,6 +20,7 @@ from ask_llm.config.unified_config import BatchConfig as UnifiedBatchConfig
 from ask_llm.core.batch import BatchResult, BatchTask, ModelConfig
 from ask_llm.core.batch_checkpoint import BatchCheckpoint
 from ask_llm.core.batch_models import BatchStatistics, TaskStatus
+from ask_llm.core.execution_report import ExecutionReport, build_report_from_batch_results
 from ask_llm.core.global_batch_runner import run_global_batch_tasks
 from ask_llm.core.models import AppConfig
 from ask_llm.utils.api_key_gate import (
@@ -55,6 +56,7 @@ class BatchRunResult:
     batch_mode: str
     batch_config: dict[str, Any]
     config_file: str
+    report: ExecutionReport | None = None
 
 
 @dataclass
@@ -297,6 +299,11 @@ def run_batch_from_config(
         console.print_info("All tasks already completed according to checkpoint.")
         all_results_list = list(prior_successful_results)
         model_statistics = _calculate_statistics(all_results_list)
+        report = build_report_from_batch_results(
+            "batch",
+            all_results_list,
+            metadata={"config_file": config_file, "checkpoint": checkpoint_path},
+        )
         return BatchRunResult(
             all_results=all_results_list,
             model_statistics=model_statistics,
@@ -306,6 +313,7 @@ def run_batch_from_config(
             batch_mode=batch_mode,
             batch_config=batch_config,
             config_file=config_file,
+            report=report,
         )
 
     all_results_list, global_processor = run_global_batch_tasks(
@@ -335,6 +343,11 @@ def run_batch_from_config(
         console.print_info(f"All tasks succeeded. Removed checkpoint: {checkpoint_path}")
 
     model_statistics = global_processor.calculate_statistics(all_results_list)
+    report = build_report_from_batch_results(
+        "batch",
+        all_results_list,
+        metadata={"config_file": config_file, "checkpoint": checkpoint_path},
+    )
 
     return BatchRunResult(
         all_results=all_results_list,
@@ -345,6 +358,7 @@ def run_batch_from_config(
         batch_mode=batch_mode,
         batch_config=batch_config,
         config_file=config_file,
+        report=report,
     )
 
 
@@ -568,3 +582,19 @@ class BatchService:
         console.print()
         console.print_success(f"Results exported to: {exported_file}")
         return BatchExportResult(exported_paths=[exported_file], export_mode="single")
+
+    def export_report(self, report_path: str | None) -> str | None:
+        """Export the execution report to ``report_path`` if one is available.
+
+        Args:
+            report_path: Destination path for the JSON report.
+
+        Returns:
+            The exported path, or ``None`` if no report was generated or no path
+            was requested.
+        """
+        if not report_path or self.run_result.report is None:
+            return None
+        self.run_result.report.to_json_file(report_path)
+        console.print_info(f"Execution report saved to: {report_path}")
+        return report_path

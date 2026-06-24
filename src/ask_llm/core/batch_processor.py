@@ -7,7 +7,6 @@ import time
 from collections.abc import Iterator, Mapping
 from typing import TYPE_CHECKING, Any
 
-from loguru import logger
 from rich.progress import Progress, TaskID
 
 if TYPE_CHECKING:
@@ -27,6 +26,13 @@ from ask_llm.core.concurrent import BoundedRetryRunner, RunMetrics, run_bounded_
 from ask_llm.core.models import RequestMetadata
 from ask_llm.core.processor import RequestProcessor
 from ask_llm.core.protocols import LLMProviderProtocol, ReasoningChunk
+from ask_llm.core.telemetry import (
+    ErrorCategory,
+    LogContext,
+    bind_context,
+    classify_error,
+    should_fallback_for_error,
+)
 from ask_llm.utils.rate_limiter import get_global_rate_limiter
 from ask_llm.utils.token_counter import TokenCounter
 
@@ -115,6 +121,13 @@ class BatchProcessor:
             status=TaskStatus.PROCESSING,
             retry_count=retry_count,
         )
+        ctx = LogContext(
+            task_id=task.task_id,
+            provider=self.model_config.provider,
+            model=self.model_config.model,
+            attempt=retry_count + 1,
+            phase="batch_processor",
+        )
 
         try:
             # Format prompt with content
@@ -190,15 +203,17 @@ class BatchProcessor:
                     description=f"Task {task.task_id}: ✓ Complete ({output_token_count} tok)",
                 )
 
-            logger.debug(f"Task {task.task_id} completed successfully")
+            bind_context(ctx).debug("Task completed successfully")
             return result
 
         except Exception as e:
             error_msg = str(e)
-            logger.error(f"Task {task.task_id} failed: {error_msg}")
+            category = classify_error(error_msg)
+            bind_context(ctx).bind(error_category=category.value).error(f"Task failed: {error_msg}")
 
             result.status = TaskStatus.FAILED
             result.error = error_msg
+            result.error_category = category
 
             # Update progress to failed
             if progress and progress_task_id is not None:
@@ -291,13 +306,17 @@ class BatchProcessor:
                 )
 
             def _on_retry_scheduled(task: BatchTask, failed_result: BatchResult) -> None:
-                logger.debug(
-                    f"Task {task.task_id} will be retried "
+                bind_context(LogContext(task_id=task.task_id, phase="batch_processor")).debug(
+                    f"Task will be retried "
                     f"(attempt {failed_result.retry_count + 1}/{self.max_retries})"
                 )
 
             def _on_worker_exception(task: BatchTask, exc: BaseException) -> BatchResult:
-                logger.error(f"Unexpected error processing task {task.task_id}: {exc}")
+                error_msg = f"Unexpected error: {exc!s}"
+                category = classify_error(error_msg)
+                bind_context(LogContext(task_id=task.task_id, phase="batch_processor")).bind(
+                    error_category=category.value
+                ).error(f"Unexpected error processing task: {exc}")
                 # Note: progress update is handled by _process_single_task/_process_single_global_task exception handler
                 # This callback is for exceptions that escape before any progress is set
                 return BatchResult(
@@ -307,7 +326,8 @@ class BatchProcessor:
                     output_filename=task.output_filename,
                     model_settings=self.model_config,
                     status=TaskStatus.FAILED,
-                    error=f"Unexpected error: {exc!s}",
+                    error=error_msg,
+                    error_category=category,
                 )
 
             results = run_bounded_with_retries(
@@ -460,20 +480,30 @@ class GlobalBatchProcessor:
                 completed=100,
             )
 
-    def _log_global_task_failure(self, task_id: int, model_key: str, error_msg: str) -> None:
+    def _log_global_task_failure(
+        self,
+        task_id: int,
+        model_key: str,
+        error_msg: str,
+        category: ErrorCategory | None = None,
+    ) -> None:
         """Log task failure; collapse duplicate authentication errors from parallel workers."""
-        if self._is_authentication_error(error_msg):
+        if category is None:
+            category = classify_error(error_msg)
+        ctx = LogContext(task_id=task_id, phase="global_batch")
+        bound = bind_context(ctx).bind(model_key=model_key, error_category=category.value)
+        if category == ErrorCategory.AUTHENTICATION:
             with self._auth_error_lock:
                 if not self._auth_error_logged:
                     self._auth_error_logged = True
-                    logger.error(
+                    bound.error(
                         f"API authentication failed ({model_key}): {error_msg}\n"
                         "(Further parallel tasks with the same auth error are logged at DEBUG only.)"
                     )
                 else:
-                    logger.debug(f"Task {task_id} ({model_key}) failed (auth): {error_msg}")
+                    bound.debug(f"Task failed (auth): {error_msg}")
         else:
-            logger.error(f"Task {task_id} ({model_key}) failed: {error_msg}")
+            bound.error(f"Task failed ({model_key}): {error_msg}")
 
     def _build_provider_cache(
         self,
@@ -603,6 +633,14 @@ class GlobalBatchProcessor:
                 ),
             )
 
+        ctx = LogContext(
+            task_id=task.task_id,
+            provider=model_config.provider,
+            model=model_config.model,
+            attempt=result.retry_count + 1,
+            phase="global_batch",
+        )
+
         if self.verbose:
             api_params = [
                 f"provider={model_config.provider}",
@@ -614,7 +652,7 @@ class GlobalBatchProcessor:
                 api_params.append(f"max_tokens={model_config.max_tokens}")
             api_params.append(f"input_tokens={display_input_tokens}")
             api_params.append(f"timeout={paper_timeout}s")
-            logger.info(f"[Task {task.task_id}] Paper API: {', '.join(api_params)}")
+            bind_context(ctx).info(f"Paper API: {', '.join(api_params)}")
 
         stream_iter = processor.iter_process_raw_stream(
             task.prompt,
@@ -665,7 +703,7 @@ class GlobalBatchProcessor:
                 completed=100,
             )
 
-        logger.debug(f"Task {task.task_id} ({model_key}) paper job completed")
+        bind_context(ctx).debug("Paper job completed")
         return result, progress_tokens
 
     def _run_translation_chunk_global_task(
@@ -689,6 +727,14 @@ class GlobalBatchProcessor:
         display_input_tokens = input_tokens if input_tokens is not None else input_token_count
         progress_tokens = f"body≈{body_tokens} input≈{display_input_tokens}"
 
+        ctx = LogContext(
+            task_id=task.task_id,
+            provider=model_config.provider,
+            model=model_config.model,
+            attempt=result.retry_count + 1,
+            phase="global_batch",
+        )
+
         if self.verbose:
             api_params = [
                 f"provider={model_config.provider}",
@@ -701,7 +747,7 @@ class GlobalBatchProcessor:
             if model_config.top_p is not None:
                 api_params.append(f"top_p={model_config.top_p}")
             api_params.append(f"input_tokens={display_input_tokens}")
-            logger.info(f"[Task {task.task_id}] API Call: {', '.join(api_params)}")
+            bind_context(ctx).info(f"API Call: {', '.join(api_params)}")
 
         if progress and progress_task_id is not None:
             progress.update(
@@ -709,7 +755,7 @@ class GlobalBatchProcessor:
                 description=f"{model_key} Task {task.task_id} ({progress_tokens} tokens): Processing...",
             )
         elif progress is None:
-            logger.info(f"Translation chunk {task.task_id} start ({model_key}, {progress_tokens})")
+            bind_context(ctx).info(f"Translation chunk start ({model_key}, {progress_tokens})")
 
         stream_iter = processor.process(
             content=task.content,
@@ -748,8 +794,8 @@ class GlobalBatchProcessor:
         result.status = TaskStatus.SUCCESS
 
         if self.verbose:
-            logger.info(
-                f"[Task {task.task_id}] API Call Completed: "
+            bind_context(ctx).info(
+                f"API Call Completed: "
                 f"output_tokens={output_token_count}, "
                 f"latency={latency:.2f}s, "
                 f"status=success"
@@ -762,11 +808,11 @@ class GlobalBatchProcessor:
                 completed=100,
             )
         elif progress is None:
-            logger.info(
-                f"Translation chunk {task.task_id} complete ({output_token_count} output tokens)"
+            bind_context(ctx).info(
+                f"Translation chunk complete ({output_token_count} output tokens)"
             )
 
-        logger.debug(f"Task {task.task_id} ({model_key}) completed successfully")
+        bind_context(ctx).debug("Task completed successfully")
         return result, progress_tokens
 
     def _try_run_with_config(
@@ -794,6 +840,13 @@ class GlobalBatchProcessor:
             model_settings=model_config,
             status=TaskStatus.PROCESSING,
             retry_count=retry_count,
+        )
+        ctx = LogContext(
+            task_id=task.task_id,
+            provider=model_config.provider,
+            model=model_config.model,
+            attempt=retry_count + 1,
+            phase="global_batch",
         )
         body_tokens = TokenCounter.count_tokens(task.content, model_config.model)
         progress_tokens = f"body≈{body_tokens} input≈{display_input_tokens}"
@@ -852,11 +905,12 @@ class GlobalBatchProcessor:
 
         except Exception as e:
             error_msg = str(e)
-            self._log_global_task_failure(task.task_id, model_key, error_msg)
+            category = classify_error(error_msg)
+            self._log_global_task_failure(task.task_id, model_key, error_msg, category)
 
             if self.verbose:
-                logger.error(
-                    f"[Task {task.task_id}] API Call Failed: "
+                bind_context(ctx).bind(error_category=category.value).error(
+                    f"API Call Failed: "
                     f"error={error_msg}, "
                     f"provider={model_config.provider}, "
                     f"model={model_config.model}"
@@ -864,6 +918,7 @@ class GlobalBatchProcessor:
 
             result.status = TaskStatus.FAILED
             result.error = error_msg
+            result.error_category = category
 
             self._update_global_task_progress_failed(
                 progress, progress_task_id, model_key, task.task_id, progress_tokens
@@ -897,8 +952,9 @@ class GlobalBatchProcessor:
 
         configs = [task.task_model_config, *task.fallback_model_configs]
         last_result: BatchResult | None = None
+        attempt_history: list[BatchResult] = []
 
-        for model_config in configs:
+        for idx, model_config in enumerate(configs):
             result = self._try_run_with_config(
                 task,
                 model_config,
@@ -908,11 +964,22 @@ class GlobalBatchProcessor:
                 progress_task_id,
                 input_tokens,
             )
+            attempt_history.append(result)
             if result.status == TaskStatus.SUCCESS:
+                result.attempt_history = attempt_history
                 return result
             last_result = result
 
-        return last_result or BatchResult(
+            # Stop fallback chain early for errors that won't be fixed by a
+            # different provider/model (e.g. bad API key or content policy).
+            if result.error_category and not should_fallback_for_error(result.error_category):
+                terminal = result.error_category.value
+                bind_context(LogContext(task_id=task.task_id, phase="global_batch")).warning(
+                    f"Stopping fallback chain at attempt {idx + 1}: terminal error category '{terminal}'"
+                )
+                break
+
+        final = last_result or BatchResult(
             task_id=task.task_id,
             prompt=task.prompt,
             content=task.content,
@@ -920,7 +987,10 @@ class GlobalBatchProcessor:
             model_settings=task.task_model_config,
             status=TaskStatus.FAILED,
             error="All provider/model configurations failed",
+            error_category=ErrorCategory.UNKNOWN,
         )
+        final.attempt_history = attempt_history
+        return final
 
     def process_global_tasks(
         self,
@@ -1030,13 +1100,17 @@ class GlobalBatchProcessor:
                 )
 
             def _on_retry_scheduled(task: BatchTask, failed_result: BatchResult) -> None:
-                logger.debug(
-                    f"Task {task.task_id} will be retried "
+                bind_context(LogContext(task_id=task.task_id, phase="global_batch")).debug(
+                    f"Task will be retried "
                     f"(attempt {failed_result.retry_count + 1}/{self.max_retries})"
                 )
 
             def _on_worker_exception(task: BatchTask, exc: BaseException) -> BatchResult:
-                logger.error(f"Unexpected error processing task {task.task_id}: {exc}")
+                error_msg = f"Unexpected error: {exc!s}"
+                category = classify_error(error_msg)
+                bind_context(LogContext(task_id=task.task_id, phase="global_batch")).bind(
+                    error_category=category.value
+                ).error(f"Unexpected error processing task: {exc}")
                 # Note: progress update is handled by _process_single_task/_process_single_global_task exception handler
                 # This callback is for exceptions that escape before any progress is set
                 return BatchResult(
@@ -1047,7 +1121,8 @@ class GlobalBatchProcessor:
                     model_settings=task.task_model_config
                     or ModelConfig(provider="unknown", model="unknown"),
                     status=TaskStatus.FAILED,
-                    error=f"Unexpected error: {exc!s}",
+                    error=error_msg,
+                    error_category=category,
                 )
 
             runner: BoundedRetryRunner[BatchTask, BatchResult] = BoundedRetryRunner(

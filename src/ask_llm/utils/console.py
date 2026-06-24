@@ -50,16 +50,23 @@ class Console:
             self._debug = False
             self._initialized = True
 
-    def setup(self, quiet: bool = False, debug: bool = False) -> None:
+    def setup(
+        self,
+        quiet: bool = False,
+        debug: bool = False,
+        log_format: str = "text",
+    ) -> None:
         """
         Setup console configuration.
 
         Args:
             quiet: Suppress non-error output
             debug: Enable debug output
+            log_format: ``text`` (human-readable) or ``json`` (machine-parseable)
         """
         self._quiet = quiet
         self._debug = debug
+        self._log_format = log_format
 
         logger.remove()
         logger.configure(extra={"component": "ask-llm"})
@@ -70,6 +77,17 @@ class Console:
             level = "DEBUG"
         else:
             level = "INFO"
+
+        use_json = log_format.lower() == "json"
+
+        if use_json:
+            logger.add(
+                sys.stderr,
+                level=level,
+                serialize=True,
+                colorize=False,
+            )
+            return
 
         fmt = _LOGURU_CONSOLE_FORMAT
         if debug:

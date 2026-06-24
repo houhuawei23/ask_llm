@@ -1,5 +1,45 @@
 # Changelog
 
+## 2.14.0 (2026-06-24)
+
+### Features
+
+- **Structured observability (Phase D)**:
+  - New `ask_llm.core.telemetry` module with `LogContext`, `ErrorCategory`, `classify_error()`, and `should_fallback_for_error()`.
+  - `GlobalBatchProcessor` and `BatchProcessor` now inject structured context into all task logs.
+  - `BatchResult` gains `error_category` and `attempt_history` for transparent fallback tracking.
+  - Fallback chains stop early for terminal error categories (`authentication`, `content_filter`, `validation_error`).
+  - New global `--log-format json` option outputs machine-parseable Loguru JSON logs.
+- **Execution reports (`--report`)**:
+  - `ask-llm batch --report report.json` exports a structured JSON report.
+  - `ask-llm trans --report report.json` exports per-chunk attempt histories.
+  - `ask-llm paper --report report.json` exports per-section attempt histories.
+  - New `ask_llm.core.execution_report` module with `ExecutionReport`, `TaskRecord`, and `AttemptRecord`.
+- **New `ask-llm diagnose` command**:
+  - Summarizes any execution report: success rate, token usage, provider/model breakdown, failure categories, and failed task details.
+  - Warns when failures are caused by terminal error categories where fallback cannot help.
+
+### Changed
+
+- `BatchService`, `TranslationService`, and `PaperService` all support `export_report()`.
+- `NotebookTranslator` exposes `last_results` so translation reports can include notebook chunk attempts.
+- `console.setup()` accepts a `log_format` parameter for text or JSON log sinks.
+
+### Tests
+
+- Added `tests/unit/test_telemetry.py` for error classification and log context.
+- Added `tests/unit/test_execution_report.py` for report generation and serialization.
+- Added `tests/unit/test_diagnose_cli.py` for the diagnose command.
+- Extended `tests/unit/test_batch_processor.py` with authentication-error fallback termination.
+
+### Version
+
+- 2.13.0 → 2.14.0
+
+### Contributors
+
+- Designed and implemented with assistance from **kimi-code** (agent) and **kimi-k2.7** (model).
+
 ## 2.13.0 (2026-06-24)
 
 ### Features

@@ -9,6 +9,7 @@ import pytest
 
 from ask_llm.core.batch_models import BatchResult, BatchTask, ModelConfig, TaskStatus
 from ask_llm.core.batch_processor import GlobalBatchProcessor
+from ask_llm.core.telemetry import ErrorCategory
 
 
 @pytest.fixture(autouse=True)
@@ -149,6 +150,9 @@ def test_all_configs_fail_returns_failed():
     assert "fallback/model-b down" in result.error
     assert result.model_settings.provider == "fallback"
     assert result.model_settings.model == "model-b"
+    assert result.error_category == ErrorCategory.UNKNOWN
+    assert len(result.attempt_history) == 2
+    assert all(r.error_category == ErrorCategory.UNKNOWN for r in result.attempt_history)
 
 
 def test_no_fallback_returns_failed_on_primary_failure():
@@ -175,6 +179,50 @@ def test_no_fallback_returns_failed_on_primary_failure():
     assert result.status == TaskStatus.FAILED
     assert result.error is not None
     assert "primary down" in result.error
+    assert result.error_category == ErrorCategory.UNKNOWN
+
+
+def test_authentication_error_stops_fallback_chain():
+    task = _make_task(
+        fallback_configs=[
+            ModelConfig(provider="fallback1", model="model-b"),
+            ModelConfig(provider="fallback2", model="model-c"),
+        ]
+    )
+    processor = GlobalBatchProcessor()
+    primary = _make_provider("primary", "model-a")
+    fallback1 = _make_provider("fallback1", "model-b")
+    fallback2 = _make_provider("fallback2", "model-c")
+    provider_cache: dict[str, Any] = {
+        "primary/model-a": primary,
+        "fallback1/model-b": fallback1,
+        "fallback2/model-c": fallback2,
+    }
+
+    with (
+        _patch_rate_limiter(),
+        _patch_token_helpers(),
+        patch("ask_llm.core.batch_processor.RequestProcessor") as mock_rp,
+    ):
+        called = []
+
+        def side_effect(provider):
+            called.append(provider.name)
+            proc = MagicMock()
+            proc.provider = provider
+            if provider.name == "primary/model-a":
+                proc.process.side_effect = RuntimeError("401 Unauthorized")
+            else:
+                proc.process.return_value = iter(["should not reach"])
+            return proc
+
+        mock_rp.side_effect = side_effect
+        result = processor._process_single_global_task(task, provider_cache, retry_count=0)
+
+    assert result.status == TaskStatus.FAILED
+    assert result.error_category == ErrorCategory.AUTHENTICATION
+    assert len(result.attempt_history) == 1
+    assert called == ["primary/model-a"]
 
 
 def test_build_provider_cache_includes_fallbacks():

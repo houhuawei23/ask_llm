@@ -20,6 +20,7 @@ from ask_llm.config.paper_explain_pipeline import (
 )
 from ask_llm.config.unified_config import UnifiedConfig
 from ask_llm.core.batch import BatchResult, BatchStatistics, BatchTask, ModelConfig, TaskStatus
+from ask_llm.core.execution_report import ExecutionReport, build_report_from_batch_results
 from ask_llm.core.global_batch_runner import run_global_batch_tasks
 from ask_llm.core.models import AppConfig
 from ask_llm.core.paper_explain import (
@@ -86,6 +87,7 @@ class PaperSessionResult:
     total_jobs: int = 0
     skipped_count: int = 0
     explain_root: Path | None = None
+    report: ExecutionReport | None = None
 
 
 class PaperService:
@@ -120,6 +122,7 @@ class PaperService:
         self.pricing_map = pricing_map
         self.pricing_source = pricing_source
         self.app_config = app_config
+        self._last_results: list[BatchResult] | None = None
 
     def explain_paper(
         self,
@@ -256,6 +259,7 @@ class PaperService:
             show_progress=True,
             clamp_workers_to_task_count=True,
         )
+        self._last_results = list(results)
 
         failed = [r for r in results if r.status != TaskStatus.SUCCESS]
         if failed:
@@ -283,6 +287,15 @@ class PaperService:
             session_result.job_results.append(job_result)
 
         session_result.statistics = processor.calculate_statistics(results)
+        session_result.report = build_report_from_batch_results(
+            "paper",
+            results,
+            metadata={
+                "input_path": str(input_path),
+                "run_mode": options.run_mode,
+                "pipeline": options.pipeline_path,
+            },
+        )
         self._print_usage(session_result.statistics)
         return session_result
 
@@ -591,3 +604,24 @@ class PaperService:
                     pricing_source=self.pricing_source,
                 )
             )
+
+    def export_report(self, report_path: str | None) -> str | None:
+        """Export the execution report to ``report_path`` if available.
+
+        Args:
+            report_path: Destination path for the JSON report.
+
+        Returns:
+            The exported path, or ``None`` if no report was generated or no path
+            was requested.
+        """
+        if not report_path or self._last_results is None:
+            return None
+        report = build_report_from_batch_results(
+            "paper",
+            self._last_results,
+            metadata={"provider": self.provider, "model": self.model},
+        )
+        report.to_json_file(report_path)
+        console.print_info(f"Execution report saved to: {report_path}")
+        return report_path

@@ -11,6 +11,7 @@ from ask_llm.cli.commands.ask import ask
 from ask_llm.cli.commands.batch import batch
 from ask_llm.cli.commands.chat import chat
 from ask_llm.cli.commands.config import config
+from ask_llm.cli.commands.diagnose import diagnose
 from ask_llm.cli.commands.format_cmd import format_cmd
 from ask_llm.cli.commands.paper import paper
 from ask_llm.cli.commands.trans import trans
@@ -45,9 +46,16 @@ def main(
     ] = False,
     debug: Annotated[bool, typer.Option("--debug", "-d", help="Enable debug logging")] = False,
     quiet: Annotated[bool, typer.Option("--quiet", "-q", help="Suppress non-error output")] = False,
+    log_format: Annotated[
+        str,
+        typer.Option(
+            "--log-format",
+            help="Log output format: text (default) or json",
+        ),
+    ] = "text",
 ) -> None:
     """Ask LLM - A flexible command-line tool for calling multiple LLM APIs."""
-    console.setup(quiet=quiet, debug=debug)
+    console.setup(quiet=quiet, debug=debug, log_format=log_format)
 
 
 app.command()(ask)
@@ -57,6 +65,7 @@ app.command()(batch)
 app.command()(trans)
 app.command("format")(format_cmd)
 app.command("paper")(paper)
+app.command("diagnose")(diagnose)
 
 
 def run_cli() -> None:

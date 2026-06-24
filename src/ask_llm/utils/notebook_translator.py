@@ -7,7 +7,7 @@ import nbformat
 from loguru import logger
 from nbformat import NotebookNode
 
-from ask_llm.core.batch import BatchTask, GlobalBatchProcessor, ModelConfig
+from ask_llm.core.batch import BatchResult, BatchTask, GlobalBatchProcessor, ModelConfig
 from ask_llm.core.markdown_token_splitter import MarkdownTokenSplitter
 from ask_llm.core.text_splitter import TextChunk
 from ask_llm.core.translator import Translator
@@ -43,6 +43,7 @@ class NotebookTranslator:
         self.translator = translator
         self.model_config = model_config
         self.fallback_configs = fallback_configs or []
+        self.last_results: list[BatchResult] = []
 
     def translate_notebook(
         self,
@@ -142,6 +143,7 @@ class NotebookTranslator:
             stream_api=stream_api,
         )
         results = processor.process_global_tasks(tasks, config_manager, show_progress=show_progress)
+        self.last_results = list(results)
 
         successful = sum(1 for r in results if r.status.value == "success")
         failed = len(results) - successful
