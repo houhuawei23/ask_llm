@@ -6,6 +6,7 @@ that the command module stays focused on argument parsing and error handling.
 
 from __future__ import annotations
 
+import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
@@ -18,13 +19,17 @@ from rich.progress import (
     TimeElapsedColumn,
 )
 
+from ask_llm.config.context import get_config
+from ask_llm.core.format_checkpoint import FormatCheckpoint
 from ask_llm.core.format_markdown_file import (
     FormatMarkdownOutcome,
     format_body_markdown_file,
     format_one_markdown_file,
 )
+from ask_llm.core.md_body_formatter import BodyFormatter
 from ask_llm.core.processor import RequestProcessor
 from ask_llm.utils.console import console
+from ask_llm.utils.file_handler import FileHandler
 
 
 def _print_format_summary(
@@ -246,3 +251,90 @@ def run_parallel_format(
     _print_format_summary(
         successful_count, failed_count, skipped_count, total_input_tokens, total_output_tokens
     )
+class FormatService:
+    """High-level service for format command orchestration, including resume."""
+
+    def __init__(
+        self,
+        *,
+        processor: RequestProcessor,
+        model: str,
+    ) -> None:
+        """Initialize the format service.
+
+        Args:
+            processor: Active request processor (provider already configured).
+            model: Resolved model name.
+        """
+        self.processor = processor
+        self.model = model
+
+    def resume_from_checkpoint(
+        self,
+        checkpoint_path: str,
+        *,
+        output: str | None,
+        inplace: bool,
+        force: bool,
+    ) -> None:
+        """Resume formatting from a checkpoint file.
+
+        Args:
+            checkpoint_path: Path to the checkpoint JSON file.
+            output: Explicit output path.
+            inplace: Overwrite the source file.
+            force: Overwrite existing output file.
+
+        Raises:
+            ValueError: If title-mode resume is requested.
+            RuntimeError: If writing output fails.
+        """
+        checkpoint = FormatCheckpoint.load(checkpoint_path)
+        source_file = checkpoint.source_file
+
+        console.print_info(f"从 checkpoint 恢复: {checkpoint_path}")
+        console.print_info(f"源文件: {source_file}")
+        console.print_info(
+            f"失败 chunk 数: {len(checkpoint.failed_chunks)}, "
+            f"成功 chunk 数: {len(checkpoint.successful_chunks)}"
+        )
+
+        if checkpoint.format_type == "body":
+            result = BodyFormatter.resume_from_checkpoint(
+                checkpoint_path,
+                processor=self.processor,
+                model=self.model,
+            )
+        else:
+            raise ValueError(
+                "标题格式化暂不支持 checkpoint 恢复，请直接重新运行 format 命令。"
+            )
+
+        if inplace:
+            out_path = source_file
+        elif output:
+            out_path = output
+        else:
+            out_path = FileHandler.generate_output_path(
+                source_file,
+                suffix=get_config().unified_config.file.formatted_suffix,
+            )
+
+        try:
+            FileHandler.write(out_path, result.text, force=force or inplace)
+        except Exception as exc:
+            raise RuntimeError(f"写入失败: {exc}") from exc
+
+        if result.failed_chunks:
+            console.print_warning(
+                f"部分成功: {len(result.failed_chunks)} 个 chunk 仍失败，原始内容已保留"
+            )
+            if result.checkpoint_path:
+                console.print_info(f"更新后的 checkpoint: {result.checkpoint_path}")
+        else:
+            console.print_success(f"全部完成！已保存: {out_path}")
+            try:
+                os.remove(checkpoint_path)
+                console.print_info(f"已删除 checkpoint: {checkpoint_path}")
+            except OSError:
+                pass

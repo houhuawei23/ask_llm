@@ -1,0 +1,115 @@
+"""Unit tests for FormatService resume helper."""
+
+from __future__ import annotations
+
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from ask_llm.services.format_service import FormatService
+
+
+@pytest.fixture
+def mock_config():
+    cfg = MagicMock()
+    cfg.unified_config.file.formatted_suffix = "_formatted"
+    return cfg
+
+
+@pytest.fixture
+def service():
+    processor = MagicMock()
+    return FormatService(processor=processor, model="gpt-4")
+
+
+def test_resume_body_checkpoint_success_removes_checkpoint(service, mock_config, tmp_path):
+    checkpoint_path = tmp_path / "doc.md.body_checkpoint.json"
+    checkpoint_path.write_text("{}", encoding="utf-8")
+
+    mock_checkpoint = MagicMock()
+    mock_checkpoint.source_file = str(tmp_path / "doc.md")
+    mock_checkpoint.format_type = "body"
+    mock_checkpoint.failed_chunks = []
+    mock_checkpoint.successful_chunks = [MagicMock()]
+
+    result = MagicMock()
+    result.text = "formatted"
+    result.failed_chunks = []
+    result.checkpoint_path = None
+
+    with (
+        patch("ask_llm.services.format_service.get_config") as mock_get_config,
+        patch("ask_llm.services.format_service.FormatCheckpoint") as mock_cls,
+        patch("ask_llm.services.format_service.BodyFormatter") as mock_bf,
+        patch("ask_llm.services.format_service.FileHandler") as mock_fh,
+        patch("ask_llm.services.format_service.os.remove") as mock_remove,
+    ):
+        mock_get_config.return_value = mock_config
+        mock_cls.load.return_value = mock_checkpoint
+        mock_bf.resume_from_checkpoint.return_value = result
+        service.resume_from_checkpoint(
+            str(checkpoint_path),
+            output=None,
+            inplace=False,
+            force=False,
+        )
+
+    mock_fh.write.assert_called_once()
+    mock_remove.assert_called_once_with(str(checkpoint_path))
+
+
+def test_resume_title_checkpoint_raises(service, tmp_path):
+    checkpoint_path = tmp_path / "doc.md.title_checkpoint.json"
+    checkpoint_path.write_text("{}", encoding="utf-8")
+
+    mock_checkpoint = MagicMock()
+    mock_checkpoint.source_file = str(tmp_path / "doc.md")
+    mock_checkpoint.format_type = "title"
+    mock_checkpoint.failed_chunks = []
+    mock_checkpoint.successful_chunks = []
+
+    with patch("ask_llm.services.format_service.FormatCheckpoint") as mock_cls:
+        mock_cls.load.return_value = mock_checkpoint
+        with pytest.raises(ValueError, match="标题格式化暂不支持 checkpoint 恢复"):
+            service.resume_from_checkpoint(
+                str(checkpoint_path),
+                output=None,
+                inplace=False,
+                force=False,
+            )
+
+
+def test_resume_body_partial_failure_keeps_checkpoint(service, mock_config, tmp_path):
+    checkpoint_path = tmp_path / "doc.md.body_checkpoint.json"
+    checkpoint_path.write_text("{}", encoding="utf-8")
+
+    mock_checkpoint = MagicMock()
+    mock_checkpoint.source_file = str(tmp_path / "doc.md")
+    mock_checkpoint.format_type = "body"
+    mock_checkpoint.failed_chunks = [MagicMock()]
+    mock_checkpoint.successful_chunks = [MagicMock()]
+
+    result = MagicMock()
+    result.text = "partial"
+    result.failed_chunks = [MagicMock()]
+    result.checkpoint_path = str(checkpoint_path)
+
+    with (
+        patch("ask_llm.services.format_service.get_config") as mock_get_config,
+        patch("ask_llm.services.format_service.FormatCheckpoint") as mock_cls,
+        patch("ask_llm.services.format_service.BodyFormatter") as mock_bf,
+        patch("ask_llm.services.format_service.FileHandler") as mock_fh,
+        patch("ask_llm.services.format_service.os.remove") as mock_remove,
+    ):
+        mock_get_config.return_value = mock_config
+        mock_cls.load.return_value = mock_checkpoint
+        mock_bf.resume_from_checkpoint.return_value = result
+        service.resume_from_checkpoint(
+            str(checkpoint_path),
+            output=None,
+            inplace=False,
+            force=False,
+        )
+
+    mock_fh.write.assert_called_once()
+    mock_remove.assert_not_called()

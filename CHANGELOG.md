@@ -1,5 +1,33 @@
 # Changelog
 
+## 2.11.0 (2026-06-24)
+
+### Features
+
+- **Complete Service layer**: added `AskService`, `BatchService`, and `FormatService` under `ask_llm.services/`, moving single-request, batch export/statistics, and format resume logic out of the CLI commands.
+
+### Changed
+
+- `ask.py` business logic moved to `AskService`; CLI now focuses on argument parsing, streaming UX, and exit codes.
+- `batch.py` export/statistics printing moved to `BatchService` (`BatchExportResult`, `print_statistics`, `export_results`).
+- `format_cmd.py` `--resume` handling moved to `FormatService.resume_from_checkpoint()`.
+- Services no longer call `typer.Exit`; they raise `ValueError` / `RuntimeError` and let CLI commands convert to user-facing messages and exit codes.
+- Updated `AGENTS.md` Service layer documentation with `AskService` example and exception contract.
+
+### Tests
+
+- Added `tests/unit/test_ask_service.py` covering input loading, prompt normalization, dry-run, and output path resolution.
+- Added `tests/unit/test_batch_service.py` covering statistics printing and single/separate/split export modes.
+- Added `tests/unit/test_format_service.py` covering body checkpoint resume and title-mode rejection.
+
+### Version
+
+- 2.10.0 → 2.11.0
+
+### Contributors
+
+- Designed and implemented with assistance from **kimi-code** (agent) and **kimi-k2.7** (model).
+
 ## 2.10.0 (2026-06-24)
 
 ### Features

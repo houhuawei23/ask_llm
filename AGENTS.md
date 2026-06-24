@@ -50,6 +50,7 @@ ask_llm/
 │   │   └── paper_explain.py  # Paper explanation pipeline
 │   ├── services/             # Use-case / orchestration services
 │   │   ├── __init__.py
+│   │   ├── ask_service.py    # Single-request orchestration (moved from ask command)
 │   │   ├── format_service.py # Format orchestration (moved from format_cmd)
 │   │   ├── batch_service.py  # Batch orchestration (moved from batch command)
 │   │   ├── translation_service.py # Translation orchestration (moved from trans command)
@@ -302,20 +303,26 @@ manager.apply_overrides(model="gpt-4", temperature=0.5)
 
 ### Service Layer
 
-CLI commands are thin adapters. Heavy workflows (batch, format, translation, paper explain)
+CLI commands are thin adapters. Heavy workflows (ask, batch, format, translation, paper explain)
 are orchestrated by modules under `ask_llm.services.*`, which receive a prepared
-`ConfigManager` and return structured results for the CLI to print/export:
+`ConfigManager` / `RequestProcessor` and return structured results for the CLI to print/export.
+Services must not call `typer.Exit`; they raise `ValueError`, `FileNotFoundError`, or
+`RuntimeError` and let the CLI convert to user-facing messages and exit codes.
 
 ```python
 from ask_llm.config.cli_session import load_cli_session, resolve_provider_and_model_or_exit
-from ask_llm.services.translation_service import TranslationService, TranslationOptions
+from ask_llm.services.ask_service import AskService
 
 load_result, config_manager = load_cli_session(config_path)
 provider, model = resolve_provider_and_model_or_exit(config_manager, cli_provider=provider)
-service = TranslationService(
-    config_manager, load_result.unified_config, provider=provider, model=model
+service = AskService(
+    config_manager=config_manager,
+    unified_config=load_result.unified_config,
+    model=model,
 )
-service.translate_files(files, TranslationOptions(...))
+# After API key checks:
+service.set_processor(processor)
+result = service.process_to_file(...)
 ```
 
 ### Bounded Concurrency

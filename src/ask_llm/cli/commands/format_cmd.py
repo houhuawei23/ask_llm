@@ -12,11 +12,13 @@ from ask_llm.cli.errors import raise_unexpected_cli_error
 from ask_llm.config.context import set_config
 from ask_llm.config.loader import ConfigLoader
 from ask_llm.config.manager import ConfigManager
-from ask_llm.core.md_body_formatter import BodyFormatter
 from ask_llm.core.processor import RequestProcessor
-from ask_llm.services.format_service import run_parallel_format, run_sequential_format
+from ask_llm.services.format_service import (
+    FormatService,
+    run_parallel_format,
+    run_sequential_format,
+)
 from ask_llm.utils.console import console
-from ask_llm.utils.file_handler import FileHandler
 from ask_llm.utils.md_path_discovery import discover_markdown_files
 
 try:
@@ -257,11 +259,21 @@ def format_cmd(
             temperature=temperature,
         )
 
-        # Handle --resume mode after config is ready
+        provider_config = config_manager.get_provider_config()
+        default_model = config_manager.get_model_override() or config_manager.get_default_model()
+
+        if not default_model:
+            console.print_error("未指定模型。请使用 --model 或在配置中设置默认模型。")
+            raise typer.Exit(1)
+
+        llm_provider = create_provider_adapter(provider_config, default_model=default_model)
+        processor = RequestProcessor(llm_provider)
+        format_service = FormatService(processor=processor, model=default_model)
+
+        # Handle --resume mode after config and processor are ready
         if resume:
-            _handle_resume(
+            format_service.resume_from_checkpoint(
                 resume,
-                config_manager=config_manager,
                 output=output,
                 inplace=inplace,
                 force=force,
@@ -272,16 +284,6 @@ def format_cmd(
         if type_lower not in ("title", "body"):
             console.print_error(f"不支持的格式化类型: {type_}。请使用 title 或 body。")
             raise typer.Exit(1)
-
-        provider_config = config_manager.get_provider_config()
-        default_model = config_manager.get_model_override() or config_manager.get_default_model()
-
-        if not default_model:
-            console.print_error("未指定模型。请使用 --model 或在配置中设置默认模型。")
-            raise typer.Exit(1)
-
-        llm_provider = create_provider_adapter(provider_config, default_model=default_model)
-        processor = RequestProcessor(llm_provider)
 
         resolved_paths = discover_markdown_files(files, recursive=recursive, max_depth=max_depth)
         resolved_files: list[str] = [str(p) for p in resolved_paths]
@@ -361,83 +363,3 @@ def format_cmd(
         raise typer.Exit(1) from None
     except Exception as e:
         raise_unexpected_cli_error("format", e)
-
-
-def _handle_resume(
-    checkpoint_path: str,
-    *,
-    config_manager: ConfigManager,
-    output: str | None,
-    inplace: bool,
-    force: bool,
-) -> None:
-    """Resume formatting from a checkpoint file."""
-    from ask_llm.config.context import get_config
-    from ask_llm.core.format_checkpoint import FormatCheckpoint
-
-    checkpoint = FormatCheckpoint.load(checkpoint_path)
-    source_file = checkpoint.source_file
-
-    console.print_info(f"从 checkpoint 恢复: {checkpoint_path}")
-    console.print_info(f"源文件: {source_file}")
-    console.print_info(
-        f"失败 chunk 数: {len(checkpoint.failed_chunks)}, "
-        f"成功 chunk 数: {len(checkpoint.successful_chunks)}"
-    )
-
-    provider_config = config_manager.get_provider_config()
-    default_model = config_manager.get_model_override() or config_manager.get_default_model()
-
-    if not default_model:
-        console.print_error("未指定模型。请使用 --model 或在配置中设置默认模型。")
-        raise typer.Exit(1)
-
-    llm_provider = create_provider_adapter(provider_config, default_model=default_model)
-    processor = RequestProcessor(llm_provider)
-
-    if checkpoint.format_type == "body":
-        result = BodyFormatter.resume_from_checkpoint(
-            checkpoint_path,
-            processor=processor,
-            model=default_model,
-        )
-    else:
-        # For title mode, re-run the full formatter with the original headings
-        # This is simpler than implementing a separate resume for headings
-        console.print_info("标题格式化暂不支持 checkpoint 恢复，请直接重新运行 format 命令。")
-        raise typer.Exit(1)
-
-    # Determine output path
-    if inplace:
-        out_path = source_file
-    elif output:
-        out_path = output
-    else:
-        out_path = FileHandler.generate_output_path(
-            source_file,
-            suffix=get_config().unified_config.file.formatted_suffix,
-        )
-
-    # Write output
-    try:
-        FileHandler.write(out_path, result.text, force=force or inplace)
-    except Exception as exc:
-        console.print_error(f"写入失败: {exc}")
-        raise typer.Exit(1) from exc
-
-    if result.failed_chunks:
-        console.print_warning(
-            f"部分成功: {len(result.failed_chunks)} 个 chunk 仍失败，原始内容已保留"
-        )
-        if result.checkpoint_path:
-            console.print_info(f"更新后的 checkpoint: {result.checkpoint_path}")
-    else:
-        console.print_success(f"全部完成！已保存: {out_path}")
-        # Clean up checkpoint if all succeeded
-        import os
-
-        try:
-            os.remove(checkpoint_path)
-            console.print_info(f"已删除 checkpoint: {checkpoint_path}")
-        except OSError:
-            pass
