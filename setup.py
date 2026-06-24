@@ -4,7 +4,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="ask-llm",
-    version="2.9.0",
+    version="2.15.1",
     packages=find_packages(where="src"),
     package_dir={"": "src"},
     python_requires=">=3.8",

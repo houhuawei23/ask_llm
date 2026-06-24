@@ -9,6 +9,7 @@ import pytest
 
 from ask_llm.core.batch_models import BatchResult, BatchTask, ModelConfig, TaskStatus
 from ask_llm.core.batch_processor import GlobalBatchProcessor
+from ask_llm.core.models import ProviderConfig
 from ask_llm.core.telemetry import ErrorCategory
 
 
@@ -229,7 +230,12 @@ def test_build_provider_cache_includes_fallbacks():
     task = _make_task(fallback_configs=[ModelConfig(provider="fallback", model="model-b")])
     processor = GlobalBatchProcessor()
     cm = MagicMock()
-    base_cfg = MagicMock()
+    base_cfg = ProviderConfig(
+        api_provider="primary",
+        api_base="https://api.primary.com/v1",
+        api_key="sk-test",
+        models=["model-a"],
+    )
     cm.config.get_provider_config.return_value = base_cfg
 
     with patch("ask_llm.utils.provider_cache.create_provider_adapter") as mock_create:

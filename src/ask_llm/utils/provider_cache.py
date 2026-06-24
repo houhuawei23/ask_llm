@@ -13,6 +13,8 @@ from typing import Any
 
 from llm_engine import create_provider_adapter
 
+from ask_llm.core.models import ProviderConfig
+
 
 @lru_cache(maxsize=128)
 def _create_cached_adapter(
@@ -29,19 +31,21 @@ def _create_cached_adapter(
     """Create a provider adapter from primitive, hashable fields.
 
     The lru_cache wrapper guarantees that the same HTTP client is reused for
-    identical provider configurations.
+    identical provider configurations. The adapter is created from a real
+    ``ProviderConfig`` object so that downstream code can access
+    ``adapter.config.api_temperature`` and other attributes consistently.
     """
-    config_dict = {
-        "api_provider": provider,
-        "api_base": api_base,
-        "api_key": api_key,
-        "models": list(models),
-        "api_temperature": api_temperature,
-        "api_top_p": api_top_p,
-        "max_tokens": max_tokens,
-        "timeout": timeout,
-    }
-    return create_provider_adapter(config_dict, default_model=default_model or None)
+    provider_config = ProviderConfig(
+        api_provider=provider,
+        api_base=api_base,
+        api_key=api_key,
+        models=list(models),
+        api_temperature=api_temperature,
+        api_top_p=api_top_p,
+        max_tokens=max_tokens,
+        timeout=timeout,
+    )
+    return create_provider_adapter(provider_config, default_model=default_model or None)
 
 
 class ProviderAdapterCache:

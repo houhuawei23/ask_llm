@@ -1,5 +1,26 @@
 # Changelog
 
+## 2.15.1 (2026-06-24)
+
+### Fixed
+
+- **`ask-llm trans` 崩溃：`'dict' object has no attribute 'api_temperature'`**。
+  - 根因：`ProviderAdapterCache` 为了复用连接，把配置拆成原始字段后重新拼成普通 `dict` 传给 `llm-engine`，但返回的 adapter 的 `config` 也变成了 `dict`；而 `BatchProcessor` / `GlobalBatchProcessor` / `RequestProcessor` 在构造 `RequestMetadata` 时按对象属性访问 `provider.config.api_temperature`，导致翻译/批处理在 API 成功返回后崩溃。
+  - 修复：`ProviderAdapterCache` 在创建 adapter 前先组装成真正的 `ProviderConfig` 对象，再传给 `create_provider_adapter`，使 `adapter.config` 保持对象语义，与代码其它路径一致。
+
+### Tests
+
+- 更新 `tests/unit/test_provider_cache.py`：测试配置改用字典，避免 `MagicMock` 对象触发 `ProviderConfig` 校验失败。
+- 更新 `tests/unit/test_batch_processor.py::test_build_provider_cache_includes_fallbacks`：使用真实的 `ProviderConfig` 作为 `get_provider_config` 的返回值。
+
+### Version
+
+- 2.15.0 → 2.15.1
+
+### Contributors
+
+- Fixed with assistance from **kimi-code** (agent) and **kimi-k2.7** (model).
+
 ## 2.15.0 (2026-06-24)
 
 ### Features

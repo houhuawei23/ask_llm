@@ -8,16 +8,16 @@ from ask_llm.utils.provider_cache import ProviderAdapterCache
 
 
 def _make_config(**kwargs):
-    config = MagicMock()
-    config.api_provider = kwargs.get("api_provider", "openai")
-    config.api_base = kwargs.get("api_base", "https://api.openai.com/v1")
-    config.api_key = kwargs.get("api_key", "sk-test")
-    config.models = kwargs.get("models", ["gpt-4"])
-    config.api_temperature = kwargs.get("api_temperature", 0.7)
-    config.api_top_p = kwargs.get("api_top_p")
-    config.max_tokens = kwargs.get("max_tokens")
-    config.timeout = kwargs.get("timeout", 60.0)
-    return config
+    return {
+        "api_provider": kwargs.get("api_provider", "openai"),
+        "api_base": kwargs.get("api_base", "https://api.openai.com/v1"),
+        "api_key": kwargs.get("api_key", "sk-test"),
+        "models": kwargs.get("models", ["gpt-4"]),
+        "api_temperature": kwargs.get("api_temperature", 0.7),
+        "api_top_p": kwargs.get("api_top_p"),
+        "max_tokens": kwargs.get("max_tokens"),
+        "timeout": kwargs.get("timeout", 60.0),
+    }
 
 
 @pytest.fixture(autouse=True)
