@@ -7,6 +7,9 @@
 - **`ask-llm trans` 崩溃：`'dict' object has no attribute 'api_temperature'`**。
   - 根因：`ProviderAdapterCache` 为了复用连接，把配置拆成原始字段后重新拼成普通 `dict` 传给 `llm-engine`，但返回的 adapter 的 `config` 也变成了 `dict`；而 `BatchProcessor` / `GlobalBatchProcessor` / `RequestProcessor` 在构造 `RequestMetadata` 时按对象属性访问 `provider.config.api_temperature`，导致翻译/批处理在 API 成功返回后崩溃。
   - 修复：`ProviderAdapterCache` 在创建 adapter 前先组装成真正的 `ProviderConfig` 对象，再传给 `create_provider_adapter`，使 `adapter.config` 保持对象语义，与代码其它路径一致。
+- **`ask-llm trans` 保存 checkpoint 时崩溃：`Circular reference detected (id repeated)`**。
+  - 根因：`GlobalBatchProcessor._process_single_global_task()` 在设置成功/失败结果的 `attempt_history` 时，把包含结果自身的列表直接赋给 `attempt_history`，形成循环引用；Pydantic `model_dump(mode="json")` 在序列化 checkpoint 时拒绝这种结构。
+  - 修复：`attempt_history` 只记录**当前结果之前的尝试**；成功结果保存前面失败的尝试，最终失败结果 likewise 排除自身，保证对象图无环。
 
 ### Tests
 

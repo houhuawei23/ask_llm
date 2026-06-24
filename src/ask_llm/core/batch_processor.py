@@ -965,7 +965,9 @@ class GlobalBatchProcessor:
             )
             attempt_history.append(result)
             if result.status == TaskStatus.SUCCESS:
-                result.attempt_history = attempt_history
+                # Record only the preceding failed attempts, not the successful
+                # result itself, to avoid a circular reference during serialization.
+                result.attempt_history = list(attempt_history[:-1])
                 return result
             last_result = result
 
@@ -988,7 +990,11 @@ class GlobalBatchProcessor:
             error="All provider/model configurations failed",
             error_category=ErrorCategory.UNKNOWN,
         )
-        final.attempt_history = attempt_history
+        # If ``final`` is one of the recorded attempts, exclude itself from its
+        # own history to keep the model graph acyclic.
+        final.attempt_history = (
+            list(attempt_history[:-1]) if final in attempt_history else list(attempt_history)
+        )
         return final
 
     def process_global_tasks(

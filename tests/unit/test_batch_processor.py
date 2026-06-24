@@ -152,8 +152,12 @@ def test_all_configs_fail_returns_failed():
     assert result.model_settings.provider == "fallback"
     assert result.model_settings.model == "model-b"
     assert result.error_category == ErrorCategory.UNKNOWN
-    assert len(result.attempt_history) == 2
+    # attempt_history records the *preceding* attempts, not the final result itself.
+    assert len(result.attempt_history) == 1
+    assert result.attempt_history[0].model_settings.provider == "primary"
     assert all(r.error_category == ErrorCategory.UNKNOWN for r in result.attempt_history)
+    # Must serialize without circular references.
+    result.model_dump(mode="json")
 
 
 def test_no_fallback_returns_failed_on_primary_failure():
@@ -222,8 +226,11 @@ def test_authentication_error_stops_fallback_chain():
 
     assert result.status == TaskStatus.FAILED
     assert result.error_category == ErrorCategory.AUTHENTICATION
-    assert len(result.attempt_history) == 1
+    # The first (and only) attempt is the result itself; there are no preceding attempts.
+    assert len(result.attempt_history) == 0
     assert called == ["primary/model-a"]
+    # Must serialize without circular references.
+    result.model_dump(mode="json")
 
 
 def test_build_provider_cache_includes_fallbacks():
