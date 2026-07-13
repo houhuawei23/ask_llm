@@ -20,6 +20,9 @@ class ConfigManager:
         self._base_config = config
         self._current_provider: str = config.default_provider
         self._overrides: dict[str, Any] = {}
+        # Track the source of each override for transparency/debugging.
+        # Maps override key -> source label (e.g. "CLI", "ENV", "default_config.yml").
+        self._override_sources: dict[str, str] = {}
 
     @property
     def config(self) -> AppConfig:
@@ -31,12 +34,13 @@ class ConfigManager:
         """Get current provider name."""
         return self._current_provider
 
-    def set_provider(self, name: str) -> None:
+    def set_provider(self, name: str, *, source: str = "CLI") -> None:
         """
         Set current provider.
 
         Args:
             name: Provider name
+            source: Origin of this change (for override tracing).
 
         Raises:
             ValueError: If provider not found
@@ -45,7 +49,8 @@ class ConfigManager:
             available = ", ".join(self._base_config.providers.keys())
             raise ValueError(f"Provider '{name}' not found. Available: {available}")
         self._current_provider = name
-        logger.debug(f"Switched to provider: {name}")
+        self._override_sources["provider"] = f"{source}: {name}"
+        logger.debug(f"Switched to provider: {name} (source={source})")
 
     def get_provider_config(self, provider_name: str | None = None) -> ProviderConfig:
         """
@@ -72,6 +77,8 @@ class ConfigManager:
         temperature: float | None = None,
         api_key: str | None = None,
         api_base: str | None = None,
+        *,
+        source: str = "CLI",
         **kwargs: Any,
     ) -> None:
         """
@@ -82,28 +89,35 @@ class ConfigManager:
             temperature: Override temperature
             api_key: Override API key
             api_base: Override API base URL
+            source: Origin label for traceability (e.g. "CLI", "ENV").
             **kwargs: Additional overrides
         """
         if model is not None:
             self._overrides["_model_override"] = model
-            logger.debug(f"Override: model = {model}")
+            self._override_sources["model"] = f"{source}: {model}"
+            logger.debug(f"Override: model = {model} (source={source})")
 
         if temperature is not None:
             self._overrides["api_temperature"] = temperature
-            logger.debug(f"Override: temperature = {temperature}")
+            self._override_sources["temperature"] = f"{source}: {temperature}"
+            logger.debug(f"Override: temperature = {temperature} (source={source})")
 
         if api_key is not None:
             self._overrides["api_key"] = api_key
-            logger.debug("Override: api_key = ***")
+            self._override_sources["api_key"] = f"{source}: ***"
+            logger.debug(f"Override: api_key = *** (source={source})")
 
         if api_base is not None:
             self._overrides["api_base"] = api_base
-            logger.debug(f"Override: api_base = {api_base}")
+            self._override_sources["api_base"] = f"{source}: {api_base}"
+            logger.debug(f"Override: api_base = {api_base} (source={source})")
 
         for key, value in kwargs.items():
             if value is not None:
+                display_value = "***" if "key" in key.lower() else str(value)
                 self._overrides[key] = value
-                logger.debug(f"Override: {key} = {value}")
+                self._override_sources[key] = f"{source}: {display_value}"
+                logger.debug(f"Override: {key} = {display_value} (source={source})")
 
     def get_model_override(self) -> str | None:
         """
@@ -145,7 +159,16 @@ class ConfigManager:
     def clear_overrides(self) -> None:
         """Clear all overrides."""
         self._overrides.clear()
+        self._override_sources.clear()
         logger.debug("Cleared all configuration overrides")
+
+    def get_override_sources(self) -> dict[str, str]:
+        """Return a mapping of override key -> human-readable source label.
+
+        Useful for debugging configuration provenance (e.g. ``config show --debug-config``).
+        Keys without an override entry inherit from ``default_config.yml``.
+        """
+        return dict(self._override_sources)
 
     def get_available_providers(self) -> list[str]:
         """Get list of available provider names."""

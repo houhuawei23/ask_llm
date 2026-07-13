@@ -190,6 +190,54 @@ class TestConfigManager:
         assert manager.get_model_override() is None
         assert manager.get_default_model() == "test-model"  # back to original
 
+    def test_override_sources_tracking(self, app_config):
+        """Test that override provenance is recorded for transparency."""
+        manager = ConfigManager(app_config)
+        manager.apply_overrides(model="new-model", temperature=0.9, api_key="secret")
+
+        sources = manager.get_override_sources()
+        assert sources["model"].startswith("CLI: new-model")
+        assert sources["temperature"].startswith("CLI: 0.9")
+        # api_key value must be masked in source label
+        assert "secret" not in sources["api_key"]
+        assert sources["api_key"].startswith("CLI: ***")
+
+    def test_override_sources_custom_label(self, app_config):
+        """Test custom source label is recorded."""
+        manager = ConfigManager(app_config)
+        manager.apply_overrides(model="env-model", source="ENV")
+
+        sources = manager.get_override_sources()
+        assert sources["model"] == "ENV: env-model"
+
+    def test_set_provider_records_source(self, app_config):
+        """Test that provider switch records its source."""
+        config = AppConfig(
+            default_provider="provider1",
+            default_model="model1",
+            providers={
+                "provider1": ProviderConfig(
+                    api_provider="provider1",
+                    api_key="key1",
+                    api_base="https://api1.com",
+                    models=["model1"],
+                ),
+            },
+        )
+        manager = ConfigManager(config)
+        manager.set_provider("provider1", source="CLI")
+
+        sources = manager.get_override_sources()
+        assert sources["provider"].startswith("CLI: provider1")
+
+    def test_clear_overrides_clears_sources(self, app_config):
+        """Test that clearing overrides also clears sources."""
+        manager = ConfigManager(app_config)
+        manager.apply_overrides(model="new-model")
+        manager.clear_overrides()
+
+        assert manager.get_override_sources() == {}
+
     def test_get_available_providers(self, app_config):
         """Test getting available providers."""
         manager = ConfigManager(app_config)

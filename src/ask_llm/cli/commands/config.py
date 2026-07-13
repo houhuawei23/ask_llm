@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Annotated
 
 import typer
@@ -41,6 +42,13 @@ def config(
             help="Output path for init (default: ~/.config/ask_llm/default_config.yml)",
         ),
     ] = None,
+    debug_config: Annotated[
+        bool,
+        typer.Option(
+            "--debug-config",
+            help="Show configuration provenance: loaded file path and active env-var overrides",
+        ),
+    ] = False,
 ) -> None:
     """
     Manage configuration.
@@ -51,6 +59,7 @@ def config(
         ask-llm config test -p deepseek
         ask-llm config init
         ask-llm config init -o ./my_config.yml
+        ask-llm config show --debug-config
     """
     with cli_errors("config"):
         if action == "init":
@@ -61,6 +70,20 @@ def config(
         load_result = ConfigLoader.load(config_path)
         set_config(load_result)
         config = load_result.app_config
+
+        if debug_config:
+            console.print("")
+            console.print("[bold]Configuration Provenance:[/bold]")
+            console.print(f"  Loaded config file: {load_result.config_path}")
+            active_env = [k for k in os.environ if k.startswith("ASK_LLM_") and os.environ[k]]
+            if active_env:
+                console.print("  Active ASK_LLM_* env overrides:")
+                for key in sorted(active_env):
+                    masked = "***" if "KEY" in key or "SECRET" in key else os.environ[key]
+                    console.print(f"    {key} = {masked}")
+            else:
+                console.print("  Active ASK_LLM_* env overrides: (none)")
+            console.print("")
 
         if action == "show":
             console.print("")
