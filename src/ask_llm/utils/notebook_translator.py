@@ -131,7 +131,7 @@ class NotebookTranslator:
                     task_id=task_id,
                     prompt=prompt_template,
                     content=chunk_content,
-                    task_model_config=self.model_config,
+                    model_settings=self.model_config,
                     fallback_model_configs=self.fallback_configs,
                 )
             )

@@ -192,7 +192,7 @@ Content for section 2.
         tasks = translator.create_translation_tasks(chunks, model_config)
 
         assert len(tasks) == len(chunks)
-        assert all(task.task_model_config == model_config for task in tasks)
+        assert all(task.model_settings == model_config for task in tasks)
         assert all(task.content == chunks[i].content for i, task in enumerate(tasks))
 
     def test_end_to_end_text_processing(self):
@@ -231,7 +231,7 @@ Paragraph three.
             for task in tasks:
                 assert task.prompt is not None
                 assert task.content is not None
-                assert task.task_model_config == model_config
+                assert task.model_settings == model_config
 
         finally:
             Path(input_path).unlink()
@@ -362,8 +362,8 @@ More content.
             TextChunk(content="b", chunk_id=1),
         ]
         tasks = [
-            BatchTask(task_id=0, prompt="p", content="a", task_model_config=model_config),
-            BatchTask(task_id=1, prompt="p", content="b", task_model_config=model_config),
+            BatchTask(task_id=0, prompt="p", content="a", model_settings=model_config),
+            BatchTask(task_id=1, prompt="p", content="b", model_settings=model_config),
         ]
 
         new_tasks, new_chunks = _offset_task_ids(tasks, chunks, 10)
@@ -378,7 +378,7 @@ More content.
         """Offset IDs keep the one-to-one mapping required by TranslationExporter."""
         model_config = ModelConfig(provider="test", model="test-model")
         chunks = [TextChunk(content="x", chunk_id=0)]
-        tasks = [BatchTask(task_id=0, prompt="p", content="x", task_model_config=model_config)]
+        tasks = [BatchTask(task_id=0, prompt="p", content="x", model_settings=model_config)]
 
         new_tasks, new_chunks = _offset_task_ids(tasks, chunks, 5)
         assert new_tasks[0].task_id == new_chunks[0].chunk_id
@@ -403,7 +403,7 @@ class TestTransPerFileBatching:
                         task_id=task.task_id,
                         prompt=task.prompt,
                         content=task.content,
-                        model_settings=task.task_model_config,
+                        model_settings=task.model_settings,
                         response=f"translated {task.task_id}",
                         status=TaskStatus.SUCCESS,
                         metadata=RequestMetadata(
@@ -489,7 +489,7 @@ class TestTransPerFileBatching:
                             task_id=task.task_id,
                             prompt=task.prompt,
                             content=task.content,
-                            model_settings=task.task_model_config,
+                            model_settings=task.model_settings,
                             status=TaskStatus.FAILED,
                             error="simulated failure",
                         )
@@ -500,7 +500,7 @@ class TestTransPerFileBatching:
                             task_id=task.task_id,
                             prompt=task.prompt,
                             content=task.content,
-                            model_settings=task.task_model_config,
+                            model_settings=task.model_settings,
                             response="translated",
                             status=TaskStatus.SUCCESS,
                             metadata=RequestMetadata(

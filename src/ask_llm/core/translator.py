@@ -159,7 +159,7 @@ class Translator:
                 task_id=chunk.chunk_id,
                 prompt=prompt_template,
                 content=chunk.content,
-                task_model_config=model_config,
+                model_settings=model_config,
             )
             tasks.append(task)
 

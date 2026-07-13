@@ -89,7 +89,7 @@ def test_batch_task_legacy_paper_mode_sets_kind() -> None:
         task_id=0,
         prompt="p",
         content="",
-        task_model_config=mc,
+        model_settings=mc,
         paper_mode=True,
     )
     assert t.task_kind == "paper_explain"
@@ -100,7 +100,7 @@ def test_build_paper_explain_task() -> None:
     t = build_paper_explain_task(
         1,
         "full prompt",
-        task_model_config=mc,
+        model_settings=mc,
         output_filename="paper:full",
         return_reasoning=True,
     )

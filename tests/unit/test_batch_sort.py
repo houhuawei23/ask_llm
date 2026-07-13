@@ -9,13 +9,13 @@ def test_sort_batch_tasks_descending_by_tokens() -> None:
         task_id=0,
         prompt="Translate:\n\n{content}",
         content="hi",
-        task_model_config=mc,
+        model_settings=mc,
     )
     long = BatchTask(
         task_id=1,
         prompt="Translate:\n\n{content}",
         content="word " * 400,
-        task_model_config=mc,
+        model_settings=mc,
     )
     out = sort_batch_tasks_by_estimated_input([short, long], "deepseek-chat")
     assert out[0].task_id == 1

@@ -454,9 +454,9 @@ class GlobalBatchProcessor:
         limiter = get_global_rate_limiter(self.rate_limit_config)
         min_burst: int | None = None
         for task in tasks:
-            if task.task_model_config is None:
+            if task.model_settings is None:
                 continue
-            burst = limiter.burst_for(task.task_model_config.provider, task.task_model_config.model)
+            burst = limiter.burst_for(task.model_settings.provider, task.model_settings.model)
             if min_burst is None or burst < min_burst:
                 min_burst = burst
         if min_burst is None:
@@ -543,9 +543,9 @@ class GlobalBatchProcessor:
 
         seen: set[str] = set()
         for task in tasks:
-            if not task.task_model_config:
+            if not task.model_settings:
                 continue
-            _add_config(task.task_model_config)
+            _add_config(task.model_settings)
             for fallback_config in task.fallback_model_configs:
                 _add_config(fallback_config)
         return cache
@@ -934,7 +934,7 @@ class GlobalBatchProcessor:
         Process a single task, trying the primary config and any fallbacks.
 
         Args:
-            task: Batch task with task_model_config
+            task: Batch task with model_settings
             provider_cache: Pre-built provider adapter cache
             retry_count: Current retry count
             progress: Rich Progress object for updating progress
@@ -943,10 +943,10 @@ class GlobalBatchProcessor:
         Returns:
             Batch result
         """
-        if not task.task_model_config:
-            raise ValueError("Task must have task_model_config for global batch processing")
+        if not task.model_settings:
+            raise ValueError("Task must have model_settings for global batch processing")
 
-        configs = [task.task_model_config, *task.fallback_model_configs]
+        configs = [task.model_settings, *task.fallback_model_configs]
         last_result: BatchResult | None = None
         attempt_history: list[BatchResult] = []
 
@@ -982,7 +982,7 @@ class GlobalBatchProcessor:
             prompt=task.prompt,
             content=task.content,
             output_filename=task.output_filename,
-            model_settings=task.task_model_config,
+            model_settings=task.model_settings,
             status=TaskStatus.FAILED,
             error="All provider/model configurations failed",
             error_category=ErrorCategory.UNKNOWN,
@@ -1004,7 +1004,7 @@ class GlobalBatchProcessor:
         Process multiple tasks across different models concurrently.
 
         Args:
-            tasks: List of batch tasks, each with task_model_config
+            tasks: List of batch tasks, each with model_settings
             config_manager: Configuration manager instance
             show_progress: Whether to show progress bars
 
@@ -1012,8 +1012,8 @@ class GlobalBatchProcessor:
             List of batch results
         """
         default_model = (
-            tasks[0].task_model_config.model
-            if tasks and tasks[0].task_model_config
+            tasks[0].model_settings.model
+            if tasks and tasks[0].model_settings
             else "gpt-3.5-turbo"
         )
         pending_tasks = sort_batch_tasks_by_estimated_input(tasks.copy(), default_model)
@@ -1063,7 +1063,7 @@ class GlobalBatchProcessor:
                 )
                 input_token_estimate = TokenCounter.estimate_tokens(
                     estimated_prompt,
-                    task.task_model_config.model if task.task_model_config else "gpt-3.5-turbo",
+                    task.model_settings.model if task.model_settings else "gpt-3.5-turbo",
                 )["token_count"]
                 task_to_input_tokens[task.task_id] = input_token_estimate
 
@@ -1075,8 +1075,8 @@ class GlobalBatchProcessor:
 
                 # Create a per-task progress bar with estimated output tokens as total
                 model_key = (
-                    f"{task.task_model_config.provider}/{task.task_model_config.model}"
-                    if task.task_model_config
+                    f"{task.model_settings.provider}/{task.model_settings.model}"
+                    if task.model_settings
                     else "unknown/model"
                 )
                 task_id = progress.add_task(
@@ -1120,7 +1120,7 @@ class GlobalBatchProcessor:
                     prompt=task.prompt,
                     content=task.content,
                     output_filename=task.output_filename,
-                    model_settings=task.task_model_config
+                    model_settings=task.model_settings
                     or ModelConfig(provider="unknown", model="unknown"),
                     status=TaskStatus.FAILED,
                     error=error_msg,

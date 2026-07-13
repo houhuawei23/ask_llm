@@ -241,7 +241,7 @@ class PaperService:
                 build_paper_explain_task(
                     orig_idx,
                     full_prompt,
-                    task_model_config=model_config,
+                    model_settings=model_config,
                     output_filename=f"paper:{key}",
                     return_reasoning=(key.startswith("full")),
                     fallback_model_configs=fallback_configs,

@@ -37,9 +37,7 @@ class BatchTask(BaseModel):
     prompt: str
     content: str
     output_filename: str | None = None  # Optional output filename for split mode
-    task_model_config: ModelConfig | None = (
-        None  # Optional for backward compatibility (renamed from model_config to avoid Pydantic reserved keyword)
-    )
+    model_settings: ModelConfig | None = None  # Optional per-task model configuration
     fallback_model_configs: list[ModelConfig] = Field(
         default_factory=list,
         description="Ordered list of fallback provider/model configs to try on failure",
@@ -72,7 +70,7 @@ def sort_batch_tasks_by_estimated_input(
     """
 
     def _estimate(t: BatchTask) -> int:
-        model = t.task_model_config.model if t.task_model_config else default_model
+        model = t.model_settings.model if t.model_settings else default_model
         if "{content}" in t.prompt:
             full = t.prompt.replace("{content}", t.content)
         else:
@@ -91,9 +89,7 @@ class BatchResult(BaseModel):
     prompt: str
     content: str
     output_filename: str | None = None  # Optional output filename for split mode
-    model_settings: (
-        ModelConfig  # Renamed from model_config to avoid conflict with Pydantic's reserved field
-    )
+    model_settings: ModelConfig  # Model configuration used for this task
     response: str | None = None
     metadata: RequestMetadata | None = None
     reasoning: str | None = None  # e.g. DeepSeek reasoner when paper_mode + return_reasoning

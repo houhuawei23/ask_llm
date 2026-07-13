@@ -47,7 +47,7 @@ def _make_job(tmp_path: Path) -> _TextTranslationJob:
         task_id=0,
         prompt="Translate: {content}",
         content="hello world",
-        task_model_config=ModelConfig(provider="openai", model="gpt-4"),
+        model_settings=ModelConfig(provider="openai", model="gpt-4"),
     )
     return _TextTranslationJob(
         file_path=str(file_path),

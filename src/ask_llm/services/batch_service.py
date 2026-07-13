@@ -271,7 +271,7 @@ def run_batch_from_config(
                 prompt=original_task.prompt,
                 content=original_task.content,
                 output_filename=original_task.output_filename,
-                task_model_config=model_config,
+                model_settings=model_config,
                 fallback_model_configs=fallback_configs,
             )
             global_tasks.append(global_task)

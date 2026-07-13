@@ -25,7 +25,7 @@ def _make_task(fallback_configs=None):
         prompt="Translate: {content}",
         content="hello",
         output_filename="out.txt",
-        task_model_config=ModelConfig(provider="primary", model="model-a"),
+        model_settings=ModelConfig(provider="primary", model="model-a"),
         fallback_model_configs=fallback_configs or [],
     )
 

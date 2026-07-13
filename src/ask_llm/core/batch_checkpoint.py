@@ -57,7 +57,7 @@ class BatchCheckpoint(BaseCheckpoint[BatchTask, BatchResult]):
             prompt=result.prompt,
             content=result.content,
             output_filename=result.output_filename,
-            task_model_config=result.model_settings,
+            model_settings=result.model_settings,
         )
 
     @classmethod

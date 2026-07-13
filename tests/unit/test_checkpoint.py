@@ -14,7 +14,7 @@ def _make_task(task_id: int = 0) -> BatchTask:
         task_id=task_id,
         prompt="Translate: {content}",
         content="hello",
-        task_model_config=ModelConfig(provider="openai", model="gpt-4"),
+        model_settings=ModelConfig(provider="openai", model="gpt-4"),
     )
 
 
@@ -79,7 +79,7 @@ def test_result_to_task():
     task = checkpoint.result_to_task(result)
     assert task.task_id == 5
     assert task.prompt == result.prompt
-    assert task.task_model_config == result.model_settings
+    assert task.model_settings == result.model_settings
 
 
 def test_save_is_atomic(tmp_path):

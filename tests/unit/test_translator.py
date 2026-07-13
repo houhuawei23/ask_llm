@@ -98,7 +98,7 @@ class TestTranslator:
         assert tasks[1].task_id == 1
         assert tasks[0].content == "First chunk"
         assert tasks[1].content == "Second chunk"
-        assert tasks[0].task_model_config == model_config
+        assert tasks[0].model_settings == model_config
         assert "{content}" in tasks[0].prompt
         assert tasks[0].prompt == tasks[1].prompt
 

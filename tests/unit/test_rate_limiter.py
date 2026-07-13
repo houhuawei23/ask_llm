@@ -67,13 +67,13 @@ def test_effective_max_workers_capped_by_min_burst():
             task_id=1,
             prompt="p",
             content="c",
-            task_model_config=ModelConfig(provider="deepseek", model="deepseek-chat"),
+            model_settings=ModelConfig(provider="deepseek", model="deepseek-chat"),
         ),
         BatchTask(
             task_id=2,
             prompt="p",
             content="c",
-            task_model_config=ModelConfig(provider="qwen", model="qwen-max"),
+            model_settings=ModelConfig(provider="qwen", model="qwen-max"),
         ),
     ]
     assert processor._effective_max_workers(tasks) == 3
@@ -89,7 +89,7 @@ def test_effective_max_workers_respects_user_max():
             task_id=1,
             prompt="p",
             content="c",
-            task_model_config=ModelConfig(provider="qwen", model="qwen-max"),
+            model_settings=ModelConfig(provider="qwen", model="qwen-max"),
         ),
     ]
     assert processor._effective_max_workers(tasks) == 5
@@ -105,7 +105,7 @@ def test_effective_max_workers_at_least_one():
             task_id=1,
             prompt="p",
             content="c",
-            task_model_config=ModelConfig(provider="deepseek", model="deepseek-chat"),
+            model_settings=ModelConfig(provider="deepseek", model="deepseek-chat"),
         ),
     ]
     assert processor._effective_max_workers(tasks) == 1

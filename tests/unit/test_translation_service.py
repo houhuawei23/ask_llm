@@ -79,7 +79,7 @@ def test_prepare_text_file_applies_fallback_chain(tmp_path: Path):
         task_id=0,
         prompt="Translate: {content}",
         content="hello world",
-        task_model_config=ModelConfig(provider="openai", model="gpt-4"),
+        model_settings=ModelConfig(provider="openai", model="gpt-4"),
     )
 
     with (
@@ -130,7 +130,7 @@ def test_prepare_text_file_skips_fallback_when_disabled(tmp_path: Path):
         task_id=0,
         prompt="Translate: {content}",
         content="hello world",
-        task_model_config=ModelConfig(provider="openai", model="gpt-4"),
+        model_settings=ModelConfig(provider="openai", model="gpt-4"),
     )
 
     with (
