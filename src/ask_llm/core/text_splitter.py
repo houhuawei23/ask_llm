@@ -89,6 +89,10 @@ class MarkdownSplitter(TextSplitter):
     # Regex to match markdown headings: # Title, ## Title, etc.
     HEADING_PATTERN = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
 
+    # Heading levels tried in order during binary splitting. Override in a
+    # subclass to customize the priority/selection of heading levels.
+    HEADING_LEVELS: list[int] = [1, 2, 3, 4, 5, 6]
+
     def split(self, text: str) -> list[TextChunk]:
         """
         Split Markdown text using binary splitting strategy.
@@ -138,7 +142,7 @@ class MarkdownSplitter(TextSplitter):
 
         # Try binary splitting by headings, starting from level 1
         # We want to split even if individual sections are small, as long as total exceeds max_chunk_size
-        for level in range(1, 7):
+        for level in self.HEADING_LEVELS:
             chunks = self._split_by_headings_binary(text, headings, level, 0, 0)
             if chunks and len(chunks) > 1:
                 # Only return if we actually split into multiple chunks

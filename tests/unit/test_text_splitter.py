@@ -148,6 +148,37 @@ Even more content.
         # Should split by level 2 headings
         assert len(chunks) >= 2
 
+    def test_heading_levels_configurable(self):
+        """Subclasses can override HEADING_LEVELS to change splitting priority."""
+
+        class Level3OnlySplitter(MarkdownSplitter):
+            HEADING_LEVELS = [3]
+
+        text = """# H1 Title
+
+Some content under H1.
+
+### H3 Section A
+
+Content A.
+
+### H3 Section B
+
+Content B.
+"""
+        # Default splitter splits by level 1 first
+        default_splitter = MarkdownSplitter(max_chunk_size=40)
+        default_chunks = default_splitter.split(text)
+        assert len(default_chunks) >= 2
+
+        # Level3Only splitter only considers level 3 headings
+        l3_splitter = Level3OnlySplitter(max_chunk_size=40)
+        l3_chunks = l3_splitter.split(text)
+        assert len(l3_chunks) >= 2
+        # Each H3 section lands in its own chunk
+        assert any("Section A" in c.content for c in l3_chunks)
+        assert any("Section B" in c.content for c in l3_chunks)
+
     def test_split_no_headings(self):
         """Test splitting Markdown without headings (fallback to paragraphs)."""
         text = """This is a paragraph.
