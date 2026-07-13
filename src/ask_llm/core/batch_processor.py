@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from ask_llm.config.manager import ConfigManager
     from ask_llm.config.unified_config import RateLimitConfig
 
+from ask_llm.config.context import get_config_or_none
 from ask_llm.core.batch_models import (
     BatchResult,
     BatchStatistics,
@@ -31,6 +32,7 @@ from ask_llm.core.constants import (
 from ask_llm.core.models import RequestMetadata
 from ask_llm.core.processor import RequestProcessor
 from ask_llm.core.protocols import LLMProviderProtocol, ReasoningChunk
+from ask_llm.core.provider_manager import ProviderManager
 from ask_llm.core.telemetry import (
     ErrorCategory,
     LogContext,
@@ -38,7 +40,6 @@ from ask_llm.core.telemetry import (
     classify_error,
     should_fallback_for_error,
 )
-from ask_llm.utils.provider_cache import ProviderAdapterCache
 from ask_llm.utils.rate_limiter import get_global_rate_limiter
 from ask_llm.utils.token_counter import TokenCounter
 
@@ -69,6 +70,66 @@ def estimate_output_tokens(task_kind: str, input_tokens: int) -> int:
         multiplier = OUTPUT_TOKEN_MULTIPLIERS[TaskKind.BATCH]
 
     return int(input_tokens * multiplier)
+
+
+def paper_request_timeout_seconds() -> float:
+    """Paper explain HTTP timeout from unified config, default 600s.
+
+    Module-level so both provider-cache construction and task scheduling can share
+    it without coupling to the processor instance.
+    """
+    lr = get_config_or_none()
+    if lr is None:
+        return 600.0
+    return float(lr.unified_config.paper.request_timeout_seconds)
+
+
+def update_global_task_progress_failed(
+    progress: Progress | None,
+    progress_task_id: TaskID | None,
+    model_key: str,
+    task_id: int,
+    progress_tokens: str,
+) -> None:
+    """Mark a global task as failed in the progress bar (no-op if no progress)."""
+    if progress and progress_task_id is not None:
+        progress.update(
+            progress_task_id,
+            description=(f"{model_key} Task {task_id} ({progress_tokens} tokens): ✗ Failed"),
+            completed=100,
+        )
+
+
+def calculate_statistics_by_model(results: list[BatchResult]) -> dict[str, BatchStatistics]:
+    """Calculate per-model statistics from batch results.
+
+    Pure aggregation; shared between BatchProcessor and GlobalBatchProcessor.
+    """
+    results_by_model: dict[str, list[BatchResult]] = {}
+    for result in results:
+        model_key = f"{result.model_settings.provider}/{result.model_settings.model}"
+        results_by_model.setdefault(model_key, []).append(result)
+
+    statistics: dict[str, BatchStatistics] = {}
+    for model_key, model_results in results_by_model.items():
+        stats = BatchStatistics(total_tasks=len(model_results))
+        successful_results = [r for r in model_results if r.status == TaskStatus.SUCCESS]
+        stats.successful_tasks = len(successful_results)
+        stats.failed_tasks = len(model_results) - stats.successful_tasks
+
+        if successful_results:
+            latencies = [r.metadata.latency for r in successful_results if r.metadata]
+            if latencies:
+                stats.total_latency = sum(latencies)
+                stats.average_latency = stats.total_latency / len(latencies)
+            input_tokens = [r.metadata.input_tokens for r in successful_results if r.metadata]
+            output_tokens = [r.metadata.output_tokens for r in successful_results if r.metadata]
+            stats.total_input_tokens = sum(input_tokens)
+            stats.total_output_tokens = sum(output_tokens)
+
+        statistics[model_key] = stats
+
+    return statistics
 
 
 class BatchProcessor:
@@ -434,29 +495,6 @@ class GlobalBatchProcessor:
         self._auth_error_logged = False
         self.last_metrics: RunMetrics | None = None
 
-    @staticmethod
-    def _is_authentication_error(error_msg: str) -> bool:
-        e = (error_msg or "").lower()
-        return any(
-            k in e
-            for k in (
-                "401",
-                "authentication",
-                "invalid api key",
-                "api key",
-                "invalid_request_error",
-                "authentication_error",
-                "unauthorized",
-            )
-        )
-
-    def _paper_request_timeout_seconds(self) -> float:
-        """Paper explain HTTP timeout from unified config, default 600s."""
-        lr = get_config_or_none()
-        if lr is None:
-            return 600.0
-        return float(lr.unified_config.paper.request_timeout_seconds)
-
     def _effective_max_workers(self, tasks: list[BatchTask]) -> int:
         """Return ``max_workers`` capped by the tightest burst limit among tasks."""
         limiter = get_global_rate_limiter(self.rate_limit_config)
@@ -470,21 +508,6 @@ class GlobalBatchProcessor:
         if min_burst is None:
             return self.max_workers
         return max(1, min(self.max_workers, min_burst))
-
-    def _update_global_task_progress_failed(
-        self,
-        progress: Progress | None,
-        progress_task_id: TaskID | None,
-        model_key: str,
-        task_id: int,
-        progress_tokens: str,
-    ) -> None:
-        if progress and progress_task_id is not None:
-            progress.update(
-                progress_task_id,
-                description=(f"{model_key} Task {task_id} ({progress_tokens} tokens): ✗ Failed"),
-                completed=100,
-            )
 
     def _log_global_task_failure(
         self,
@@ -510,53 +533,6 @@ class GlobalBatchProcessor:
                     bound.debug(f"Task failed (auth): {error_msg}")
         else:
             bound.error(f"Task failed ({model_key}): {error_msg}")
-
-    def _build_provider_cache(
-        self,
-        tasks: list[BatchTask],
-        config_manager: ConfigManager,
-    ) -> dict[str, LLMProviderProtocol]:
-        """
-        Pre-build provider adapter cache for all unique (provider, model, timeout) combos.
-
-        This eliminates per-task adapter creation overhead and avoids mutating the
-        shared ConfigManager inside worker threads.
-        """
-        cache: dict[str, LLMProviderProtocol] = {}
-
-        def _add_config(mc: ModelConfig) -> None:
-            key = f"{mc.provider}/{mc.model}"
-            if task.task_kind == "paper_explain":
-                timeout = self._paper_request_timeout_seconds()
-                key += f" / timeout={timeout}"
-            if key in seen:
-                return
-            seen.add(key)
-
-            base_cfg = config_manager.config.get_provider_config(mc.provider)
-            overrides: dict[str, Any] = {}
-            if mc.temperature is not None:
-                overrides["api_temperature"] = mc.temperature
-            if mc.max_tokens is not None:
-                overrides["max_tokens"] = mc.max_tokens
-            if mc.top_p is not None:
-                overrides["api_top_p"] = mc.top_p
-            if task.task_kind == "paper_explain":
-                overrides["timeout"] = float(self._paper_request_timeout_seconds())
-            provider_cfg = base_cfg.model_copy(update=overrides)
-            default_model = mc.model
-
-            provider = ProviderAdapterCache.get(provider_cfg, default_model=default_model)
-            cache[key] = provider
-
-        seen: set[str] = set()
-        for task in tasks:
-            if not task.model_settings:
-                continue
-            _add_config(task.model_settings)
-            for fallback_config in task.fallback_model_configs:
-                _add_config(fallback_config)
-        return cache
 
     def _stream_and_collect(
         self,
@@ -877,7 +853,7 @@ class GlobalBatchProcessor:
 
             paper_timeout: float | None = None
             if task.task_kind == "paper_explain":
-                paper_timeout = self._paper_request_timeout_seconds()
+                paper_timeout = paper_request_timeout_seconds()
 
             cache_key = model_key
             if task.task_kind == "paper_explain":
@@ -932,7 +908,7 @@ class GlobalBatchProcessor:
             result.error = error_msg
             result.error_category = category
 
-            self._update_global_task_progress_failed(
+            update_global_task_progress_failed(
                 progress, progress_task_id, model_key, task.task_id, progress_tokens
             )
             return result
@@ -1035,7 +1011,7 @@ class GlobalBatchProcessor:
         pending_tasks = sort_batch_tasks_by_estimated_input(tasks.copy(), default_model)
 
         # Pre-build provider cache to avoid per-task adapter creation and ConfigManager mutation
-        provider_cache = self._build_provider_cache(pending_tasks, config_manager)
+        provider_cache = ProviderManager(config_manager).build_provider_cache(pending_tasks)
 
         # Cap the thread pool size to the smallest configured burst limit so that
         # workers do not sit blocked on the rate limiter waiting for tokens.
@@ -1167,44 +1143,8 @@ class GlobalBatchProcessor:
         return results
 
     def calculate_statistics(self, results: list[BatchResult]) -> dict[str, BatchStatistics]:
+        """Calculate statistics from batch results, grouped by model.
+
+        Thin delegate to the module-level :func:`calculate_statistics_by_model`.
         """
-        Calculate statistics from batch results, grouped by model.
-
-        Args:
-            results: List of batch results
-
-        Returns:
-            Dictionary mapping model_key to statistics
-        """
-        # Group results by model
-        results_by_model: dict[str, list[BatchResult]] = {}
-        for result in results:
-            model_key = f"{result.model_settings.provider}/{result.model_settings.model}"
-            if model_key not in results_by_model:
-                results_by_model[model_key] = []
-            results_by_model[model_key].append(result)
-
-        # Calculate statistics for each model
-        statistics: dict[str, BatchStatistics] = {}
-        for model_key, model_results in results_by_model.items():
-            stats = BatchStatistics(total_tasks=len(model_results))
-
-            successful_results = [r for r in model_results if r.status == TaskStatus.SUCCESS]
-            stats.successful_tasks = len(successful_results)
-            stats.failed_tasks = len(model_results) - stats.successful_tasks
-
-            if successful_results:
-                latencies = [r.metadata.latency for r in successful_results if r.metadata]
-                if latencies:
-                    stats.total_latency = sum(latencies)
-                    stats.average_latency = stats.total_latency / len(latencies)
-
-                input_tokens = [r.metadata.input_tokens for r in successful_results if r.metadata]
-                output_tokens = [r.metadata.output_tokens for r in successful_results if r.metadata]
-
-                stats.total_input_tokens = sum(input_tokens)
-                stats.total_output_tokens = sum(output_tokens)
-
-            statistics[model_key] = stats
-
-        return statistics
+        return calculate_statistics_by_model(results)

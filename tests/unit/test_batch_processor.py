@@ -8,14 +8,16 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from ask_llm.core.batch_models import BatchResult, BatchTask, ModelConfig, TaskStatus
+from ask_llm.core import batch_processor as bp_module
 from ask_llm.core.batch_processor import GlobalBatchProcessor
 from ask_llm.core.models import ProviderConfig
+from ask_llm.core.provider_manager import ProviderManager
 from ask_llm.core.telemetry import ErrorCategory
 
 
 @pytest.fixture(autouse=True)
 def _patch_paper_timeout():
-    with patch.object(GlobalBatchProcessor, "_paper_request_timeout_seconds", return_value=600.0):
+    with patch.object(bp_module, "paper_request_timeout_seconds", return_value=600.0):
         yield
 
 
@@ -235,7 +237,6 @@ def test_authentication_error_stops_fallback_chain():
 
 def test_build_provider_cache_includes_fallbacks():
     task = _make_task(fallback_configs=[ModelConfig(provider="fallback", model="model-b")])
-    processor = GlobalBatchProcessor()
     cm = MagicMock()
     base_cfg = ProviderConfig(
         api_provider="primary",
@@ -247,7 +248,7 @@ def test_build_provider_cache_includes_fallbacks():
 
     with patch("ask_llm.utils.provider_cache.create_provider_adapter") as mock_create:
         mock_create.return_value = MagicMock()
-        cache = processor._build_provider_cache([task], cm)
+        cache = ProviderManager(cm).build_provider_cache([task])
 
     assert "primary/model-a" in cache
     assert "fallback/model-b" in cache
