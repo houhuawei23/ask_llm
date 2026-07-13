@@ -1,5 +1,40 @@
 # Changelog
 
+## 2.16.0 (2026-07-14)
+
+Architecture-review P0 stopgap release — fixes seven load-bearing bugs identified in `docs/ARCHITECTURE_REVIEW.md` and tightens the API-key boundary. No CLI surface changes; one internal data-model type change (`BatchResult.attempt_history`).
+
+### Fixed
+
+- **B2 — CJK provider token counts were silently approximate.** `TokenCounter` mapped DeepSeek/Qwen to `cl100k_base`, which undercounts CJK text; chunk sizing against those context windows could overflow. Now warns once per model and applies a configurable safety factor (`APPROX_TOKEN_SAFETY_FACTOR = 0.85`) in `split_hard_by_max_tokens`. `truncate_to_tokens` fallback unified to word-count.
+- **B3 — unresolved `${VAR}` API-key placeholders were silent.** `ProviderConfig.validate_api_key` now warns loudly when an `api_key` still carries an unresolved `${...}` placeholder after YAML load. The run-boundary gate (`api_key_gate`) already blocked this on ask/chat/batch; it is now also wired into `run_global_batch_tasks` (covers trans/paper) via a new pure `ensure_resolved_provider_keys` chokepoint.
+- **B4 — body splitter cut fenced code blocks mid-fence.** `MarkdownTokenSplitter` is now code-fence aware: headings inside a fence are not used as split points, and long paragraphs containing fences are split at fence boundaries (each fenced block stays atomic). The full `MarkdownStructure` parser lands in P3.
+- **B6 — N tasks produced N live progress bars.** `GlobalBatchProcessor` now uses a pool of `min(max_workers, num_tasks)` per-worker-slot bars instead of one bar per pending task. O(workers) bars regardless of batch size.
+- **B7 — `BatchResult.attempt_history` was self-referential.** Changed to `list[AttemptRecord]` (flat, acyclic by construction); the v2.15.1 circular-reference crash class is now structurally impossible. New `AttemptRecord.from_result` factory; the manual slice/cycle-guard hacks were removed.
+- **B8 — `ProviderAdapterCache.get` was untyped and accepted dicts.** Typed `(config: ProviderConfig | dict) -> LLMProviderProtocol`; the dict path (root of the v2.15.1 adapter dict-vs-object crash) is rebuilt into a `ProviderConfig` and emits `DeprecationWarning`; bad inputs raise `TypeError`.
+- **B9 — rate-limit acquire timeout was hardcoded 60s.** New `ProviderRateLimitConfig.acquire_timeout_seconds` (per provider/model); the failure message points at the knob.
+- **Secrets — stale credentials lingered after key rotation.** The interactive gate now calls `ProviderAdapterCache.clear()` after applying a rotated key. Full `SecretStr` migration deferred to P2.
+
+### Added
+
+- `APPROX_TOKEN_SAFETY_FACTOR` constant.
+- `ProviderRateLimitConfig.acquire_timeout_seconds` field (+ `default_config.yml` docs).
+- `ask_llm.utils.api_key_gate.UnresolvedAPIKeyError` and `ensure_resolved_provider_keys`.
+- `ask_llm.core.batch_models.AttemptRecord` (moved from `execution_report`; re-exported for compatibility).
+- Tests: `test_api_key_gate.py`, `test_markdown_token_splitter.py`; expanded `test_models.py`, `test_utils.py`, `test_rate_limiter.py`, `test_provider_cache.py`, `test_batch_processor.py`, `test_execution_report.py`.
+
+### Changed
+
+- `BatchResult.attempt_history` type changed from `list[BatchResult]` to `list[AttemptRecord]`. External code reading it as `BatchResult`s must switch to the flat fields (`provider`, `model`, `status`, …).
+
+### Version
+
+- 2.15.1 → 2.16.0
+
+### Contributors
+
+- Refactored with assistance from **Claude** (agent).
+
 ## 2.15.1 (2026-06-24)
 
 ### Fixed

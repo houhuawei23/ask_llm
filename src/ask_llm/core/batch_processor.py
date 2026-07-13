@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import queue as _queue
 import threading
 import time
-import queue as _queue
 from collections.abc import Iterator, Mapping
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from rich.progress import Progress, TaskID
 

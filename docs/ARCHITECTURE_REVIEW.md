@@ -5,6 +5,20 @@
 > 评审日期：2026-07-13
 > 本文取代 `docs/REFACTOR_PLAN.md`（该文件为 v1→v2 argparse→typer 迁移历史，已与现状脱节）
 
+## 重构进度
+
+| 阶段 | 状态 | 版本 |
+|------|------|------|
+| **P0** 承载性 bug 止血 | ✅ 已完成 | v2.16.0 (2026-07-14) |
+| P1 执行引擎统一 | ⏳ 待开始 | — |
+| P2 配置去全局 + 单一对象 | ⏳ 待开始 | — |
+| P3 Markdown 单一管线 | ⏳ 待开始 | — |
+| P4 服务层/引擎/导出器收尾 | ⏳ 待开始 | — |
+
+**P0 已落地（v2.16.0）**：B2（CJK 令牌近似+安全系数）、B3（`${VAR}` 告警 + gate 覆盖 trans/paper）、B4（splitter 代码栅栏感知）、B6（per-worker 进度条）、B7（`attempt_history` 改为扁平 `AttemptRecord`）、B8（provider-cache 接缝类型化）、B9（限流超时可配置）、密钥轮换清缓存。完整说明见 `CHANGELOG.md` 2.16.0 条目。
+**P0 延后**：完整 `SecretStr` 迁移 → P2（与配置重构 + 引擎接缝收口一同进行）。
+**未在 P0**：B1（retry×fallback 调用放大）、B5（增量 checkpoint）→ P1；B10/B11（外观）→ 随相关阶段。
+
 ---
 
 ## 0. 执行摘要（Executive Summary）

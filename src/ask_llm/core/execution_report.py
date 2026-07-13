@@ -15,14 +15,13 @@ from ask_llm import __version__
 from ask_llm.core.batch_models import AttemptRecord, BatchResult, TaskStatus
 from ask_llm.core.telemetry import ErrorCategory
 
-
 # Re-export for backward compatibility (callers imported AttemptRecord from here).
 __all__ = [
     "AttemptRecord",
-    "TaskRecord",
-    "FailureSummary",
-    "TokenSummary",
     "ExecutionReport",
+    "FailureSummary",
+    "TaskRecord",
+    "TokenSummary",
     "build_report_from_batch_results",
 ]
 
