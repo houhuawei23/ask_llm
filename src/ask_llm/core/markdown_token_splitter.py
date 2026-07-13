@@ -14,6 +14,8 @@ class MarkdownTokenSplitter(TextSplitter):
     """Split Markdown using heading/paragraph binary strategy with a token cap."""
 
     HEADING_PATTERN = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
+    # Matches a markdown code fence: ``` or ~~~ (with optional language / trailing text).
+    CODE_FENCE_PATTERN = re.compile(r"^(```|~~~).*$", re.MULTILINE)
     # Matches a display-math block: $$ ... $$ potentially spanning multiple lines.
     DISPLAY_MATH_PATTERN = re.compile(r"^\$\$[\s\S]*?\$\$", re.MULTILINE)
 
@@ -29,6 +31,32 @@ class MarkdownTokenSplitter(TextSplitter):
         if not s.strip():
             return True
         return self._tok(s) <= self.max_chunk_tokens
+
+    @classmethod
+    def _find_code_fence_ranges(cls, text: str) -> list[tuple[int, int]]:
+        """Return ``(start, end)`` char ranges of fenced code blocks (inclusive).
+
+        An unclosed fence extends to end-of-text. See ARCHITECTURE_REVIEW.md bug B4:
+        without this, a ``#`` inside a code fence is treated as a heading and used
+        as a split point, and a long fenced block is cut mid-fence.
+        """
+        ranges: list[tuple[int, int]] = []
+        in_code = False
+        block_start = 0
+        for match in cls.CODE_FENCE_PATTERN.finditer(text):
+            if not in_code:
+                block_start = match.start()
+                in_code = True
+            else:
+                ranges.append((block_start, match.end()))
+                in_code = False
+        if in_code:
+            ranges.append((block_start, len(text)))
+        return ranges
+
+    @classmethod
+    def _pos_in_code_fence(cls, ranges: list[tuple[int, int]], pos: int) -> bool:
+        return any(start <= pos < end for start, end in ranges)
 
     def split(self, text: str) -> list[TextChunk]:
         if not text.strip():
@@ -46,11 +74,15 @@ class MarkdownTokenSplitter(TextSplitter):
                 )
             ]
 
+        fence_ranges = self._find_code_fence_ranges(text)
         headings = []
         for match in self.HEADING_PATTERN.finditer(text):
+            pos = match.start()
+            # Skip headings that are actually ``#`` lines inside a fenced code block.
+            if self._pos_in_code_fence(fence_ranges, pos):
+                continue
             level = len(match.group(1))
             title = match.group(2)
-            pos = match.start()
             headings.append((level, title, pos))
 
         if not headings:
@@ -211,6 +243,13 @@ class MarkdownTokenSplitter(TextSplitter):
     def _split_long_paragraph(
         self, paragraph: str, start_pos: int, start_chunk_id: int
     ) -> list[TextChunk]:
+        # A paragraph containing a code fence must never be cut mid-fence: the
+        # sentence regex can match code punctuation and the token hard-split
+        # ignores structure entirely. Split on fence boundaries first, keeping
+        # each fenced block as one atomic segment. See B4.
+        if self.CODE_FENCE_PATTERN.search(paragraph):
+            return self._split_paragraph_with_fences(paragraph, start_pos, start_chunk_id)
+
         if not re.search(r"[.!?]+\s+", paragraph):
             chunks: list[TextChunk] = []
             chunk_id = start_chunk_id
@@ -270,6 +309,63 @@ class MarkdownTokenSplitter(TextSplitter):
                     start_pos=current_pos,
                     end_pos=current_pos + len(current_chunk),
                     metadata={"type": "sentence_group"},
+                )
+            )
+
+        return self._enforce_max_tokens_on_chunks(chunks, start_chunk_id)
+
+    def _split_paragraph_with_fences(
+        self, paragraph: str, start_pos: int, start_chunk_id: int
+    ) -> list[TextChunk]:
+        """Split a paragraph containing code fences without breaking any fence.
+
+        Segments the paragraph into ``[text, fence_block, text, ...]`` keeping each
+        fenced block intact, then greedily packs segments under the token budget.
+        A single fenced block larger than the budget is the only case that can still
+        be hard-split (unavoidable); ordinary text around fences is never cut
+        mid-fence.
+        """
+        fence_ranges = self._find_code_fence_ranges(paragraph)
+        segments: list[str] = []
+        pos = 0
+        for s, e in fence_ranges:
+            if pos < s:
+                segments.append(paragraph[pos:s])
+            segments.append(paragraph[s:e])
+            pos = e
+        if pos < len(paragraph):
+            segments.append(paragraph[pos:])
+        segments = [s for s in segments if s]
+
+        chunks: list[TextChunk] = []
+        chunk_id = start_chunk_id
+        current = ""
+        current_pos = start_pos
+        for seg in segments:
+            cand = current + seg if current else seg
+            if current and self._tok(cand) > self.max_chunk_tokens:
+                chunks.append(
+                    TextChunk(
+                        content=current,
+                        chunk_id=chunk_id,
+                        start_pos=current_pos,
+                        end_pos=current_pos + len(current),
+                        metadata={"type": "fence_aware_group"},
+                    )
+                )
+                chunk_id += 1
+                current_pos += len(current)
+                current = seg
+            else:
+                current = cand
+        if current.strip():
+            chunks.append(
+                TextChunk(
+                    content=current,
+                    chunk_id=chunk_id,
+                    start_pos=current_pos,
+                    end_pos=current_pos + len(current),
+                    metadata={"type": "fence_aware_group"},
                 )
             )
 
