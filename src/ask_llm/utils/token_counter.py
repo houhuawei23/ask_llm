@@ -1,10 +1,12 @@
 """Token counting utilities."""
 
+from functools import lru_cache
 from typing import Any, ClassVar
 
 from loguru import logger
 
 from ask_llm.config.context import get_config
+from ask_llm.core.constants import TOKEN_COUNT_CACHE_SIZE
 
 try:
     import tiktoken
@@ -104,6 +106,9 @@ class TokenCounter:
         """
         Count tokens in text using tiktoken.
 
+        Results are cached (LRU) keyed by (text, model) to avoid re-encoding the
+        same substrings during repeated binary-search splitting.
+
         Args:
             text: Input text
             model: Model name for encoding selection
@@ -113,18 +118,28 @@ class TokenCounter:
         """
         if not text:
             return 0
+        return cls._count_tokens_cached(text, model)
 
+    @staticmethod
+    @lru_cache(maxsize=TOKEN_COUNT_CACHE_SIZE)
+    def _count_tokens_cached(text: str, model: str | None) -> int:
+        """Cache-backed token count implementation. See :meth:`count_tokens`."""
         if not TIKTOKEN_AVAILABLE:
-            return cls.count_words(text)
+            return TokenCounter.count_words(text)
 
         try:
-            encoding = cls.get_encoding(model)
+            encoding = TokenCounter.get_encoding(model)
             if encoding is None:
-                return cls.count_words(text)
+                return TokenCounter.count_words(text)
             return len(encoding.encode(text))
         except Exception as e:
             logger.debug(f"Token counting failed: {e}, falling back to word count")
-            return cls.count_words(text)
+            return TokenCounter.count_words(text)
+
+    @classmethod
+    def clear_cache(cls) -> None:
+        """Clear the token-count LRU cache. Useful in tests or long-running processes."""
+        cls._count_tokens_cached.cache_clear()
 
     @classmethod
     def estimate_tokens(cls, text: str, model: str | None = None) -> dict:

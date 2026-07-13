@@ -53,6 +53,22 @@ class TestTokenCounter:
         assert "Tokens:" in formatted
         assert "Chars:" in formatted
 
+    def test_count_tokens_cached_returns_same_result(self):
+        """Caching must not change the token count for repeated inputs."""
+        TokenCounter.clear_cache()
+        text = "The quick brown fox jumps over the lazy dog."
+        first = TokenCounter.count_tokens(text, "gpt-4")
+        second = TokenCounter.count_tokens(text, "gpt-4")
+        assert first == second
+        assert first > 0
+
+    def test_clear_cache(self):
+        """clear_cache() must empty the LRU cache without error."""
+        TokenCounter.count_tokens("some text to cache", "gpt-4")
+        TokenCounter.clear_cache()
+        info = TokenCounter._count_tokens_cached.cache_info()
+        assert info.currsize == 0
+
 
 class TestFileHandler:
     """Test FileHandler."""
