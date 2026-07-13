@@ -25,6 +25,7 @@ from ask_llm.core.concurrent import BoundedRetryRunner, RunMetrics, run_bounded_
 from ask_llm.core.constants import (
     DEFAULT_MIN_OUTPUT_TOKENS,
     OUTPUT_TOKEN_MULTIPLIERS,
+    PROGRESS_UPDATE_INTERVAL,
     TaskKind,
 )
 from ask_llm.core.models import RequestMetadata
@@ -158,6 +159,7 @@ class BatchProcessor:
 
             # Stream response
             encoding = TokenCounter.get_encoding(self.model_config.model)
+            last_progress_update = 0.0
             for chunk in self.processor.process(
                 content=task.content,
                 prompt_template=task.prompt,
@@ -174,13 +176,19 @@ class BatchProcessor:
                 else:
                     output_token_count += TokenCounter.count_words(text_chunk)
 
-                # Update progress with token count
-                if progress and progress_task_id is not None:
+                # Update progress with token count (throttled to avoid UI flicker)
+                now = time.time()
+                if (
+                    progress
+                    and progress_task_id is not None
+                    and now - last_progress_update >= PROGRESS_UPDATE_INTERVAL
+                ):
                     progress.update(
                         progress_task_id,
                         completed=output_token_count,
                         description=f"Task {task.task_id}: {output_token_count} tok",
                     )
+                    last_progress_update = now
 
             response = "".join(response_parts)
             latency = time.time() - start_time
@@ -567,6 +575,7 @@ class GlobalBatchProcessor:
         output_token_count = 0
 
         encoding = TokenCounter.get_encoding(model_config.model)
+        last_progress_update = 0.0
         for chunk in stream_iter:
             if return_reasoning:
                 assert isinstance(chunk, ReasoningChunk)
@@ -590,12 +599,19 @@ class GlobalBatchProcessor:
                 else:
                     output_token_count += TokenCounter.count_words(text_chunk)
 
-            if progress and progress_task_id is not None:
+            # Throttle progress updates to avoid UI flicker on high-frequency streams
+            now = time.time()
+            if (
+                progress
+                and progress_task_id is not None
+                and now - last_progress_update >= PROGRESS_UPDATE_INTERVAL
+            ):
                 progress.update(
                     progress_task_id,
                     completed=output_token_count,
                     description=f"{description_prefix}: {output_token_count} tok",
                 )
+                last_progress_update = now
 
         response = "".join(response_parts).strip()
         reasoning = "".join(reasoning_parts).strip() if reasoning_parts else None
