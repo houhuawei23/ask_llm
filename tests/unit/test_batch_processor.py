@@ -154,9 +154,10 @@ def test_all_configs_fail_returns_failed():
     assert result.model_settings.provider == "fallback"
     assert result.model_settings.model == "model-b"
     assert result.error_category == ErrorCategory.UNKNOWN
-    # attempt_history records the *preceding* attempts, not the final result itself.
+    # attempt_history records the *preceding* attempts (flat AttemptRecords), not
+    # the final result itself.
     assert len(result.attempt_history) == 1
-    assert result.attempt_history[0].model_settings.provider == "primary"
+    assert result.attempt_history[0].provider == "primary"
     assert all(r.error_category == ErrorCategory.UNKNOWN for r in result.attempt_history)
     # Must serialize without circular references.
     result.model_dump(mode="json")

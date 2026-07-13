@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 
 from ask_llm.config.context import get_config_or_none
 from ask_llm.core.batch_models import (
+    AttemptRecord,
     BatchResult,
     BatchStatistics,
     BatchTask,
@@ -946,7 +947,9 @@ class GlobalBatchProcessor:
 
         configs = [task.model_settings, *task.fallback_model_configs]
         last_result: BatchResult | None = None
-        attempt_history: list[BatchResult] = []
+        # Flat attempt records (not BatchResults) — keeps the object graph acyclic
+        # by construction, so no manual cycle-guard slicing is needed. See B7.
+        attempt_history: list[AttemptRecord] = []
 
         for idx, model_config in enumerate(configs):
             result = self._try_run_with_config(
@@ -958,11 +961,11 @@ class GlobalBatchProcessor:
                 progress_task_id,
                 input_tokens,
             )
-            attempt_history.append(result)
+            attempt_history.append(AttemptRecord.from_result(result))
             if result.status == TaskStatus.SUCCESS:
-                # Record only the preceding failed attempts, not the successful
-                # result itself, to avoid a circular reference during serialization.
-                result.attempt_history = list(attempt_history[:-1])
+                # History holds the *preceding* failed attempts; drop this run's own
+                # record (always the last element) for the success case.
+                result.attempt_history = attempt_history[:-1]
                 return result
             last_result = result
 
@@ -985,11 +988,10 @@ class GlobalBatchProcessor:
             error="All provider/model configurations failed",
             error_category=ErrorCategory.UNKNOWN,
         )
-        # If ``final`` is one of the recorded attempts, exclude itself from its
-        # own history to keep the model graph acyclic.
-        final.attempt_history = (
-            list(attempt_history[:-1]) if final in attempt_history else list(attempt_history)
-        )
+        # ``final`` is ``last_result`` (the last attempted config); its own record
+        # is the last element of attempt_history, so exclude it. If the synthetic
+        # empty fallback was used, attempt_history is empty and this is a no-op.
+        final.attempt_history = attempt_history[:-1]
         return final
 
     def process_global_tasks(

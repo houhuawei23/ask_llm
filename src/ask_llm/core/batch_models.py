@@ -80,6 +80,43 @@ def sort_batch_tasks_by_estimated_input(
     return sorted(tasks, key=_estimate, reverse=True)
 
 
+class AttemptRecord(BaseModel):
+    """Flat, non-recursive record of a single provider/model attempt for one task.
+
+    ``BatchResult.attempt_history`` is a ``list[AttemptRecord]`` (not
+    ``list[BatchResult]``) so the object graph is acyclic by construction. The
+    prior self-referential type caused the v2.15.1 circular-reference crash
+    during checkpoint serialization; a flat record type makes that class of bug
+    structurally impossible. See ARCHITECTURE_REVIEW.md bug B7.
+    """
+
+    provider: str
+    model: str
+    status: TaskStatus
+    error: str | None = None
+    error_category: ErrorCategory | None = None
+    latency: float | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    timestamp: datetime = Field(default_factory=datetime.now)
+
+    @classmethod
+    def from_result(cls, result: "BatchResult") -> "AttemptRecord":
+        """Project a :class:`BatchResult` into a flat attempt record."""
+        metadata = result.metadata
+        return cls(
+            provider=result.model_settings.provider,
+            model=result.model_settings.model,
+            status=result.status,
+            error=result.error,
+            error_category=result.error_category,
+            latency=metadata.latency if metadata else None,
+            input_tokens=metadata.input_tokens if metadata else None,
+            output_tokens=metadata.output_tokens if metadata else None,
+            timestamp=result.timestamp,
+        )
+
+
 class BatchResult(BaseModel):
     """Result of a batch processing task."""
 
@@ -99,9 +136,13 @@ class BatchResult(BaseModel):
         default=None,
         description="Classified failure category when status is FAILED",
     )
-    attempt_history: list["BatchResult"] = Field(
+    attempt_history: list[AttemptRecord] = Field(
         default_factory=list,
-        description="Historical attempts for this task (e.g. fallback chain)",
+        description=(
+            "Preceding attempts for this task (e.g. earlier configs in a fallback "
+            "chain). Flat AttemptRecords, never the final result itself, so the "
+            "object graph stays acyclic."
+        ),
     )
     timestamp: datetime = Field(default_factory=datetime.now)
     retry_count: int = 0

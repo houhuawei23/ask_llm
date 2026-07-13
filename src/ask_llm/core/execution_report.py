@@ -12,22 +12,19 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from ask_llm import __version__
-from ask_llm.core.batch_models import BatchResult, TaskStatus
+from ask_llm.core.batch_models import AttemptRecord, BatchResult, TaskStatus
 from ask_llm.core.telemetry import ErrorCategory
 
 
-class AttemptRecord(BaseModel):
-    """Record of a single provider/model attempt for one task."""
-
-    provider: str
-    model: str
-    status: TaskStatus
-    error: str | None = None
-    error_category: ErrorCategory | None = None
-    latency: float | None = None
-    input_tokens: int | None = None
-    output_tokens: int | None = None
-    timestamp: datetime
+# Re-export for backward compatibility (callers imported AttemptRecord from here).
+__all__ = [
+    "AttemptRecord",
+    "TaskRecord",
+    "FailureSummary",
+    "TokenSummary",
+    "ExecutionReport",
+    "build_report_from_batch_results",
+]
 
 
 class TaskRecord(BaseModel):
@@ -112,28 +109,12 @@ class ExecutionReport(BaseModel):
 
 
 def _batch_result_to_attempt_records(result: BatchResult) -> list[AttemptRecord]:
-    """Convert a BatchResult (and its attempt_history) into AttemptRecords."""
-    records: list[AttemptRecord] = []
-    # If a task went through a fallback chain, the final BatchResult carries the
-    # full attempt_history; avoid double-counting the final result.
-    sources = list(result.attempt_history) if result.attempt_history else [result]
+    """Project a BatchResult into its AttemptRecords: preceding attempts + the final.
 
-    for src in sources:
-        metadata = src.metadata
-        records.append(
-            AttemptRecord(
-                provider=src.model_settings.provider,
-                model=src.model_settings.model,
-                status=src.status,
-                error=src.error,
-                error_category=src.error_category,
-                latency=metadata.latency if metadata else None,
-                input_tokens=metadata.input_tokens if metadata else None,
-                output_tokens=metadata.output_tokens if metadata else None,
-                timestamp=src.timestamp,
-            )
-        )
-    return records
+    ``attempt_history`` already holds flat :class:`AttemptRecord` entries for the
+    preceding (failed) attempts; the final result is appended as its own record.
+    """
+    return [*result.attempt_history, AttemptRecord.from_result(result)]
 
 
 def build_report_from_batch_results(
