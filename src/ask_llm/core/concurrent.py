@@ -267,20 +267,12 @@ def run_bounded_with_retries(
 
 
 def _is_transient_error(error_message: str) -> bool:
-    """Return True if *error_message* looks transient/retryable."""
-    if not error_message:
-        return False
-    lower = error_message.lower()
-    return any(
-        kw in lower
-        for kw in (
-            "timeout",
-            "connection",
-            "network",
-            "rate limit",
-            "429",
-            "503",
-            "502",
-            "500",
-        )
-    )
+    """Return True if *error_message* looks transient/retryable.
+
+    Thin backward-compatible wrapper around :data:`RetryPolicy`. New code should
+    construct a :class:`~ask_llm.core.retry_policy.RetryPolicy` directly to allow
+    per-provider customization.
+    """
+    from ask_llm.core.retry_policy import DEFAULT_RETRY_POLICY
+
+    return DEFAULT_RETRY_POLICY.is_retryable(error_message)
