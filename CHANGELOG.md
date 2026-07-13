@@ -1,5 +1,26 @@
 # Changelog
 
+## 2.16.1 (2026-07-14)
+
+P1 execution-engine cleanup (internal refactor; no CLI surface change). Begins the P1 phase of `docs/ARCHITECTURE_REVIEW.md`.
+
+### Added
+
+- `BatchStatistics.from_results(results)` classmethod — single source of truth for per-`(provider, model)` batch-statistics aggregation (P1.5).
+
+### Changed
+
+- **P1.5 — collapsed duplicate statistics aggregators.** `batch_service._calculate_statistics` (a byte-duplicate of `batch_processor.calculate_statistics_by_model`) is deleted; both paths now route through `BatchStatistics.from_results`. `calculate_statistics_by_model` is reduced to a thin delegate for import compatibility.
+- **P1.7 — removed a duplicate `TYPE_CHECKING` block** in `batch_processor.py` (the `RateLimitConfig` import was declared twice).
+
+### Notes
+
+- P1.7 dead-code audit: `ProviderRetryRegistry.set`, `BoundedRetryRunner.run`, and the `core/batch.py` re-export shim are each retained — all have callers (`.set` and `.run` are exercised by unit tests; `.run` supports reusing a runner instance across batches; the shim is imported by ~20 modules). `ProviderRetryRegistry.set` will be wired into the runner when the `EscalationPolicy` (P1.1) lands.
+
+### Version
+
+- 2.16.0 → 2.16.1
+
 ## 2.16.0 (2026-07-14)
 
 Architecture-review P0 stopgap release — fixes seven load-bearing bugs identified in `docs/ARCHITECTURE_REVIEW.md` and tightens the API-key boundary. No CLI surface changes; one internal data-model type change (`BatchResult.attempt_history`).

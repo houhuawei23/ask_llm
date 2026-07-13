@@ -45,9 +45,6 @@ from ask_llm.core.telemetry import (
 from ask_llm.utils.rate_limiter import get_global_rate_limiter
 from ask_llm.utils.token_counter import TokenCounter
 
-if TYPE_CHECKING:
-    from ask_llm.config.unified_config import RateLimitConfig
-
 
 def estimate_output_tokens(task_kind: str, input_tokens: int) -> int:
     """
@@ -105,33 +102,10 @@ def update_global_task_progress_failed(
 def calculate_statistics_by_model(results: list[BatchResult]) -> dict[str, BatchStatistics]:
     """Calculate per-model statistics from batch results.
 
-    Pure aggregation; shared across batch execution paths.
+    Thin delegate to :meth:`BatchStatistics.from_results` (single source of
+    truth). Kept as a module-level function for import compatibility.
     """
-    results_by_model: dict[str, list[BatchResult]] = {}
-    for result in results:
-        model_key = f"{result.model_settings.provider}/{result.model_settings.model}"
-        results_by_model.setdefault(model_key, []).append(result)
-
-    statistics: dict[str, BatchStatistics] = {}
-    for model_key, model_results in results_by_model.items():
-        stats = BatchStatistics(total_tasks=len(model_results))
-        successful_results = [r for r in model_results if r.status == TaskStatus.SUCCESS]
-        stats.successful_tasks = len(successful_results)
-        stats.failed_tasks = len(model_results) - stats.successful_tasks
-
-        if successful_results:
-            latencies = [r.metadata.latency for r in successful_results if r.metadata]
-            if latencies:
-                stats.total_latency = sum(latencies)
-                stats.average_latency = stats.total_latency / len(latencies)
-            input_tokens = [r.metadata.input_tokens for r in successful_results if r.metadata]
-            output_tokens = [r.metadata.output_tokens for r in successful_results if r.metadata]
-            stats.total_input_tokens = sum(input_tokens)
-            stats.total_output_tokens = sum(output_tokens)
-
-        statistics[model_key] = stats
-
-    return statistics
+    return BatchStatistics.from_results(results)
 
 
 

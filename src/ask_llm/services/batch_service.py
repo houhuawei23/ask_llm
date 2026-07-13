@@ -140,34 +140,6 @@ def _default_batch_checkpoint_path(config_file: str) -> str:
     return str(p.parent / f"{p.name}.checkpoint.json")
 
 
-def _calculate_statistics(results: list[BatchResult]) -> dict[str, BatchStatistics]:
-    """Calculate per-model statistics from results without a GlobalBatchProcessor."""
-    grouped: dict[str, list[BatchResult]] = {}
-    for result in results:
-        model_key = f"{result.model_settings.provider}/{result.model_settings.model}"
-        grouped.setdefault(model_key, []).append(result)
-
-    statistics: dict[str, BatchStatistics] = {}
-    for model_key, model_results in grouped.items():
-        stats = BatchStatistics(total_tasks=len(model_results))
-        successful = [r for r in model_results if r.status == TaskStatus.SUCCESS]
-        stats.successful_tasks = len(successful)
-        stats.failed_tasks = len(model_results) - stats.successful_tasks
-        if successful:
-            latencies = [r.metadata.latency for r in successful if r.metadata]
-            if latencies:
-                stats.total_latency = sum(latencies)
-                stats.average_latency = stats.total_latency / len(latencies)
-            stats.total_input_tokens = sum(
-                r.metadata.input_tokens for r in successful if r.metadata
-            )
-            stats.total_output_tokens = sum(
-                r.metadata.output_tokens for r in successful if r.metadata
-            )
-        statistics[model_key] = stats
-    return statistics
-
-
 def run_batch_from_config(
     config_file: str,
     app_config: AppConfig,
@@ -294,7 +266,7 @@ def run_batch_from_config(
     if not global_tasks:
         console.print_info("All tasks already completed according to checkpoint.")
         all_results_list = list(prior_successful_results)
-        model_statistics = _calculate_statistics(all_results_list)
+        model_statistics = BatchStatistics.from_results(all_results_list)
         report = build_report_from_batch_results(
             "batch",
             all_results_list,

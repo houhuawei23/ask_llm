@@ -158,3 +158,36 @@ class BatchStatistics(BaseModel):
     average_latency: float = Field(default=0.0, description="Average latency per task")
     total_input_tokens: int = Field(default=0, description="Total input tokens")
     total_output_tokens: int = Field(default=0, description="Total output tokens")
+
+    @classmethod
+    def from_results(cls, results: list[BatchResult]) -> dict[str, "BatchStatistics"]:
+        """Aggregate per-``(provider, model)`` statistics from batch results.
+
+        Single source of truth for batch statistics. Replaces the previously
+        duplicated aggregators that lived in ``batch_processor`` and
+        ``batch_service`` (ARCHITECTURE_REVIEW.md §4.1.2, P1.5). Pure function.
+        """
+        grouped: dict[str, list[BatchResult]] = {}
+        for result in results:
+            key = f"{result.model_settings.provider}/{result.model_settings.model}"
+            grouped.setdefault(key, []).append(result)
+
+        statistics: dict[str, BatchStatistics] = {}
+        for key, model_results in grouped.items():
+            stats = cls(total_tasks=len(model_results))
+            successful = [r for r in model_results if r.status == TaskStatus.SUCCESS]
+            stats.successful_tasks = len(successful)
+            stats.failed_tasks = len(model_results) - stats.successful_tasks
+            if successful:
+                latencies = [r.metadata.latency for r in successful if r.metadata]
+                if latencies:
+                    stats.total_latency = sum(latencies)
+                    stats.average_latency = stats.total_latency / len(latencies)
+                stats.total_input_tokens = sum(
+                    r.metadata.input_tokens for r in successful if r.metadata
+                )
+                stats.total_output_tokens = sum(
+                    r.metadata.output_tokens for r in successful if r.metadata
+                )
+            statistics[key] = stats
+        return statistics

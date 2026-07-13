@@ -10,10 +10,17 @@
 | 阶段 | 状态 | 版本 |
 |------|------|------|
 | **P0** 承载性 bug 止血 | ✅ 已完成 | v2.16.0 (2026-07-14) |
-| P1 执行引擎统一 | ⏳ 待开始 | — |
+| **P1** 执行引擎统一 | 🔄 进行中 | v2.16.1 (2026-07-14) |
 | P2 配置去全局 + 单一对象 | ⏳ 待开始 | — |
 | P3 Markdown 单一管线 | ⏳ 待开始 | — |
 | P4 服务层/引擎/导出器收尾 | ⏳ 待开始 | — |
+
+**P1 进度（v2.16.1）**：
+- ✅ P1.2 — 删除死的单模型 `BatchProcessor` 平行层级（~330 LOC，仅 shim 再导出，从未实例化；`GlobalBatchProcessor` 不继承它）。
+- ✅ P1.5 — 合并 4 个统计聚合器为单一 `BatchStatistics.from_results(results)` 类方法；`batch_service._calculate_statistics`（逐字节重复）删除；`calculate_statistics_by_model` 收为薄委托。
+- ✅ P1.7 — 删除 `batch_processor.py` 重复的 `TYPE_CHECKING` 块。死代码审计结论：`ProviderRetryRegistry.set` / `BoundedRetryRunner.run` / `core/batch.py` shim 均有调用方（单测覆盖或 ~20 模块导入），保留；`.set` 待 P1.1 `EscalationPolicy` 接线。
+- ⏳ P1.1（B1）— retry×fallback 调用放大统一（最高价值/最高风险，待办）。
+- ⏳ 其余 P1 项（上帝类拆分、per-provider 池 sizing、增量 checkpoint、`RequestMetadata` 工厂合并）待办。
 
 **P0 已落地（v2.16.0）**：B2（CJK 令牌近似+安全系数）、B3（`${VAR}` 告警 + gate 覆盖 trans/paper）、B4（splitter 代码栅栏感知）、B6（per-worker 进度条）、B7（`attempt_history` 改为扁平 `AttemptRecord`）、B8（provider-cache 接缝类型化）、B9（限流超时可配置）、密钥轮换清缓存。完整说明见 `CHANGELOG.md` 2.16.0 条目。
 **P0 延后**：完整 `SecretStr` 迁移 → P2（与配置重构 + 引擎接缝收口一同进行）。
