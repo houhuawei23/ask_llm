@@ -4,6 +4,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any
 
+from loguru import logger
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -106,6 +107,19 @@ class ProviderConfig(BaseModel):
     fallback_to: list[FallbackConfig] = Field(
         default_factory=list, description="Ordered fallback provider/model chain"
     )
+
+    @field_validator("api_key")
+    @classmethod
+    def validate_api_key(cls, v: str, info) -> str:
+        """Validate API key is not empty and warn if missing."""
+        if not v or v.strip() == "":
+            provider_name = info.data.get("api_provider", "unknown")
+            logger.warning(
+                f"Provider '{provider_name}' has empty API key. "
+                f"Set ASK_LLM_{provider_name.upper()}_API_KEY environment variable "
+                f"or configure in default_config.yml"
+            )
+        return v
 
     @field_validator("api_base")
     @classmethod
