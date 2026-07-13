@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from ask_llm.config.manager import ConfigManager
 from ask_llm.core.batch import BatchResult, BatchTask, GlobalBatchProcessor
+from ask_llm.utils.api_key_gate import ensure_resolved_provider_keys
 
 
 def run_global_batch_tasks(
@@ -27,7 +28,15 @@ def run_global_batch_tasks(
 
     For translation-style workloads with a fixed thread pool size, pass
     ``clamp_workers_to_task_count=False`` (default); the executor will not use extra threads anyway.
+
+    Raises:
+        UnresolvedAPIKeyError: if any task's provider has a missing or unresolved
+            API key (fail fast before fanning out concurrent calls).
     """
+    # Fail fast: never fan out batch/trans/paper calls with an unresolved key.
+    providers = [t.model_settings.provider for t in tasks if t.model_settings]
+    ensure_resolved_provider_keys(config_manager, providers)
+
     n = len(tasks)
     if clamp_workers_to_task_count and n > 0:
         effective_workers = max(1, min(max_workers, n))

@@ -23,6 +23,15 @@ _INVALID_PLACEHOLDERS = frozenset(
 )
 
 
+class UnresolvedAPIKeyError(ValueError):
+    """Raised when a provider API key is missing/unresolved before network calls.
+
+    A service-layer (non-CLI) signal so batch/trans/paper paths can fail fast
+    with a clear message instead of shipping an unresolved ``${VAR}``
+    placeholder or empty key to the provider. See ARCHITECTURE_REVIEW.md bug B3.
+    """
+
+
 def provider_env_var_name(provider_name: str) -> str:
     """Conventional env var for a provider (e.g. deepseek -> DEEPSEEK_API_KEY)."""
     # Special case: kimi uses KIMI_CODE_API_KEY (Kimi Code API)
@@ -56,6 +65,29 @@ def require_resolved_api_key(config_manager: ConfigManager, provider_name: str) 
             f"API 密钥不可用: 请设置环境变量 {env_hint} 或在配置中填写 providers.{provider_name}.api_key。"
         )
         raise typer.Exit(1)
+
+
+def ensure_resolved_provider_keys(
+    config_manager: ConfigManager, provider_names: list[str]
+) -> None:
+    """Raise :class:`UnresolvedAPIKeyError` if any provider key is unresolved.
+
+    Service-layer chokepoint (no ``typer.Exit`` / console output): used by
+    ``run_global_batch_tasks`` so the batch/trans/paper paths fail fast with a
+    single clear error instead of letting an unresolved ``${VAR}`` or empty key
+    reach the provider across many concurrent calls. Ollama (no key) is skipped.
+    """
+    for name in provider_names:
+        if name == "ollama":
+            continue
+        pc = config_manager.get_provider_config(name)
+        if api_key_is_missing_or_unresolved(pc.api_key):
+            env_hint = provider_env_var_name(name)
+            raise UnresolvedAPIKeyError(
+                f"Provider '{name}' API key is missing or unresolved. "
+                f"Set environment variable {env_hint} or providers.{name}.api_key "
+                f"before running."
+            )
 
 
 def ensure_api_key_for_provider(
@@ -119,6 +151,11 @@ def ensure_api_key_for_provider(
         # llm_engine reloads providers.yml via load_providers_config(); ${DEEPSEEK_API_KEY}
         # must resolve there too — sync session key to the conventional env var.
         os.environ[env_hint] = key
+        # Invalidate any cached adapter built from the old/empty key so the next
+        # call rebuilds with the new credential. See ARCHITECTURE_REVIEW.md (secrets).
+        from ask_llm.utils.provider_cache import ProviderAdapterCache
+
+        ProviderAdapterCache.clear()
         return True
 
     console.print_error("无效选择, 已退出。")
