@@ -360,6 +360,15 @@ class ProviderRateLimitConfig(BaseModel):
         ge=1,
         description="Maximum concurrent requests allowed in a burst",
     )
+    acquire_timeout_seconds: float = Field(
+        default=60.0,
+        gt=0,
+        description=(
+            "Seconds a worker waits for a rate-limit token before failing the task. "
+            "Raise this for tight providers (low RPM/burst) under heavy load to avoid "
+            "spurious rate-limit timeouts."
+        ),
+    )
 
 
 class RateLimitConfig(BaseModel):

@@ -107,9 +107,13 @@ rate_limits:
   default_limits:
     requests_per_minute: 60
     burst_size: 10
+    # Seconds a worker waits for a rate-limit token before failing the task.
+    # Raise for tight providers (low RPM/burst) under heavy load. Default 60.
+    # acquire_timeout_seconds: 60.0
   # deepseek:
   #   requests_per_minute: 100
   #   burst_size: 20
+  #   acquire_timeout_seconds: 120.0
   # deepseek/deepseek-reasoner:
   #   requests_per_minute: 50
   #   burst_size: 5

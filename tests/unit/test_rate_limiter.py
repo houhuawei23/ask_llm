@@ -115,3 +115,23 @@ def test_effective_max_workers_without_model_config():
     processor = GlobalBatchProcessor(max_workers=10)
     tasks = [BatchTask(task_id=1, prompt="p", content="c")]
     assert processor._effective_max_workers(tasks) == 10
+
+
+def test_acquire_timeout_defaults_to_60_without_config():
+    """Without a RateLimitConfig, the acquire timeout stays at the historical 60s."""
+    limiter = get_global_rate_limiter()
+    limiter.configure(None)
+    assert limiter.acquire_timeout("deepseek", "deepseek-chat") == 60.0
+
+
+def test_acquire_timeout_reads_provider_config():
+    """acquire_timeout reflects the configured provider/model limit."""
+    limiter = get_global_rate_limiter()
+    limiter.configure(
+        RateLimitConfig(
+            deepseek={"requests_per_minute": 100, "burst_size": 20, "acquire_timeout_seconds": 120},
+        )
+    )
+    assert limiter.acquire_timeout("deepseek", "deepseek-chat") == 120.0
+    # Unconfigured provider falls back to default_limits (60s by default).
+    assert limiter.acquire_timeout("qwen", "qwen-max") == 60.0

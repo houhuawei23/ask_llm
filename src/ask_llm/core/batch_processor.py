@@ -841,14 +841,19 @@ class GlobalBatchProcessor:
 
         try:
             limiter = get_global_rate_limiter()
+            acquire_timeout = limiter.acquire_timeout(
+                model_config.provider, model_config.model
+            )
             acquired = limiter.acquire(
                 model_config.provider,
                 model_config.model,
-                timeout=60.0,
+                timeout=acquire_timeout,
             )
             if not acquired:
                 raise RuntimeError(
-                    f"Rate limit timeout for {model_config.provider}/{model_config.model}"
+                    f"Rate limit timeout for {model_config.provider}/{model_config.model} "
+                    f"after {acquire_timeout:.0f}s (configure "
+                    f"rate_limits.<provider>.acquire_timeout_seconds to raise it)"
                 )
 
             paper_timeout: float | None = None
