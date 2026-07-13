@@ -36,3 +36,10 @@ PROGRESS_UPDATE_INTERVAL = 0.1
 
 # Token counting cache size (LRU cache for performance)
 TOKEN_COUNT_CACHE_SIZE = 1024
+
+# Safety margin applied to token budgets for providers whose real BPE differs
+# from the cl100k_base approximation (DeepSeek, Qwen). cl100k_base undercounts
+# CJK text, so a chunk that "fits" by cl100k count can overflow the provider's
+# real context window. Sizing chunks to 85% of the budget leaves headroom for
+# the undercount. See ARCHITECTURE_REVIEW.md bug B2.
+APPROX_TOKEN_SAFETY_FACTOR = 0.85

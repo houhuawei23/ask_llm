@@ -6,7 +6,7 @@ from typing import Any, ClassVar
 from loguru import logger
 
 from ask_llm.config.context import get_config
-from ask_llm.core.constants import TOKEN_COUNT_CACHE_SIZE
+from ask_llm.core.constants import APPROX_TOKEN_SAFETY_FACTOR, TOKEN_COUNT_CACHE_SIZE
 
 try:
     import tiktoken
@@ -22,6 +22,12 @@ class TokenCounter:
 
     # 缓存 encoding 对象，避免每次调用 tiktoken.get_encoding()
     _encoding_cache: ClassVar[dict[str, Any]] = {}
+
+    # Providers whose real BPE tokenizer differs from the cl100k_base fallback.
+    # cl100k_base materially undercounts CJK text, so counts for these models are
+    # approximate; chunk sizing applies APPROX_TOKEN_SAFETY_FACTOR to compensate.
+    _APPROXIMATE_PREFIXES: ClassVar[tuple[str, ...]] = ("deepseek", "qwen")
+    _warned_approximate: ClassVar[set[str]] = set()
 
     # Model to encoding mapping (kept in code as models evolve frequently)
 
@@ -62,6 +68,35 @@ class TokenCounter:
         # Split by whitespace and filter empty strings
         words = text.split()
         return len(words)
+
+    @classmethod
+    def is_approximate_model(cls, model: str | None) -> bool:
+        """True if token counts for ``model`` rely on a non-native BPE approximation.
+
+        DeepSeek and Qwen ship their own tokenizers; we fall back to cl100k_base,
+        which undercounts CJK text. Callers that size against a provider context
+        window should apply :data:`APPROX_TOKEN_SAFETY_FACTOR`.
+        """
+        if not model:
+            return False
+        m = model.lower()
+        return any(m.startswith(p) or p in m for p in cls._APPROXIMATE_PREFIXES)
+
+    @classmethod
+    def _warn_approximate_once(cls, model: str | None) -> None:
+        """Emit a single WARNING per model when its tokenizer is approximated."""
+        if not cls.is_approximate_model(model):
+            return
+        key = (model or "").lower()
+        if key in cls._warned_approximate:
+            return
+        cls._warned_approximate.add(key)
+        logger.warning(
+            f"Token counts for '{model}' are approximate (using cl100k_base; "
+            f"DeepSeek/Qwen use their own BPE, which undercounts CJK). Chunk "
+            f"sizing applies a {int(APPROX_TOKEN_SAFETY_FACTOR * 100)}% safety "
+            f"margin to avoid context-window overflow."
+        )
 
     @classmethod
     def count_characters(cls, text: str) -> int:
@@ -118,6 +153,7 @@ class TokenCounter:
         """
         if not text:
             return 0
+        cls._warn_approximate_once(model)
         return cls._count_tokens_cached(text, model)
 
     @staticmethod
@@ -192,17 +228,25 @@ class TokenCounter:
     ) -> list[str]:
         """
         Greedy split: each returned segment has at most max_tokens (tiktoken), snapping at newlines when possible.
+
+        For providers whose tokenizer is approximated (DeepSeek/Qwen), the budget
+        is reduced by :data:`APPROX_TOKEN_SAFETY_FACTOR` because cl100k_base
+        undercounts CJK and a "fitting" chunk could overflow the real context
+        window. See ARCHITECTURE_REVIEW.md bug B2.
         """
         text = text.strip()
         if not text:
             return []
-        if cls.count_tokens(text, model) <= max_tokens:
+        budget = max_tokens
+        if cls.is_approximate_model(model):
+            budget = max(1, int(max_tokens * APPROX_TOKEN_SAFETY_FACTOR))
+        if cls.count_tokens(text, model) <= budget:
             return [text]
 
         out: list[str] = []
         remaining = text
         while remaining:
-            if cls.count_tokens(remaining, model) <= max_tokens:
+            if cls.count_tokens(remaining, model) <= budget:
                 out.append(remaining)
                 break
 
@@ -210,7 +254,7 @@ class TokenCounter:
             best = 1
             while lo <= hi:
                 mid = (lo + hi) // 2
-                if cls.count_tokens(remaining[:mid], model) <= max_tokens:
+                if cls.count_tokens(remaining[:mid], model) <= budget:
                     best = mid
                     lo = mid + 1
                 else:
@@ -233,6 +277,11 @@ class TokenCounter:
         """
         Truncate text to maximum token count.
 
+        When tiktoken is unavailable or the encoding cannot be resolved, falls back
+        to word-based truncation — consistent with :meth:`count_tokens`' word-count
+        fallback — rather than the previous ``max_tokens * 4`` char heuristic that
+        used a different approximation than :meth:`count_tokens`.
+
         Args:
             text: Input text
             max_tokens: Maximum number of tokens
@@ -241,25 +290,21 @@ class TokenCounter:
         Returns:
             Truncated text
         """
-        if not TIKTOKEN_AVAILABLE:
-            # Rough approximation: ~4 characters per token
-            max_chars = max_tokens * 4
-            return text[:max_chars]
-
-        try:
-            encoding = cls.get_encoding(model)
-            if encoding is None:
-                return text[: max_tokens * 4]
-            tokens = encoding.encode(text)
-
-            if len(tokens) <= max_tokens:
-                return text
-
-            truncated = encoding.decode(tokens[:max_tokens])
-            return str(truncated)
-        except Exception as e:
-            logger.warning(f"Token truncation failed: {e}")
+        if not text:
             return text
+        if cls.count_tokens(text, model) <= max_tokens:
+            return text
+
+        encoding = cls.get_encoding(model) if TIKTOKEN_AVAILABLE else None
+        if encoding is not None:
+            try:
+                tokens = encoding.encode(text)
+                return str(encoding.decode(tokens[:max_tokens]))
+            except Exception as e:
+                logger.warning(f"Token truncation failed: {e}")
+
+        # Fallback: word-based, consistent with count_tokens' word-count fallback.
+        return " ".join(text.split()[:max_tokens])
 
     @classmethod
     def format_stats(cls, text: str, model: str | None = None) -> str:

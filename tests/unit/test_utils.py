@@ -69,6 +69,50 @@ class TestTokenCounter:
         info = TokenCounter._count_tokens_cached.cache_info()
         assert info.currsize == 0
 
+    def test_is_approximate_model(self):
+        """DeepSeek/Qwen are flagged as using an approximate tokenizer."""
+        assert TokenCounter.is_approximate_model("deepseek-chat") is True
+        assert TokenCounter.is_approximate_model("deepseek-reasoner") is True
+        assert TokenCounter.is_approximate_model("qwen-max") is True
+        assert TokenCounter.is_approximate_model("Qwen-Plus") is True  # case-insensitive
+        assert TokenCounter.is_approximate_model("gpt-4") is False
+        assert TokenCounter.is_approximate_model(None) is False
+
+    def test_approximate_warn_fires_once(self):
+        """The approximation warning fires exactly once per model."""
+        from unittest.mock import patch
+
+        TokenCounter._warned_approximate.discard("deepseek-chat")
+        with patch("ask_llm.utils.token_counter.logger") as mock_logger:
+            TokenCounter.count_tokens("hello world", "deepseek-chat")
+            TokenCounter.count_tokens("another sentence", "deepseek-chat")
+        # Exactly one warning despite two calls
+        warning_calls = [c for c in mock_logger.warning.call_args_list]
+        assert len(warning_calls) == 1
+        assert "approximate" in warning_calls[0][0][0].lower()
+
+    def test_split_applies_safety_margin_for_approximate_model(self):
+        """Chunks for approximate models are smaller than the raw budget."""
+        TokenCounter.clear_cache()
+        # Build text large enough to require splitting under both budgets.
+        text = "\n".join(f"Paragraph number {i}." for i in range(400))
+        gpt_chunks = TokenCounter.split_hard_by_max_tokens(text, 100, "gpt-4")
+        deepseek_chunks = TokenCounter.split_hard_by_max_tokens(text, 100, "deepseek-chat")
+        # Same text, but deepseek budget is shrunk by the safety factor -> more,
+        # smaller chunks.
+        assert len(deepseek_chunks) >= len(gpt_chunks)
+        # No chunk exceeds the (cl100k) 100-token budget.
+        assert all(TokenCounter.count_tokens(c, "deepseek-chat") <= 100 for c in deepseek_chunks)
+
+    def test_truncate_fallback_is_word_based(self):
+        """Without a real encoding, truncation follows word count, not chars."""
+        from unittest.mock import patch
+
+        text = "alpha bravo charlie delta echo foxtrot"
+        with patch.object(TokenCounter, "get_encoding", return_value=None):
+            truncated = TokenCounter.truncate_to_tokens(text, 3)
+        assert truncated.split() == ["alpha", "bravo", "charlie"]
+
 
 class TestFileHandler:
     """Test FileHandler."""
