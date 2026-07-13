@@ -111,9 +111,25 @@ class ProviderConfig(BaseModel):
     @field_validator("api_key")
     @classmethod
     def validate_api_key(cls, v: str, info) -> str:
-        """Validate API key is not empty and warn if missing."""
-        if not v or v.strip() == "":
-            provider_name = info.data.get("api_provider", "unknown")
+        """Validate API key: warn loudly if empty or carries an unresolved placeholder.
+
+        ``resolve_env_vars`` leaves a literal ``${VAR}`` in place when the referenced
+        environment variable is unset (it only logs at DEBUG). Such a placeholder
+        must never ship as a real key. We cannot hard-reject at load time because
+        config tooling (``config show``/``config test``) and tests legitimately load
+        ``providers.yml`` with env vars unset; instead we warn loudly here so the
+        problem is never silent, and the run-boundary gate
+        (``ask_llm.utils.api_key_gate``) hard-blocks before any network call.
+        """
+        provider_name = info.data.get("api_provider", "unknown")
+        if "${" in v and "}" in v:
+            logger.warning(
+                f"Provider '{provider_name}' API key has unresolved ${{...}} "
+                f"placeholder: {v!r}. Set ASK_LLM_{provider_name.upper()}_API_KEY "
+                f"(or the referenced variable) before running; the API-key gate "
+                f"will block calls until it resolves."
+            )
+        elif not v or v.strip() == "":
             logger.warning(
                 f"Provider '{provider_name}' has empty API key. "
                 f"Set ASK_LLM_{provider_name.upper()}_API_KEY environment variable "

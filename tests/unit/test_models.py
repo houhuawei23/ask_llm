@@ -47,6 +47,42 @@ class TestProviderConfig:
         )
         assert config.api_key == ""
 
+    def test_unresolved_env_var_placeholder_warns(self):
+        """An unresolved ${VAR} placeholder warns loudly (not silent), still loads.
+
+        Hard-rejection happens at the run-boundary gate, not at load time, so that
+        config tooling can load providers.yml with env vars unset.
+        """
+        from unittest.mock import patch
+
+        with patch("ask_llm.core.models.logger") as mock_logger:
+            config = ProviderConfig(
+                api_provider="deepseek",
+                api_key="${DEEPSEEK_API_KEY}",
+                api_base="https://api.test.com",
+                models=["test-model"],
+            )
+        assert config.api_key == "${DEEPSEEK_API_KEY}"
+        mock_logger.warning.assert_called_once()
+        message = mock_logger.warning.call_args[0][0].lower()
+        assert "unresolved" in message
+        assert "deepseek_api_key" in message
+
+    def test_partial_env_var_placeholder_warns(self):
+        """A key containing an embedded ${VAR} also warns."""
+        from unittest.mock import patch
+
+        with patch("ask_llm.core.models.logger") as mock_logger:
+            config = ProviderConfig(
+                api_provider="test",
+                api_key="prefix-${MISSING_VAR}-suffix",
+                api_base="https://api.test.com",
+                models=["test-model"],
+            )
+        assert config.api_key == "prefix-${MISSING_VAR}-suffix"
+        mock_logger.warning.assert_called_once()
+        assert "unresolved" in mock_logger.warning.call_args[0][0].lower()
+
     def test_invalid_api_base(self):
         """Test validation rejects invalid API base URL."""
         with pytest.raises(ValidationError):
