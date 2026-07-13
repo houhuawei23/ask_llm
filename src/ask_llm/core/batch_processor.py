@@ -22,6 +22,11 @@ from ask_llm.core.batch_models import (
     sort_batch_tasks_by_estimated_input,
 )
 from ask_llm.core.concurrent import BoundedRetryRunner, RunMetrics, run_bounded_with_retries
+from ask_llm.core.constants import (
+    DEFAULT_MIN_OUTPUT_TOKENS,
+    OUTPUT_TOKEN_MULTIPLIERS,
+    TaskKind,
+)
 from ask_llm.core.models import RequestMetadata
 from ask_llm.core.processor import RequestProcessor
 from ask_llm.core.protocols import LLMProviderProtocol, ReasoningChunk
@@ -52,14 +57,17 @@ def estimate_output_tokens(task_kind: str, input_tokens: int) -> int:
         Estimated output token count
     """
     if input_tokens <= 0:
-        return 100  # Default minimum estimate
+        return DEFAULT_MIN_OUTPUT_TOKENS
 
-    if task_kind == "paper_explain":
-        # Explanations tend to be longer than input
-        return int(input_tokens * 2.0)
-    else:
-        # Translations typically similar length or slightly shorter
-        return int(input_tokens * 1.1)
+    # Try to match task_kind to TaskKind enum
+    try:
+        kind = TaskKind(task_kind)
+        multiplier = OUTPUT_TOKEN_MULTIPLIERS.get(kind, OUTPUT_TOKEN_MULTIPLIERS[TaskKind.BATCH])
+    except ValueError:
+        # Unknown task kind, use default batch multiplier
+        multiplier = OUTPUT_TOKEN_MULTIPLIERS[TaskKind.BATCH]
+
+    return int(input_tokens * multiplier)
 
 
 class BatchProcessor:

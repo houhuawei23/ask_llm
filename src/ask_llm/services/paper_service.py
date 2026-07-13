@@ -175,8 +175,10 @@ class PaperService:
         if not jobs:
             raise ValueError("No jobs to run (check --run and --sections, or empty sections)")
 
+        from ask_llm.core.constants import DEFAULT_FALLBACK_MODEL
+
         paper_max_tokens = paper_cfg.max_output_tokens
-        full_model_name = (paper_cfg.full_model or "").strip() or "deepseek-reasoner"
+        full_model_name = (paper_cfg.full_model or "").strip() or DEFAULT_FALLBACK_MODEL
         model_limits_map, _ = load_providers_model_limits()
         section_job_model = self.model
         current_provider = self.config_manager.current_provider_name
