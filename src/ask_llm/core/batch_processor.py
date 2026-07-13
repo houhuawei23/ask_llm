@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 import time
+import queue as _queue
 from collections.abc import Iterator, Mapping
 from typing import TYPE_CHECKING, Any
 
@@ -1022,7 +1023,10 @@ class GlobalBatchProcessor:
         # workers do not sit blocked on the rate limiter waiting for tokens.
         effective_max_workers = self._effective_max_workers(pending_tasks)
 
-        # Create per-task progress bars (one per concurrent worker)
+        # Create a pool of progress bars sized to the worker count, not the task
+        # count. A bar is acquired per worker, relabeled for the task it picks up,
+        # and released when done. This keeps the UI at O(workers) bars instead of
+        # O(tasks) -- N=1000 tasks no longer render 1000 live bars. See B6.
         if show_progress:
             from rich.console import Console as RichConsole
             from rich.progress import (
@@ -1048,11 +1052,11 @@ class GlobalBatchProcessor:
             )
             progress.start()
 
-            # Pre-calculate input tokens and create per-task progress tracking
-            task_to_input_tokens: dict[int, int] = {}
-            task_to_progress_id: dict[int, TaskID] = {}
+            # Pre-calculate per-task display metadata (input tokens, est. output,
+            # model key) so a worker can relabel its bar instantly when it picks
+            # the task up.
+            task_meta: dict[int, tuple[int, int, str]] = {}
             for task in pending_tasks:
-                # Pre-calculate input tokens for display
                 estimated_prompt = (
                     task.prompt.replace("{content}", task.content)
                     if "{content}" in task.prompt
@@ -1062,41 +1066,66 @@ class GlobalBatchProcessor:
                     estimated_prompt,
                     task.model_settings.model if task.model_settings else "gpt-3.5-turbo",
                 )["token_count"]
-                task_to_input_tokens[task.task_id] = input_token_estimate
-
-                # Estimate output tokens for progress calculation
                 estimated_output = estimate_output_tokens(
                     task.task_kind if hasattr(task, "task_kind") else "translation",
                     input_token_estimate,
                 )
-
-                # Create a per-task progress bar with estimated output tokens as total
                 model_key = (
                     f"{task.model_settings.provider}/{task.model_settings.model}"
                     if task.model_settings
                     else "unknown/model"
                 )
-                task_id = progress.add_task(
-                    f"[cyan]{model_key}[/cyan] Task {task.task_id} ({input_token_estimate} tok in)",
-                    total=estimated_output,
-                )
-                task_to_progress_id[task.task_id] = task_id
+                task_meta[task.task_id] = (input_token_estimate, estimated_output, model_key)
+
+            num_slots = max(1, min(effective_max_workers, len(pending_tasks)))
+            slot_bars: list[TaskID] = [
+                progress.add_task(f"[dim]worker {i} idle[/dim]", total=1) for i in range(num_slots)
+            ]
+            free_slots: _queue.Queue[int] = _queue.Queue()
+            for i in range(num_slots):
+                free_slots.put(i)
         else:
             progress = None
-            task_to_input_tokens = {}
-            task_to_progress_id = {}
+            task_meta = {}
+            slot_bars = []
+            free_slots = None  # type: ignore[assignment]
 
         try:
 
             def _worker(task: BatchTask, retry_count: int) -> BatchResult:
-                return self._process_single_global_task(
-                    task,
-                    provider_cache,
-                    retry_count,
-                    progress,
-                    task_to_progress_id.get(task.task_id),
-                    task_to_input_tokens.get(task.task_id),
-                )
+                progress_task_id: TaskID | None = None
+                input_tokens: int | None = None
+                slot_idx: int | None = None
+                if progress is not None and free_slots is not None:
+                    slot_idx = free_slots.get()  # pool == worker count, never blocks long
+                    progress_task_id = slot_bars[slot_idx]
+                    in_tok, est_out, model_key = task_meta.get(
+                        task.task_id, (0, 1, "unknown/model")
+                    )
+                    input_tokens = in_tok
+                    # Relabel + reset the reused bar for this task.
+                    progress.update(
+                        progress_task_id,
+                        description=f"[cyan]{model_key}[/cyan] Task {task.task_id} ({in_tok} tok in)",
+                        total=est_out,
+                        completed=0,
+                    )
+                try:
+                    return self._process_single_global_task(
+                        task,
+                        provider_cache,
+                        retry_count,
+                        progress,
+                        progress_task_id,
+                        input_tokens,
+                    )
+                finally:
+                    if (
+                        progress is not None
+                        and free_slots is not None
+                        and slot_idx is not None
+                    ):
+                        free_slots.put(slot_idx)
 
             def _on_retry_scheduled(task: BatchTask, failed_result: BatchResult) -> None:
                 bind_context(LogContext(task_id=task.task_id, phase="global_batch")).debug(

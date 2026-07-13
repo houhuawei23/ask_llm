@@ -257,3 +257,56 @@ def test_build_provider_cache_includes_fallbacks():
     calls = [call.kwargs.get("default_model") for call in mock_create.call_args_list]
     assert "model-a" in calls
     assert "model-b" in calls
+
+
+def test_process_global_tasks_creates_per_worker_progress_bars():
+    """B6: progress bars scale with the worker count, not the task count.
+
+    A 20-task run with max_workers=4 must create exactly 4 progress bars (one
+    per worker slot), never 20 (one per task).
+    """
+    tasks = [
+        BatchTask(
+            task_id=i,
+            prompt="p",
+            content="c",
+            model_settings=ModelConfig(provider="primary", model="model-a"),
+        )
+        for i in range(20)
+    ]
+    processor = GlobalBatchProcessor(max_workers=4)
+    cm = MagicMock()
+    cm.config.get_provider_config.return_value = ProviderConfig(
+        api_provider="primary",
+        api_base="https://api.primary.com/v1",
+        api_key="sk-test",
+        models=["model-a"],
+    )
+    primary = _make_provider("primary", "model-a")
+    add_task_counter = {"n": 0}
+
+    def fake_add_task(*args, **kwargs):
+        add_task_counter["n"] += 1
+        return add_task_counter["n"]  # unique TaskID per bar
+
+    with (
+        patch("rich.progress.Progress") as mock_progress_cls,
+        patch("ask_llm.utils.provider_cache.create_provider_adapter", return_value=primary),
+        _patch_rate_limiter() as limiter_patch,
+        _patch_token_helpers(),
+        patch("ask_llm.core.batch_processor.RequestProcessor") as mock_rp,
+    ):
+        limiter_patch.return_value.burst_for.return_value = 100  # cap == max_workers (4)
+        progress_instance = MagicMock()
+        progress_instance.add_task.side_effect = fake_add_task
+        mock_progress_cls.return_value = progress_instance
+
+        proc = MagicMock()
+        proc.process.return_value = iter(["ok"])
+        mock_rp.return_value = proc
+
+        results = processor.process_global_tasks(tasks, cm, show_progress=True)
+
+    assert len(results) == 20
+    # Bars created == max_workers (4), NOT task count (20).
+    assert add_task_counter["n"] == 4
