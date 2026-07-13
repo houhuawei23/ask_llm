@@ -13,7 +13,6 @@ if TYPE_CHECKING:
     from ask_llm.config.manager import ConfigManager
     from ask_llm.config.unified_config import RateLimitConfig
 
-from ask_llm.config.context import get_config_or_none
 from ask_llm.core.batch_models import (
     BatchResult,
     BatchStatistics,
@@ -406,7 +405,7 @@ class GlobalBatchProcessor:
             retry_delay_max: Maximum retry delay cap in seconds
             verbose: Enable verbose output with detailed API call information
             stream_api: Use streaming API calls; disable for higher batch throughput.
-            rate_limit_config: Optional rate-limit configuration from default_config.yml
+            rate_limit_config: Optional rate-limit configuration. If None, rate limiting is disabled.
         """
         self.max_workers = max_workers
         self.max_retries = max_retries
@@ -414,20 +413,10 @@ class GlobalBatchProcessor:
         self.retry_delay_max = retry_delay_max
         self.verbose = verbose
         self.stream_api = stream_api
-        self.rate_limit_config = rate_limit_config or self._load_rate_limit_config()
+        self.rate_limit_config = rate_limit_config
         self._auth_error_lock = threading.Lock()
         self._auth_error_logged = False
         self.last_metrics: RunMetrics | None = None
-
-    @staticmethod
-    def _load_rate_limit_config() -> RateLimitConfig | None:
-        """Load rate-limit configuration from the active config context, if any."""
-        from ask_llm.config.context import get_config_or_none
-
-        config = get_config_or_none()
-        if config is None:
-            return None
-        return config.unified_config.rate_limits
 
     @staticmethod
     def _is_authentication_error(error_msg: str) -> bool:

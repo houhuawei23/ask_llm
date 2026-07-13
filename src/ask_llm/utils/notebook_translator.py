@@ -137,10 +137,14 @@ class NotebookTranslator:
             )
 
         # Process with GlobalBatchProcessor
+        # Extract rate_limit_config from config_manager's unified config
+        rate_limit_config = config_manager.unified_config.rate_limits if config_manager.unified_config else None
+
         processor = GlobalBatchProcessor(
             max_workers=max_workers,
             max_retries=max_retries,
             stream_api=stream_api,
+            rate_limit_config=rate_limit_config,
         )
         results = processor.process_global_tasks(tasks, config_manager, show_progress=show_progress)
         self.last_results = list(results)
