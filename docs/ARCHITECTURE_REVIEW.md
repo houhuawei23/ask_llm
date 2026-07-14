@@ -11,7 +11,7 @@
 |------|------|------|
 | **P0** 承载性 bug 止血 | ✅ 已完成 | v2.16.0 (2026-07-14) |
 | **P1** 执行引擎统一 | 🔄 进行中 | v2.16.1–2.16.7 (2026-07-14) |
-| **P2** 配置去全局 + 单一对象 | 🔄 进行中 | v2.16.8–2.16.9 (2026-07-14) |
+| **P2** 配置去全局 + 单一对象 | 🔄 进行中 | v2.16.8–2.16.10 (2026-07-14) |
 | P3 Markdown 单一管线 | ⏳ 待开始 | — |
 | P4 服务层/引擎/导出器收尾 | ⏳ 待开始 | — |
 
@@ -28,7 +28,8 @@
 **P2 进度（v2.16.8）**：
 - ✅ P2.7 — 冲突 env 覆盖告警：多个 env 变量映射同一 config key 时（如 `ASK_LLM_TRANSLATION_THREADS` 与 `ASK_LLM_TRANSLATION_MAX_CONCURRENT_API_CALLS`），`_apply_env_overrides` 检测并告警指明胜出者（迭代序最后者），不再静默。
 - ✅ P2（去全局，增量）— `TokenCounter._get_encoding` 不再要求 config 已加载：热路径改用 `get_config_or_none()` 并回退 `cl100k_base`，库化/嵌入式使用不再崩（§4.2.3）。
-- ⏳ P2 余项（双叉 Config 合并、`get_config()` 去全局、`SecretStr` 迁移、loader 拆分、provenance、`paper_explain_pipeline` 移出 config/）待办。
+- ✅ P2.6 — `paper_explain_pipeline.py` 从 `config/` 移到 `core/`（453 LOC 领域逻辑，非配置）；延迟 `get_config()` 读不变；4 处导入方更新（§4.2.6）。
+- ⏳ P2 余项（双叉 Config 合并、其余 `get_config()` 消费者迁移、`SecretStr` 迁移、loader 拆分、provenance）待办。
 
 **P0 已落地（v2.16.0）**：B2（CJK 令牌近似+安全系数）、B3（`${VAR}` 告警 + gate 覆盖 trans/paper）、B4（splitter 代码栅栏感知）、B6（per-worker 进度条）、B7（`attempt_history` 改为扁平 `AttemptRecord`）、B8（provider-cache 接缝类型化）、B9（限流超时可配置）、密钥轮换清缓存。完整说明见 `CHANGELOG.md` 2.16.0 条目。
 **P0 延后**：完整 `SecretStr` 迁移 → P2（与配置重构 + 引擎接缝收口一同进行）。

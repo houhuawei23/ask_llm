@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from ask_llm.config.paper_explain_pipeline import (
+from ask_llm.core.paper_explain_pipeline import (
     FullPromptEntry,
     PaperExplainPipelineConfig,
     SectionCombo,

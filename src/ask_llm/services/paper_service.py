@@ -13,11 +13,6 @@ from pathlib import Path
 from loguru import logger
 
 from ask_llm.config.manager import ConfigManager
-from ask_llm.config.paper_explain_pipeline import (
-    PaperExplainPipelineConfig,
-    load_paper_explain_pipeline,
-    parse_section_job_key,
-)
 from ask_llm.config.unified_config import UnifiedConfig
 from ask_llm.core.batch import BatchResult, BatchStatistics, BatchTask, ModelConfig, TaskStatus
 from ask_llm.core.execution_report import ExecutionReport, build_report_from_batch_results
@@ -36,6 +31,11 @@ from ask_llm.core.paper_explain import (
     normalize_paper_explain_response,
     resolve_prompt_key,
     section_label_for_job,
+)
+from ask_llm.core.paper_explain_pipeline import (
+    PaperExplainPipelineConfig,
+    load_paper_explain_pipeline,
+    parse_section_job_key,
 )
 from ask_llm.core.tasks.builders import build_paper_explain_task
 from ask_llm.utils.console import console

@@ -10,7 +10,7 @@ from pathlib import Path
 import yaml
 from loguru import logger
 
-from ask_llm.config.paper_explain_pipeline import (
+from ask_llm.core.paper_explain_pipeline import (
     PaperExplainPipelineConfig,
     merged_section_labels_zh,
     parse_section_job_key,

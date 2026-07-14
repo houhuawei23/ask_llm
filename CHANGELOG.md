@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.16.10 (2026-07-14)
+
+P2.6 — relocate `paper_explain_pipeline` out of `config/`. Internal module move; no CLI surface change.
+
+### Changed
+
+- **P2.6 — `paper_explain_pipeline.py` moved `config/` → `core/`.** The 453-LOC module is paper-explain domain logic (7 nested pydantic models, pipeline parsing), not configuration — it lived in `config/` only because it reads a YAML at startup. Now at `ask_llm.core.paper_explain_pipeline`. Its lazy `get_config()` read is unchanged. Importers (`core/paper_explain`, `services/paper_service`, two tests) retargeted. ARCHITECTURE_REVIEW.md §4.2.6.
+
+### Version
+
+- 2.16.9 → 2.16.10
+
 ## 2.16.9 (2026-07-14)
 
 P2 (config de-globalization, incremental) — `TokenCounter` no longer requires a loaded config. Library/embedding hardening.

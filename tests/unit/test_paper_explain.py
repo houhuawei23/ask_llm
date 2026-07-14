@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from ask_llm.config.paper_explain_pipeline import PaperExplainPipelineConfig
+from ask_llm.core.paper_explain_pipeline import PaperExplainPipelineConfig
 from ask_llm.core.paper_explain import (
     _exclude_name,
     build_bundle_from_directory,
