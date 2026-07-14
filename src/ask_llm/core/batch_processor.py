@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import queue as _queue
 import threading
-import time
-from collections.abc import Iterator, Mapping
+from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
 from rich.progress import Progress, TaskID
@@ -28,13 +27,13 @@ from ask_llm.core.concurrent import BoundedRetryRunner, RunMetrics
 from ask_llm.core.constants import (
     DEFAULT_MIN_OUTPUT_TOKENS,
     OUTPUT_TOKEN_MULTIPLIERS,
-    PROGRESS_UPDATE_INTERVAL,
     TaskKind,
 )
 from ask_llm.core.models import RequestMetadata
 from ask_llm.core.processor import RequestProcessor
-from ask_llm.core.protocols import LLMProviderProtocol, ReasoningChunk
+from ask_llm.core.protocols import LLMProviderProtocol
 from ask_llm.core.provider_manager import ProviderManager
+from ask_llm.core.stream_collector import stream_and_collect
 from ask_llm.core.telemetry import (
     ErrorCategory,
     LogContext,
@@ -184,66 +183,6 @@ class GlobalBatchProcessor:
         else:
             bound.error(f"Task failed ({model_key}): {error_msg}")
 
-    def _stream_and_collect(
-        self,
-        stream_iter: Iterator[str | ReasoningChunk],
-        task: BatchTask,
-        model_config: ModelConfig,
-        progress: Progress | None,
-        progress_task_id: TaskID | None,
-        description_prefix: str,
-        return_reasoning: bool = False,
-    ) -> tuple[str, str | None, int, float]:
-        """Run a streaming iterator, counting tokens and updating progress."""
-        start_time = time.time()
-        response_parts: list[str] = []
-        reasoning_parts: list[str] = []
-        output_token_count = 0
-
-        encoding = TokenCounter.get_encoding(model_config.model)
-        last_progress_update = 0.0
-        for chunk in stream_iter:
-            if return_reasoning:
-                assert isinstance(chunk, ReasoningChunk)
-                if chunk.content:
-                    response_parts.append(chunk.content)
-                    if encoding is not None:
-                        output_token_count += len(encoding.encode(chunk.content))
-                    else:
-                        output_token_count += TokenCounter.count_words(chunk.content)
-                if chunk.reasoning:
-                    reasoning_parts.append(chunk.reasoning)
-                    if encoding is not None:
-                        output_token_count += len(encoding.encode(chunk.reasoning))
-                    else:
-                        output_token_count += TokenCounter.count_words(chunk.reasoning)
-            else:
-                text_chunk = chunk if isinstance(chunk, str) else str(chunk)
-                response_parts.append(text_chunk)
-                if encoding is not None:
-                    output_token_count += len(encoding.encode(text_chunk))
-                else:
-                    output_token_count += TokenCounter.count_words(text_chunk)
-
-            # Throttle progress updates to avoid UI flicker on high-frequency streams
-            now = time.time()
-            if (
-                progress
-                and progress_task_id is not None
-                and now - last_progress_update >= PROGRESS_UPDATE_INTERVAL
-            ):
-                progress.update(
-                    progress_task_id,
-                    completed=output_token_count,
-                    description=f"{description_prefix}: {output_token_count} tok",
-                )
-                last_progress_update = now
-
-        response = "".join(response_parts).strip()
-        reasoning = "".join(reasoning_parts).strip() if reasoning_parts else None
-        latency = time.time() - start_time
-        return response, reasoning, output_token_count, latency
-
     def _run_paper_explain_global_task(
         self,
         task: BatchTask,
@@ -300,9 +239,8 @@ class GlobalBatchProcessor:
             return_reasoning=task.return_reasoning,
         )
         description_prefix = f"{model_key} paper task {task.task_id} ({progress_tokens} tokens)"
-        response, reasoning_out, _output_token_count, latency = self._stream_and_collect(
+        response, reasoning_out, _output_token_count, latency = stream_and_collect(
             stream_iter,
-            task,
             model_config,
             progress,
             progress_task_id,
@@ -402,9 +340,8 @@ class GlobalBatchProcessor:
             stream=self.stream_api,
         )
         description_prefix = f"{model_key} Task {task.task_id} ({progress_tokens} tokens)"
-        response, _, output_token_count, latency = self._stream_and_collect(
+        response, _, output_token_count, latency = stream_and_collect(
             stream_iter,
-            task,
             model_config,
             progress,
             progress_task_id,

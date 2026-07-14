@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.16.5 (2026-07-14)
+
+P1.3 (partial) — extract `StreamCollector`. Internal refactor; no CLI surface change. First step of the `GlobalBatchProcessor` god-class split (ARCHITECTURE_REVIEW.md §7.2 / P1.3).
+
+### Added
+
+- `ask_llm.core.stream_collector.stream_and_collect(...)` — the single streaming + token-collection implementation, extracted out of `GlobalBatchProcessor._stream_and_collect`. Pure function (no instance state); independently unit-testable. The unused `task` parameter was dropped.
+
+### Changed
+
+- `GlobalBatchProcessor` shrank 834 → 771 LOC. The paper and translation-chunk runners now call the module-level `stream_and_collect`. Dropped now-unused imports (`time`, `PROGRESS_UPDATE_INTERVAL`, `Iterator`, `ReasoningChunk`).
+
+### Tests
+
+- Added `test_stream_collector.py` (plain-text concatenation, reasoning separation, progress throttling). 404 passed, 1 skipped.
+
+### Version
+
+- 2.16.4 → 2.16.5
+
 ## 2.16.4 (2026-07-14)
 
 P1.7 / B5 — checkpoint survives Ctrl-C. Fixes the "resumable on interrupt" gap (ARCHITECTURE_REVIEW.md §4.1.4 / B5).
