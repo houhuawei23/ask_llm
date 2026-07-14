@@ -64,6 +64,43 @@ class TestConfigLoader:
         finally:
             os.environ.pop("ASK_LLM_TRANSLATION_TARGET_LANGUAGE", None)
 
+    def test_conflicting_env_overrides_warns_and_last_wins(self, sample_config_file):
+        """P2.7: two env vars on the same key warn; the canonical one wins."""
+        from unittest.mock import patch
+
+        try:
+            os.environ["ASK_LLM_TRANSLATION_THREADS"] = "3"
+            os.environ["ASK_LLM_TRANSLATION_MAX_CONCURRENT_API_CALLS"] = "7"
+            with patch("ask_llm.config.loader.logger") as mock_logger:
+                load_result = ConfigLoader.load(sample_config_file)
+            # MAX_CONCURRENT_API_CALLS is later in ENV_TO_CONFIG order -> wins.
+            assert load_result.unified_config.translation.max_concurrent_api_calls == 7
+            # A conflict warning was emitted naming the winning var.
+            warning_msgs = " ".join(
+                str(c) for c in mock_logger.warning.call_args_list
+            )
+            assert "Conflicting env overrides" in warning_msgs
+            assert "ASK_LLM_TRANSLATION_MAX_CONCURRENT_API_CALLS" in warning_msgs
+        finally:
+            os.environ.pop("ASK_LLM_TRANSLATION_THREADS", None)
+            os.environ.pop("ASK_LLM_TRANSLATION_MAX_CONCURRENT_API_CALLS", None)
+
+    def test_single_env_override_does_not_warn_conflict(self, sample_config_file):
+        """P2.7: a single env var on a shared key does not trigger the conflict warning."""
+        from unittest.mock import patch
+
+        try:
+            os.environ["ASK_LLM_TRANSLATION_THREADS"] = "4"
+            with patch("ask_llm.config.loader.logger") as mock_logger:
+                load_result = ConfigLoader.load(sample_config_file)
+            assert load_result.unified_config.translation.max_concurrent_api_calls == 4
+            warning_msgs = " ".join(
+                str(c) for c in mock_logger.warning.call_args_list
+            )
+            assert "Conflicting env overrides" not in warning_msgs
+        finally:
+            os.environ.pop("ASK_LLM_TRANSLATION_THREADS", None)
+
 
 class TestKimiProviderConfig:
     """Test Kimi provider configuration."""

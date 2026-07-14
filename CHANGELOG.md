@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.16.8 (2026-07-14)
+
+P2.7 — surface silent duplicate env-var mappings. First P2 (config) step. No CLI surface change.
+
+### Fixed
+
+- **P2.7 — conflicting env overrides now warn.** Two env vars can map to the same config key (e.g. `ASK_LLM_TRANSLATION_THREADS` and `ASK_LLM_TRANSLATION_MAX_CONCURRENT_API_CALLS` both → `translation.max_concurrent_api_calls`). Previously the apply loop overwrote silently in dict-iteration order, so which one won was accidental. `_apply_env_overrides` now detects when multiple *set* env vars target the same key and logs a warning naming the winner (last in `ENV_TO_CONFIG` order). Behaviour is otherwise unchanged (last still wins); the warning just makes it visible.
+
+### Added
+
+- `ask_llm.config.loader._duplicate_env_targets` and `_warn_conflicting_env_overrides`.
+
+### Tests
+
+- Added `test_conflicting_env_overrides_warns_and_last_wins` and `test_single_env_override_does_not_warn_conflict`. 412 passed, 1 skipped.
+
+### Version
+
+- 2.16.7 → 2.16.8
+
 ## 2.16.7 (2026-07-14)
 
 P1.3 (substantial) — extract `TaskExecutor`. Internal refactor; no CLI surface change. Third and largest step of the `GlobalBatchProcessor` god-class split.

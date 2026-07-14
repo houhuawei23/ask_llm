@@ -11,7 +11,7 @@
 |------|------|------|
 | **P0** 承载性 bug 止血 | ✅ 已完成 | v2.16.0 (2026-07-14) |
 | **P1** 执行引擎统一 | 🔄 进行中 | v2.16.1–2.16.7 (2026-07-14) |
-| P2 配置去全局 + 单一对象 | ⏳ 待开始 | — |
+| **P2** 配置去全局 + 单一对象 | 🔄 进行中 | v2.16.8 (2026-07-14) |
 | P3 Markdown 单一管线 | ⏳ 待开始 | — |
 | P4 服务层/引擎/导出器收尾 | ⏳ 待开始 | — |
 
@@ -24,6 +24,10 @@
 - ✅ **B5** — Ctrl-C 不再丢全部进度：`BoundedRetryRunner` 装 SIGINT 处理器（仅主线程），首次中断停止调度新任务、排空在飞任务、返回部分结果（不 re-raise `KeyboardInterrupt`），二次中断硬杀。新增 `RunMetrics.interrupted`。`batch`/`trans` 服务检测中断后保留 checkpoint、打印 resume 提示，仅全成功才 unlink。
 - 🔄 **P1.3（主体完成）** — 上帝类 834→347 LOC，拆出三个协作者：`StreamCollector`（流式+token 收集纯函数）、`ProgressPresenter`（`rich.Progress` + per-worker 槽位池）、`TaskExecutor`（单 config 执行：限流 acquire / adapter 查找 / 流式收集 / metadata / 鉴权错误去重）。`GlobalBatchProcessor` 收为瘦协调器（B1 升级 + 调度）。三者均可独立单测。
 - ⏳ P1.3 余项（Scheduler/FallbackPolicy 进一步拆分，可选）、per-`(provider,model)` 池 sizing（P1.4）待办。`FormatCheckpoint` 迁移（P1.9）已评估为领域不匹配，暂缓。
+
+**P2 进度（v2.16.8）**：
+- ✅ P2.7 — 冲突 env 覆盖告警：多个 env 变量映射同一 config key 时（如 `ASK_LLM_TRANSLATION_THREADS` 与 `ASK_LLM_TRANSLATION_MAX_CONCURRENT_API_CALLS`），`_apply_env_overrides` 检测并告警指明胜出者（迭代序最后者），不再静默。
+- ⏳ P2 余项（双叉 Config 合并、`get_config()` 去全局、`SecretStr` 迁移、loader 拆分、provenance、`paper_explain_pipeline` 移出 config/）待办。
 
 **P0 已落地（v2.16.0）**：B2（CJK 令牌近似+安全系数）、B3（`${VAR}` 告警 + gate 覆盖 trans/paper）、B4（splitter 代码栅栏感知）、B6（per-worker 进度条）、B7（`attempt_history` 改为扁平 `AttemptRecord`）、B8（provider-cache 接缝类型化）、B9（限流超时可配置）、密钥轮换清缓存。完整说明见 `CHANGELOG.md` 2.16.0 条目。
 **P0 延后**：完整 `SecretStr` 迁移 → P2（与配置重构 + 引擎接缝收口一同进行）。

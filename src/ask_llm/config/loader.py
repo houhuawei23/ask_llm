@@ -82,6 +82,37 @@ def _parse_env_value(value: str, key_path: tuple[str, ...]) -> Any:
     return value
 
 
+def _duplicate_env_targets() -> dict[tuple[str, ...], list[str]]:
+    """Config keys targeted by more than one env var (P2.7).
+
+    Returns ``{config_key_path: [env_var_names in ENV_TO_CONFIG order]}`` for
+    keys with two or more env vars. The apply loop overwrites in iteration
+    order, so only the last such env var wins; the others are silently ignored.
+    """
+    targets: dict[tuple[str, ...], list[str]] = {}
+    for env_var, key_path in ENV_TO_CONFIG.items():
+        targets.setdefault(key_path, []).append(env_var)
+    return {key: vars_ for key, vars_ in targets.items() if len(vars_) > 1}
+
+
+def _warn_conflicting_env_overrides() -> None:
+    """Warn when multiple SET env vars target the same config key (P2.7).
+
+    Surfaces the previously silent last-writer-wins ambiguity -- e.g.
+    ``ASK_LLM_TRANSLATION_THREADS`` and ``ASK_LLM_TRANSLATION_MAX_CONCURRENT_API_CALLS``
+    both map to ``translation.max_concurrent_api_calls``.
+    """
+    for key_path, env_vars in _duplicate_env_targets().items():
+        set_vars = [v for v in env_vars if (os.getenv(v) or "").strip()]
+        if len(set_vars) > 1:
+            winner = set_vars[-1]  # last in ENV_TO_CONFIG order wins
+            logger.warning(
+                f"Conflicting env overrides for config key "
+                f"{'.'.join(key_path)}: {set_vars} are all set. Using "
+                f"{winner!r} (last wins); unset the others to silence this."
+            )
+
+
 def _deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
     """Deep merge overlay into base. Overlay values take precedence.
     For 'providers', individual provider settings are deep-merged instead of
@@ -130,6 +161,7 @@ def _set_nested(data: dict[str, Any], path: tuple[str, ...], value: Any) -> None
 def _apply_env_overrides(data: dict[str, Any]) -> dict[str, Any]:
     """Apply ASK_LLM_* environment variable overrides to config data."""
     result = copy.deepcopy(data)
+    _warn_conflicting_env_overrides()
     legacy_chunk = os.getenv("ASK_LLM_TRANSLATION_MAX_CHUNK_SIZE")
     if legacy_chunk is not None and legacy_chunk != "":
         logger.warning(
