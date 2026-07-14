@@ -250,14 +250,12 @@ class RequestProcessor:
         resolved_model = model or self.provider.default_model
 
         # Create metadata
-        metadata = RequestMetadata(
-            provider=self.provider.name,
+        metadata = RequestMetadata.from_execution(
+            provider_name=self.provider.name,
             model=resolved_model,
-            temperature=temperature
-            if temperature is not None
-            else self.provider.config.api_temperature,
-            input_words=input_stats["word_count"],
-            input_tokens=input_stats["token_count"],
+            temperature=temperature,
+            default_temperature=self.provider.config.api_temperature,
+            input_stats=input_stats,
             output_words=output_stats["word_count"],
             output_tokens=output_stats["token_count"],
             latency=latency,

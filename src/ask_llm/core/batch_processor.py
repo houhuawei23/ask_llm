@@ -315,14 +315,12 @@ class GlobalBatchProcessor:
             out_for_count = f"{reasoning_out}\n{response}"
         output_stats = TokenCounter.estimate_tokens(out_for_count, model_config.model)
 
-        metadata = RequestMetadata(
-            provider=provider.name,
+        metadata = RequestMetadata.from_execution(
+            provider_name=provider.name,
             model=model_config.model,
-            temperature=model_config.temperature
-            if model_config.temperature is not None
-            else provider.config.api_temperature,
-            input_words=input_stats["word_count"],
-            input_tokens=input_stats["token_count"],
+            temperature=model_config.temperature,
+            default_temperature=provider.config.api_temperature,
+            input_stats=input_stats,
             output_words=output_stats["word_count"],
             output_tokens=output_stats["token_count"],
             latency=latency,
@@ -414,14 +412,12 @@ class GlobalBatchProcessor:
             return_reasoning=False,
         )
 
-        metadata = RequestMetadata(
-            provider=provider.name,
+        metadata = RequestMetadata.from_execution(
+            provider_name=provider.name,
             model=model_config.model,
-            temperature=model_config.temperature
-            if model_config.temperature is not None
-            else provider.config.api_temperature,
-            input_words=input_stats["word_count"],
-            input_tokens=input_stats["token_count"],
+            temperature=model_config.temperature,
+            default_temperature=provider.config.api_temperature,
+            input_stats=input_stats,
             output_words=TokenCounter.count_words(response),
             output_tokens=output_token_count,
             latency=latency,

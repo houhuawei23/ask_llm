@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.16.3 (2026-07-14)
+
+P1.6 — unify `RequestMetadata` construction (B8 root-cause finish). Internal refactor; no CLI surface change.
+
+### Added
+
+- `RequestMetadata.from_execution(...)` classmethod — single factory for the per-request metadata that `batch_processor` (paper + translation-chunk paths) and `processor` (single `ask`) build on every successful call.
+
+### Changed
+
+- **P1.6 — collapsed three duplicate `RequestMetadata(...)` construction sites.** The temperature-resolution ternary (`temperature if temperature is not None else provider.config.api_temperature`) — the exact code path that caused the v2.15.1 adapter dict-vs-object crash — now lives in one place. Per-site differences (how output words/tokens are computed) remain at the call sites.
+
+### Version
+
+- 2.16.2 → 2.16.3
+
 ## 2.16.2 (2026-07-14)
 
 P1.1 / B1 — unify retry × fallback into a single shared-budget escalation. Fixes the highest-severity design defect in `docs/ARCHITECTURE_REVIEW.md` (§4.1.3).

@@ -183,6 +183,38 @@ class RequestMetadata(BaseModel):
     latency: float = Field(..., description="Request latency in seconds")
     timestamp: datetime = Field(default_factory=datetime.now)
 
+    @classmethod
+    def from_execution(
+        cls,
+        *,
+        provider_name: str,
+        model: str,
+        temperature: float | None,
+        default_temperature: float,
+        input_stats: dict[str, int],
+        output_words: int,
+        output_tokens: int,
+        latency: float,
+    ) -> "RequestMetadata":
+        """Build metadata for a completed request from its execution stats.
+
+        Centralizes the temperature resolution (per-request override falling
+        back to the provider default) that was previously triplicated across
+        ``batch_processor`` and ``processor`` — the same code path that caused
+        the v2.15.1 adapter dict-vs-object crash (B8 root cause;
+        ARCHITECTURE_REVIEW.md §4.1.2 / P1.6).
+        """
+        return cls(
+            provider=provider_name,
+            model=model,
+            temperature=temperature if temperature is not None else default_temperature,
+            input_words=input_stats["word_count"],
+            input_tokens=input_stats["token_count"],
+            output_words=output_words,
+            output_tokens=output_tokens,
+            latency=latency,
+        )
+
     def format(self) -> str:
         """Format metadata as a string."""
         lines = [
