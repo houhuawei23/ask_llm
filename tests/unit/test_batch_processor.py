@@ -8,7 +8,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from ask_llm.core.batch_models import BatchResult, BatchTask, ModelConfig, TaskStatus
-from ask_llm.core import batch_processor as bp_module
 from ask_llm.core.batch_processor import GlobalBatchProcessor
 from ask_llm.core.models import ProviderConfig
 from ask_llm.core.provider_manager import ProviderManager
@@ -17,7 +16,7 @@ from ask_llm.core.telemetry import ErrorCategory
 
 @pytest.fixture(autouse=True)
 def _patch_paper_timeout():
-    with patch.object(bp_module, "paper_request_timeout_seconds", return_value=600.0):
+    with patch("ask_llm.core.task_executor.paper_request_timeout_seconds", return_value=600.0):
         yield
 
 
@@ -52,7 +51,7 @@ def _patch_token_helpers():
 def _patch_rate_limiter():
     limiter = MagicMock()
     limiter.acquire.return_value = True
-    return patch("ask_llm.core.batch_processor.get_global_rate_limiter", return_value=limiter)
+    return patch("ask_llm.core.task_executor.get_global_rate_limiter", return_value=limiter)
 
 
 def _escalate(processor, task, provider_cache, *, max_retries):
@@ -91,7 +90,7 @@ def test_primary_succeeds_fallback_not_used():
     with (
         _patch_rate_limiter(),
         _patch_token_helpers(),
-        patch("ask_llm.core.batch_processor.RequestProcessor") as mock_rp,
+        patch("ask_llm.core.task_executor.RequestProcessor") as mock_rp,
     ):
         called = []
 
@@ -125,7 +124,7 @@ def test_fallback_succeeds_when_primary_fails():
     with (
         _patch_rate_limiter(),
         _patch_token_helpers(),
-        patch("ask_llm.core.batch_processor.RequestProcessor") as mock_rp,
+        patch("ask_llm.core.task_executor.RequestProcessor") as mock_rp,
     ):
         called = []
 
@@ -174,7 +173,7 @@ def test_all_configs_fail_returns_failed():
     with (
         _patch_rate_limiter(),
         _patch_token_helpers(),
-        patch("ask_llm.core.batch_processor.RequestProcessor") as mock_rp,
+        patch("ask_llm.core.task_executor.RequestProcessor") as mock_rp,
     ):
         called = []
 
@@ -226,7 +225,7 @@ def test_single_config_retries_same_provider_within_budget():
     with (
         _patch_rate_limiter(),
         _patch_token_helpers(),
-        patch("ask_llm.core.batch_processor.RequestProcessor") as mock_rp,
+        patch("ask_llm.core.task_executor.RequestProcessor") as mock_rp,
     ):
         called = []
 
@@ -255,7 +254,7 @@ def test_no_fallback_returns_failed_on_primary_failure():
     with (
         _patch_rate_limiter(),
         _patch_token_helpers(),
-        patch("ask_llm.core.batch_processor.RequestProcessor") as mock_rp,
+        patch("ask_llm.core.task_executor.RequestProcessor") as mock_rp,
     ):
 
         def side_effect(provider):
@@ -293,7 +292,7 @@ def test_authentication_error_stops_fallback_chain():
     with (
         _patch_rate_limiter(),
         _patch_token_helpers(),
-        patch("ask_llm.core.batch_processor.RequestProcessor") as mock_rp,
+        patch("ask_llm.core.task_executor.RequestProcessor") as mock_rp,
     ):
         called = []
 
@@ -378,7 +377,7 @@ def test_process_global_tasks_creates_per_worker_progress_bars():
         patch("ask_llm.utils.provider_cache.create_provider_adapter", return_value=primary),
         _patch_rate_limiter() as limiter_patch,
         _patch_token_helpers(),
-        patch("ask_llm.core.batch_processor.RequestProcessor") as mock_rp,
+        patch("ask_llm.core.task_executor.RequestProcessor") as mock_rp,
     ):
         limiter_patch.return_value.burst_for.return_value = 100  # cap == max_workers (4)
         progress_instance = MagicMock()
@@ -432,7 +431,7 @@ def test_process_global_tasks_bounded_calls_with_fallback_chain():
         patch("ask_llm.utils.provider_cache.create_provider_adapter", return_value=primary),
         _patch_rate_limiter() as limiter_patch,
         _patch_token_helpers(),
-        patch("ask_llm.core.batch_processor.RequestProcessor") as mock_rp,
+        patch("ask_llm.core.task_executor.RequestProcessor") as mock_rp,
     ):
         limiter_patch.return_value.burst_for.return_value = 100
 

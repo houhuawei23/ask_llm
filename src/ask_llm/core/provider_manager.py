@@ -33,7 +33,7 @@ class ProviderManager:
         shared ConfigManager inside worker threads.
         """
         # Local import to avoid a circular dependency at module load time.
-        from ask_llm.core.batch_processor import paper_request_timeout_seconds
+        from ask_llm.core.task_executor import paper_request_timeout_seconds
 
         cache: dict[str, LLMProviderProtocol] = {}
         seen: set[str] = set()

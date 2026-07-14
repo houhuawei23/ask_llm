@@ -1,5 +1,27 @@
 # Changelog
 
+## 2.16.7 (2026-07-14)
+
+P1.3 (substantial) — extract `TaskExecutor`. Internal refactor; no CLI surface change. Third and largest step of the `GlobalBatchProcessor` god-class split.
+
+### Added
+
+- `ask_llm.core.task_executor.TaskExecutor` — executes a single provider/model attempt: rate-limit acquire, adapter lookup, streaming collection (via `stream_and_collect`), `RequestMetadata` construction, progress updates, and the batch-wide auth-error log de-duplication. Holds the `verbose` / `stream_api` / auth-error state previously on the god class.
+- `paper_request_timeout_seconds` and `update_global_task_progress_failed` moved into `task_executor` (consumed there; the former is also used by the provider cache) to avoid a circular import.
+
+### Changed
+
+- `GlobalBatchProcessor` shrank to a lean coordinator: 720 → 347 LOC (834 → 347 across all three P1.3 steps). `_process_single_global_task` (the B1 escalation) now delegates one-config attempts to `self._task_executor.try_run_with_config`. A pass-through `_auth_error_logged` property preserves the `translation_service` inspection.
+- `provider_manager` now lazy-imports `paper_request_timeout_seconds` from `task_executor`.
+
+### Tests
+
+- Added `test_task_executor.py` (rate-limit-timeout failure, auth-error dedup flag, missing-provider failure). Retargeted `test_batch_processor` patches to `ask_llm.core.task_executor` (the moved code). 410 passed, 1 skipped.
+
+### Version
+
+- 2.16.6 → 2.16.7
+
 ## 2.16.6 (2026-07-14)
 
 P1.3 (partial) — extract `ProgressPresenter`. Internal refactor; no CLI surface change. Second step of the `GlobalBatchProcessor` god-class split.

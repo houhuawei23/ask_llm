@@ -1,4 +1,4 @@
-# Ask LLM v2.16.6
+# Ask LLM v2.16.7
 
 A modern command-line tool for calling multiple LLM APIs (DeepSeek, Qwen, etc.) with an elegant interface.
 
