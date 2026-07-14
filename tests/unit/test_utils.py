@@ -18,6 +18,16 @@ class TestTokenCounter:
         assert TokenCounter.count_words("Hello world") == 2
         assert TokenCounter.count_words("  Multiple   spaces  ") == 2
 
+    def test_get_encoding_falls_back_when_no_config(self):
+        """P2.6: no loaded config must not crash the hot path (embedded use)."""
+        from unittest.mock import patch
+
+        with patch("ask_llm.utils.token_counter.get_config_or_none", return_value=None):
+            # Empty/unknown model falls back to the default encoding, not RuntimeError.
+            assert TokenCounter._get_encoding("") == "cl100k_base"
+            assert TokenCounter._get_encoding("totally-unknown-model") == "cl100k_base"
+
+
     def test_count_characters(self):
         """Test character counting."""
         assert TokenCounter.count_characters("") == 0
@@ -87,7 +97,7 @@ class TestTokenCounter:
             TokenCounter.count_tokens("hello world", "deepseek-chat")
             TokenCounter.count_tokens("another sentence", "deepseek-chat")
         # Exactly one warning despite two calls
-        warning_calls = [c for c in mock_logger.warning.call_args_list]
+        warning_calls = list(mock_logger.warning.call_args_list)
         assert len(warning_calls) == 1
         assert "approximate" in warning_calls[0][0][0].lower()
 

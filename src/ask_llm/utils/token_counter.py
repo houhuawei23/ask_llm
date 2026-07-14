@@ -5,7 +5,7 @@ from typing import Any, ClassVar
 
 from loguru import logger
 
-from ask_llm.config.context import get_config
+from ask_llm.config.context import get_config_or_none
 from ask_llm.core.constants import APPROX_TOKEN_SAFETY_FACTOR, TOKEN_COUNT_CACHE_SIZE
 
 try:
@@ -15,6 +15,20 @@ try:
 except ImportError:
     TIKTOKEN_AVAILABLE = False
     logger.warning("tiktoken not available, using word count approximation")
+
+
+# Fallback encoding when no config is loaded (e.g. library / embedded use
+# without set_config). cl100k_base is the project's common default across
+# ENCODING_MAP. See ARCHITECTURE_REVIEW.md 4.2.3.
+_DEFAULT_ENCODING_FALLBACK = "cl100k_base"
+
+
+def _default_encoding() -> str:
+    """Configured default encoding, falling back when no config is loaded."""
+    lr = get_config_or_none()
+    if lr is not None:
+        return lr.unified_config.token.default_encoding
+    return _DEFAULT_ENCODING_FALLBACK
 
 
 class TokenCounter:
@@ -207,7 +221,7 @@ class TokenCounter:
             Encoding name
         """
         if not model:
-            return get_config().unified_config.token.default_encoding
+            return _default_encoding()
 
         model_lower = model.lower()
 
@@ -220,7 +234,7 @@ class TokenCounter:
             if key in model_lower:
                 return encoding
 
-        return get_config().unified_config.token.default_encoding
+        return _default_encoding()
 
     @classmethod
     def split_hard_by_max_tokens(

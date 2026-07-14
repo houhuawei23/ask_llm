@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.16.9 (2026-07-14)
+
+P2 (config de-globalization, incremental) — `TokenCounter` no longer requires a loaded config. Library/embedding hardening.
+
+### Fixed
+
+- **`TokenCounter._get_encoding` no longer crashes without a config.** The hot path called `get_config()` (which raises `RuntimeError` when no config is loaded) for empty / unknown model names. It now uses `get_config_or_none()` and falls back to `cl100k_base` (the project's common default across `ENCODING_MAP`), so token counting is usable in programmatic contexts that never call `set_config`. ARCHITECTURE_REVIEW.md §4.2.3.
+
+### Tests
+
+- Added `test_get_encoding_falls_back_when_no_config`. Fixed a pre-existing `C416` lint in the B2 approximate-token test. 413 passed, 1 skipped.
+
+### Version
+
+- 2.16.8 → 2.16.9
+
 ## 2.16.8 (2026-07-14)
 
 P2.7 — surface silent duplicate env-var mappings. First P2 (config) step. No CLI surface change.
