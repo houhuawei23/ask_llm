@@ -1,5 +1,30 @@
 # Changelog
 
+## 2.16.2 (2026-07-14)
+
+P1.1 / B1 — unify retry × fallback into a single shared-budget escalation. Fixes the highest-severity design defect in `docs/ARCHITECTURE_REVIEW.md` (§4.1.3).
+
+### Fixed
+
+- **B1 — retry × fallback call amplification.** The bounded runner and the in-worker fallback chain were two uncoordinated retry layers: when the runner retried a task, the worker re-walked the *entire* fallback chain from the primary, so each task could make up to `(max_retries + 1) × len(fallback_chain)` API calls (e.g. `max_retries=3` × a 3-config chain → up to 12 calls). The fallback chain and the retry budget now share a single escalation of at most `max_retries + 1` attempts: attempt *k* uses `configs[min(k, len-1)]` — a transient failure advances to the next config (or re-tries the last when the chain is shorter than the budget). Per-task API calls are bounded by the retry budget regardless of chain length. Terminal errors (auth, content filter, validation) still short-circuit immediately.
+
+### Changed
+
+- `GlobalBatchProcessor._process_single_global_task` now performs exactly one config attempt per call (previously walked the whole chain). Flat attempt records are threaded across runner retries via a per-run side dict (`attempt_history_by_task`).
+- Terminal failures now saturate `result.retry_count = max_retries` so the runner declines to schedule another attempt (replaces the in-worker `break`).
+
+### Behaviour note
+
+- Multi-config fallback tasks now advance the chain on transient failure instead of re-trying the same provider. **Single-config tasks are unchanged** — they retry the same provider up to `max_retries + 1` times, exactly as before. Net effect: lower API cost and gentler rate-limit pressure for multi-provider batches.
+
+### Tests
+
+- Rewrote `test_fallback_succeeds_when_primary_fails` and `test_all_configs_fail_returns_failed` to drive the new escalation via a `_escalate` helper. Added `test_single_config_retries_same_provider_within_budget` and a runner-level `test_process_global_tasks_bounded_calls_with_fallback_chain` asserting `total_calls <= n_tasks × (max_retries + 1)` (the review's P1 acceptance criterion). 397 passed, 1 skipped.
+
+### Version
+
+- 2.16.1 → 2.16.2
+
 ## 2.16.1 (2026-07-14)
 
 P1 execution-engine cleanup (internal refactor; no CLI surface change). Begins the P1 phase of `docs/ARCHITECTURE_REVIEW.md`.

@@ -576,71 +576,69 @@ class GlobalBatchProcessor:
         progress: Progress | None = None,
         progress_task_id: TaskID | None = None,
         input_tokens: int | None = None,
+        attempt_history_by_task: dict[int, list[AttemptRecord]] | None = None,
     ) -> BatchResult:
-        """
-        Process a single task, trying the primary config and any fallbacks.
+        """Process one escalation step of a task: attempt exactly ONE config.
 
-        Args:
-            task: Batch task with model_settings
-            provider_cache: Pre-built provider adapter cache
-            retry_count: Current retry count
-            progress: Rich Progress object for updating progress
-            progress_task_id: Task ID in progress bar
+        Shared-budget escalation (ARCHITECTURE_REVIEW.md B1 / P1.1): the
+        fallback chain and the retry budget are a *single* escalation of at most
+        ``max_retries + 1`` attempts. Attempt ``retry_count`` uses
+        ``configs[min(retry_count, len(configs) - 1)]`` — a transient failure
+        advances to the next config (or re-tries the last one when the chain is
+        shorter than the budget); a terminal failure (auth, content policy, …)
+        stops at once. The :class:`BoundedRetryRunner` drives ``retry_count`` and
+        the backoff heap; the worker itself never re-walks the chain, so the
+        number of API calls per task is bounded by the retry budget instead of
+        multiplying by the chain length.
+
+        ``attempt_history_by_task`` threads the flat attempt records across runner
+        retries (the worker is stateless between calls). May be ``None`` for an
+        isolated single-step call.
 
         Returns:
-            Batch result
+            Batch result for this step (success, transient failure, or terminal
+            failure with ``retry_count`` saturated to ``max_retries``).
         """
         if not task.model_settings:
             raise ValueError("Task must have model_settings for global batch processing")
 
         configs = [task.model_settings, *task.fallback_model_configs]
-        last_result: BatchResult | None = None
         # Flat attempt records (not BatchResults) — keeps the object graph acyclic
         # by construction, so no manual cycle-guard slicing is needed. See B7.
-        attempt_history: list[AttemptRecord] = []
-
-        for idx, model_config in enumerate(configs):
-            result = self._try_run_with_config(
-                task,
-                model_config,
-                provider_cache,
-                retry_count,
-                progress,
-                progress_task_id,
-                input_tokens,
-            )
-            attempt_history.append(AttemptRecord.from_result(result))
-            if result.status == TaskStatus.SUCCESS:
-                # History holds the *preceding* failed attempts; drop this run's own
-                # record (always the last element) for the success case.
-                result.attempt_history = attempt_history[:-1]
-                return result
-            last_result = result
-
-            # Stop fallback chain early for errors that won't be fixed by a
-            # different provider/model (e.g. bad API key or content policy).
-            if result.error_category and not should_fallback_for_error(result.error_category):
-                terminal = result.error_category.value
-                bind_context(LogContext(task_id=task.task_id, phase="global_batch")).warning(
-                    f"Stopping fallback chain at attempt {idx + 1}: terminal error category '{terminal}'"
-                )
-                break
-
-        final = last_result or BatchResult(
-            task_id=task.task_id,
-            prompt=task.prompt,
-            content=task.content,
-            output_filename=task.output_filename,
-            model_settings=task.model_settings,
-            status=TaskStatus.FAILED,
-            error="All provider/model configurations failed",
-            error_category=ErrorCategory.UNKNOWN,
+        history: list[AttemptRecord] = (
+            attempt_history_by_task.setdefault(task.task_id, [])
+            if attempt_history_by_task is not None
+            else []
         )
-        # ``final`` is ``last_result`` (the last attempted config); its own record
-        # is the last element of attempt_history, so exclude it. If the synthetic
-        # empty fallback was used, attempt_history is empty and this is a no-op.
-        final.attempt_history = attempt_history[:-1]
-        return final
+
+        model_config = configs[min(retry_count, len(configs) - 1)]
+        result = self._try_run_with_config(
+            task,
+            model_config,
+            provider_cache,
+            retry_count,
+            progress,
+            progress_task_id,
+            input_tokens,
+        )
+
+        history.append(AttemptRecord.from_result(result))
+        # History holds the *preceding* attempts; the current step's own record
+        # (always the last element) is excluded from the result's attempt_history.
+        result.attempt_history = history[:-1]
+
+        if result.status == TaskStatus.SUCCESS:
+            return result
+
+        # Terminal error: a different provider/model won't help. Stop escalating
+        # by saturating retry_count so the runner declines to schedule again.
+        if result.error_category and not should_fallback_for_error(result.error_category):
+            bind_context(LogContext(task_id=task.task_id, phase="global_batch")).warning(
+                f"Stopping escalation at attempt {retry_count + 1}: "
+                f"terminal error category '{result.error_category.value}'"
+            )
+            result.retry_count = self.max_retries
+        return result
 
     def process_global_tasks(
         self,
@@ -740,6 +738,11 @@ class GlobalBatchProcessor:
             slot_bars = []
             free_slots = None  # type: ignore[assignment]
 
+        # Flat attempt records accumulated across runner retries (B1 / P1.1). The
+        # worker is stateless between calls; this side channel threads history so
+        # the final result's attempt_history captures every preceding attempt.
+        attempt_history_by_task: dict[int, list[AttemptRecord]] = {}
+
         try:
 
             def _worker(task: BatchTask, retry_count: int) -> BatchResult:
@@ -768,6 +771,7 @@ class GlobalBatchProcessor:
                         progress,
                         progress_task_id,
                         input_tokens,
+                        attempt_history_by_task,
                     )
                 finally:
                     if (

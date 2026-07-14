@@ -55,6 +55,32 @@ def _patch_rate_limiter():
     return patch("ask_llm.core.batch_processor.get_global_rate_limiter", return_value=limiter)
 
 
+def _escalate(processor, task, provider_cache, *, max_retries):
+    """Drive the shared-budget escalation the way ``BoundedRetryRunner`` does.
+
+    Each step attempts exactly one config; transient failures advance
+    ``retry_count``, terminal failures stop at once (the worker saturates
+    ``retry_count`` to ``max_retries``). Mirrors the runner's retry gate so unit
+    tests can exercise a full escalation without spinning up the thread pool.
+    """
+    history: dict[int, list] = {}
+    retry_count = 0
+    while True:
+        result = processor._process_single_global_task(
+            task,
+            provider_cache,
+            retry_count=retry_count,
+            attempt_history_by_task=history,
+        )
+        if result.status == TaskStatus.SUCCESS:
+            return result
+        # Runner gate: stop once the retry budget is exhausted. A terminal error
+        # saturates result.retry_count to max_retries, so this also short-circuits.
+        if result.retry_count >= max_retries:
+            return result
+        retry_count += 1
+
+
 def test_primary_succeeds_fallback_not_used():
     task = _make_task(fallback_configs=[ModelConfig(provider="fallback", model="model-b")])
     processor = GlobalBatchProcessor()
@@ -114,18 +140,30 @@ def test_fallback_succeeds_when_primary_fails():
             return proc
 
         mock_rp.side_effect = side_effect
-        result = processor._process_single_global_task(task, provider_cache, retry_count=0)
+        # Shared-budget escalation: primary (attempt 0) fails transiently, then
+        # fallback (attempt 1) succeeds.
+        result = _escalate(processor, task, provider_cache, max_retries=processor.max_retries)
 
     assert result.status == TaskStatus.SUCCESS
     assert result.response == "fallback result"
     assert result.model_settings.provider == "fallback"
     assert result.model_settings.model == "model-b"
     assert called == ["primary/model-a", "fallback/model-b"]
+    # The successful result's attempt_history holds the preceding primary failure.
+    assert len(result.attempt_history) == 1
+    assert result.attempt_history[0].provider == "primary"
 
 
 def test_all_configs_fail_returns_failed():
+    """B1 regression: shared budget bounds calls by retry budget, not x chain length.
+
+    With ``max_retries=3`` and a 2-config fallback chain, the task must make at
+    most ``max_retries + 1 == 4`` API calls (primary once, then the last config
+    retried for the remaining budget) -- never ``(max_retries + 1) * len(chain)
+    == 8`` as the old two-layer retry produced.
+    """
     task = _make_task(fallback_configs=[ModelConfig(provider="fallback", model="model-b")])
-    processor = GlobalBatchProcessor()
+    processor = GlobalBatchProcessor(max_retries=3)
     primary = _make_provider("primary", "model-a")
     fallback = _make_provider("fallback", "model-b")
     provider_cache: dict[str, Any] = {
@@ -138,15 +176,17 @@ def test_all_configs_fail_returns_failed():
         _patch_token_helpers(),
         patch("ask_llm.core.batch_processor.RequestProcessor") as mock_rp,
     ):
+        called = []
 
         def side_effect(provider):
+            called.append(provider.name)
             proc = MagicMock()
             proc.provider = provider
             proc.process.side_effect = RuntimeError(f"{provider.name} down")
             return proc
 
         mock_rp.side_effect = side_effect
-        result = processor._process_single_global_task(task, provider_cache, retry_count=0)
+        result = _escalate(processor, task, provider_cache, max_retries=processor.max_retries)
 
     assert result.status == TaskStatus.FAILED
     assert result.error is not None
@@ -154,13 +194,56 @@ def test_all_configs_fail_returns_failed():
     assert result.model_settings.provider == "fallback"
     assert result.model_settings.model == "model-b"
     assert result.error_category == ErrorCategory.UNKNOWN
+    # B1 invariant: 4 calls == max_retries + 1, NOT 8.
+    assert len(called) == 4
+    # attempt 0 = primary; attempts 1..3 retry the last config (fallback).
+    assert called == [
+        "primary/model-a",
+        "fallback/model-b",
+        "fallback/model-b",
+        "fallback/model-b",
+    ]
     # attempt_history records the *preceding* attempts (flat AttemptRecords), not
-    # the final result itself.
-    assert len(result.attempt_history) == 1
+    # the final result itself -- 3 preceding attempts here.
+    assert len(result.attempt_history) == 3
     assert result.attempt_history[0].provider == "primary"
     assert all(r.error_category == ErrorCategory.UNKNOWN for r in result.attempt_history)
     # Must serialize without circular references.
     result.model_dump(mode="json")
+
+
+def test_single_config_retries_same_provider_within_budget():
+    """B1: a single-config task retries the same provider, bounded by the budget.
+
+    No fallback chain, so every attempt re-uses the primary. Total calls ==
+    ``max_retries + 1`` (behaviour unchanged from before the escalation unify).
+    """
+    task = _make_task()  # no fallbacks
+    processor = GlobalBatchProcessor(max_retries=2)
+    primary = _make_provider("primary", "model-a")
+    provider_cache: dict[str, Any] = {"primary/model-a": primary}
+
+    with (
+        _patch_rate_limiter(),
+        _patch_token_helpers(),
+        patch("ask_llm.core.batch_processor.RequestProcessor") as mock_rp,
+    ):
+        called = []
+
+        def side_effect(provider):
+            called.append(provider.name)
+            proc = MagicMock()
+            proc.provider = provider
+            proc.process.side_effect = RuntimeError("primary down")
+            return proc
+
+        mock_rp.side_effect = side_effect
+        result = _escalate(processor, task, provider_cache, max_retries=processor.max_retries)
+
+    assert result.status == TaskStatus.FAILED
+    assert "primary down" in (result.error or "")
+    # 3 calls == max_retries + 1, all on the primary.
+    assert called == ["primary/model-a", "primary/model-a", "primary/model-a"]
 
 
 def test_no_fallback_returns_failed_on_primary_failure():
@@ -311,3 +394,60 @@ def test_process_global_tasks_creates_per_worker_progress_bars():
     assert len(results) == 20
     # Bars created == max_workers (4), NOT task count (20).
     assert add_task_counter["n"] == 4
+
+
+def test_process_global_tasks_bounded_calls_with_fallback_chain():
+    """B1 (runner-level): a fallback chain must not multiply API calls by chain length.
+
+    Each task has a 2-config fallback chain and always fails with a transient
+    error. Total API calls must stay <= ``n_tasks * (max_retries + 1)`` — never
+    ``n_tasks * (max_retries + 1) * len(chain)`` as the old two-layer retry did.
+    This is the ARCHITECTURE_REVIEW.md P1 acceptance criterion.
+    """
+    max_retries = 2
+    n_tasks = 5
+    tasks = [
+        BatchTask(
+            task_id=i,
+            prompt="p",
+            content="c",
+            model_settings=ModelConfig(provider="primary", model="model-a"),
+            fallback_model_configs=[ModelConfig(provider="fallback", model="model-b")],
+        )
+        for i in range(n_tasks)
+    ]
+    processor = GlobalBatchProcessor(max_workers=4, max_retries=max_retries)
+    cm = MagicMock()
+    cm.config.get_provider_config.return_value = ProviderConfig(
+        api_provider="primary",
+        api_base="https://api.primary.com/v1",
+        api_key="sk-test",
+        models=["model-a"],
+    )
+    primary = _make_provider("primary", "model-a")
+    call_counter = {"n": 0}
+
+    with (
+        patch("rich.progress.Progress"),
+        patch("ask_llm.utils.provider_cache.create_provider_adapter", return_value=primary),
+        _patch_rate_limiter() as limiter_patch,
+        _patch_token_helpers(),
+        patch("ask_llm.core.batch_processor.RequestProcessor") as mock_rp,
+    ):
+        limiter_patch.return_value.burst_for.return_value = 100
+
+        def side_effect(provider):
+            call_counter["n"] += 1
+            proc = MagicMock()
+            proc.provider = provider
+            proc.process.side_effect = RuntimeError("connection timeout")
+            return proc
+
+        mock_rp.side_effect = side_effect
+        results = processor.process_global_tasks(tasks, cm, show_progress=True)
+
+    assert len(results) == n_tasks
+    assert all(r.status == TaskStatus.FAILED for r in results)
+    # B1 invariant: <= n_tasks * (max_retries + 1) == 5 * 3 == 15.
+    # Old two-layer retry would have made 5 * 3 * 2 == 30.
+    assert call_counter["n"] <= n_tasks * (max_retries + 1)
