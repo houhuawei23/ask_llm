@@ -374,7 +374,7 @@ def test_process_global_tasks_creates_per_worker_progress_bars():
         return add_task_counter["n"]  # unique TaskID per bar
 
     with (
-        patch("rich.progress.Progress") as mock_progress_cls,
+        patch("ask_llm.core.progress_presenter.Progress") as mock_progress_cls,
         patch("ask_llm.utils.provider_cache.create_provider_adapter", return_value=primary),
         _patch_rate_limiter() as limiter_patch,
         _patch_token_helpers(),
@@ -428,7 +428,7 @@ def test_process_global_tasks_bounded_calls_with_fallback_chain():
     call_counter = {"n": 0}
 
     with (
-        patch("rich.progress.Progress"),
+        patch("ask_llm.core.progress_presenter.Progress"),
         patch("ask_llm.utils.provider_cache.create_provider_adapter", return_value=primary),
         _patch_rate_limiter() as limiter_patch,
         _patch_token_helpers(),

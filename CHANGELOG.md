@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.16.6 (2026-07-14)
+
+P1.3 (partial) — extract `ProgressPresenter`. Internal refactor; no CLI surface change. Second step of the `GlobalBatchProcessor` god-class split.
+
+### Added
+
+- `ask_llm.core.progress_presenter.ProgressPresenter` (+ `NullProgressPresenter`) — owns the `rich.Progress` instance, the per-task display metadata, and the per-worker-slot bar pool (B6). The worker acquires a slot (relabels the bar), runs, and releases it. `NullProgressPresenter` is a no-op used when progress display is disabled.
+
+### Changed
+
+- `GlobalBatchProcessor.process_global_tasks` no longer builds the `Progress` / slot pool inline; it constructs a presenter and calls `acquire`/`release`/`start`/`stop`. God class shrank 771 → 720 LOC (834 → 720 across both P1.3 steps). Dropped now-unused imports (`queue`, the inline `rich.progress`/`rich.console` lazy imports).
+
+### Tests
+
+- Added `test_progress_presenter.py` (one bar per slot, acquire relabels + release returns slot, null presenter no-op). Updated the B6 + B1 integration tests to patch `ask_llm.core.progress_presenter.Progress` (the construction moved out of `batch_processor`). 410 passed, 1 skipped.
+
+### Version
+
+- 2.16.5 → 2.16.6
+
 ## 2.16.5 (2026-07-14)
 
 P1.3 (partial) — extract `StreamCollector`. Internal refactor; no CLI surface change. First step of the `GlobalBatchProcessor` god-class split (ARCHITECTURE_REVIEW.md §7.2 / P1.3).
