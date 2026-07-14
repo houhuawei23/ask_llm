@@ -140,6 +140,41 @@ class TestFileHandler:
         with pytest.raises(FileNotFoundError):
             FileHandler.read(temp_dir / "nonexistent.txt")
 
+    def test_write_progress_total_is_bytes_for_multibyte(self, temp_dir):
+        """B10: write-progress total must be byte length, not char count.
+
+        For multibyte (CJK) text bytes > chars; a char-count total made the
+        progress bar overshoot 100%. The bar total now equals the UTF-8 byte
+        length so it matches the byte-based increments.
+        """
+        from unittest.mock import patch
+
+        captured: dict = {}
+
+        class _FakeTqdm:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def update(self, _n):
+                pass
+
+        content = "中文" * 50  # 100 chars, but 300 UTF-8 bytes
+        with (
+            patch("ask_llm.utils.file_handler.tqdm", _FakeTqdm),
+            patch.object(FileHandler, "_get_chunk_size", return_value=10),
+            patch.object(FileHandler, "_get_tqdm_ncols", return_value=80),
+        ):
+            FileHandler._write_with_progress(temp_dir / "out.txt", content)
+
+        assert captured["total"] == len(content.encode("utf-8"))
+        assert captured["total"] == 300  # bytes, not 100 chars
+
     def test_write_file(self, temp_dir):
         """Test writing file."""
         test_file = temp_dir / "output.txt"

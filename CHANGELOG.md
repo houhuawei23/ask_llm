@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.16.11 (2026-07-14)
+
+B10 + B11 — last two correctness bugs from ARCHITECTURE_REVIEW.md §5. **All 11 load-bearing bugs are now fixed.**
+
+### Fixed
+
+- **B10 — write-progress bar overshot 100% on multibyte text.** `FileHandler._write_with_progress` set the bar `total` to the *character* count but incremented by UTF-8 *byte* length, so CJK text drove the bar past 100%. Total is now the byte length (`len(content.encode("utf-8"))`), matching the increments. (The read path was already correct — byte total from `stat().st_size`.) §4.5.7 / B10.
+- **B11 — silent checkpoint residue on full success.** `format_service.resume_from_checkpoint` wrapped `os.remove(checkpoint)` in `except OSError: pass`, so a failed removal was invisible while the user saw "全部完成". It now emits a warning naming the leftover checkpoint path (and that it can be deleted manually). §5 / B11.
+
+### Tests
+
+- Added `test_write_progress_total_is_bytes_for_multibyte` (B10) and `test_resume_body_checkpoint_remove_failure_warns` (B11). 415 passed, 1 skipped.
+
+### Version
+
+- 2.16.10 → 2.16.11
+
 ## 2.16.10 (2026-07-14)
 
 P2.6 — relocate `paper_explain_pipeline` out of `config/`. Internal module move; no CLI surface change.

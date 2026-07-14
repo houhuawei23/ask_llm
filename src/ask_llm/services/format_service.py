@@ -336,5 +336,9 @@ class FormatService:
             try:
                 os.remove(checkpoint_path)
                 console.print_info(f"已删除 checkpoint: {checkpoint_path}")
-            except OSError:
-                pass
+            except OSError as e:
+                # B11: don't swallow silently -- surface the residue so the user
+                # knows the checkpoint wasn't removed (and can delete it manually).
+                console.print_warning(
+                    f"全部完成，但未能删除 checkpoint {checkpoint_path}: {e}（可手动删除）"
+                )

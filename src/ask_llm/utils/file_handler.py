@@ -128,7 +128,9 @@ class FileHandler:
     @classmethod
     def _write_with_progress(cls, path: Path, content: str) -> None:
         """Write file with progress bar."""
-        total = len(content)
+        # B10: total must be in bytes to match pbar.update(len(chunk.encode())).
+        # Using character count made multibyte text (CJK) overshoot 100%.
+        total = len(content.encode("utf-8"))
         written = 0
 
         with (
