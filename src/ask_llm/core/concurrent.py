@@ -11,6 +11,7 @@ reused across file/chunk layers without nesting executors.
 from __future__ import annotations
 
 import heapq
+import signal
 import threading
 import time
 from collections import deque
@@ -35,6 +36,7 @@ class RunMetrics:
     retried: int = 0
     total_latency: float = 0.0
     average_latency: float = 0.0
+    interrupted: bool = False
 
 
 def exponential_backoff_seconds(
@@ -145,50 +147,79 @@ class BoundedRetryRunner(Generic[TTask, TResult]):
 
             results.append(result)
 
-        with ThreadPoolExecutor(
-            max_workers=self.max_workers,
-            thread_name_prefix="ask-llm-bounded",
-        ) as executor:
-            while True:
-                # Move retries whose time has come back to the pending queue.
-                now = time.monotonic()
-                while retry_heap and retry_heap[0][0] <= now:
-                    _, task, retry_count = heapq.heappop(retry_heap)
-                    pending.append((task, retry_count))
+        # B5: graceful interrupt. On Ctrl-C the runner stops scheduling new work
+        # and drains in-flight tasks, then returns the partial results instead of
+        # re-raising — so callers can persist a checkpoint and resume later. The
+        # prior handler is restored immediately, so a second Ctrl-C hard-kills.
+        # Only the main thread can install a signal handler.
+        interrupted = False
 
-                # Submit as many pending tasks as the pool allows.
-                while pending and len(inflight) < self.max_workers:
-                    task, retry_count = pending.popleft()
-                    _submit(task, retry_count)
+        def _request_stop(_signum: int, _frame: Any) -> None:
+            nonlocal interrupted
+            interrupted = True
+            if prev_handler is not None:
+                signal.signal(signal.SIGINT, prev_handler)
 
-                if exception_during_run is not None:
-                    raise exception_during_run
+        install_handler = threading.current_thread() is threading.main_thread()
+        prev_handler = signal.getsignal(signal.SIGINT) if install_handler else None
+        if install_handler:
+            signal.signal(signal.SIGINT, _request_stop)
+        try:
+            with ThreadPoolExecutor(
+                max_workers=self.max_workers,
+                thread_name_prefix="ask-llm-bounded",
+            ) as executor:
+                while True:
+                    # Move retries whose time has come back to the pending queue.
+                    if not interrupted:
+                        now = time.monotonic()
+                        while retry_heap and retry_heap[0][0] <= now:
+                            _, task, retry_count = heapq.heappop(retry_heap)
+                            pending.append((task, retry_count))
 
-                if not inflight:
-                    if not pending and not retry_heap:
-                        break
-                    # Nothing in flight; wait for the next retry to become ready.
+                    # Submit as many pending tasks as the pool allows.
+                    if not interrupted:
+                        while pending and len(inflight) < self.max_workers:
+                            task, retry_count = pending.popleft()
+                            _submit(task, retry_count)
+
+                    if exception_during_run is not None:
+                        raise exception_during_run
+
+                    if not inflight:
+                        if interrupted or (not pending and not retry_heap):
+                            break
+                        # Nothing in flight; wait for the next retry to become ready.
+                        if retry_heap:
+                            sleep_for = max(0.0, retry_heap[0][0] - time.monotonic())
+                            if sleep_for > 0:
+                                time.sleep(sleep_for)
+                        continue
+
+                    # Wait until either a task finishes or the next retry is due.
+                    timeout: float | None = None
                     if retry_heap:
-                        sleep_for = max(0.0, retry_heap[0][0] - time.monotonic())
-                        if sleep_for > 0:
-                            time.sleep(sleep_for)
-                    continue
+                        timeout = max(0.0, retry_heap[0][0] - time.monotonic())
 
-                # Wait until either a task finishes or the next retry is due.
-                timeout: float | None = None
-                if retry_heap:
-                    timeout = max(0.0, retry_heap[0][0] - time.monotonic())
+                    done, _ = wait(
+                        list(inflight.keys()),
+                        return_when=FIRST_COMPLETED,
+                        timeout=timeout,
+                    )
+                    for future in done:
+                        _process_future(future)
 
-                done, _ = wait(
-                    list(inflight.keys()),
-                    return_when=FIRST_COMPLETED,
-                    timeout=timeout,
-                )
-                for future in done:
-                    _process_future(future)
+                    if exception_during_run is not None:
+                        raise exception_during_run
+        finally:
+            if install_handler and prev_handler is not None:
+                signal.signal(signal.SIGINT, prev_handler)
 
-                if exception_during_run is not None:
-                    raise exception_during_run
+        if interrupted:
+            logger.info(
+                f"Interrupted (Ctrl-C): returning {len(results)}/{len(tasks)} "
+                "completed results; in-flight tasks were drained. Resume to continue."
+            )
 
         results.sort(key=order_key)
         total_time = time.perf_counter() - start_time
@@ -199,6 +230,7 @@ class BoundedRetryRunner(Generic[TTask, TResult]):
             retried=retried_count,
             total_latency=total_time,
             average_latency=total_time / len(tasks) if tasks else 0.0,
+            interrupted=interrupted,
         )
         return results, metrics
 

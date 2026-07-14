@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.16.4 (2026-07-14)
+
+P1.7 / B5 — checkpoint survives Ctrl-C. Fixes the "resumable on interrupt" gap (ARCHITECTURE_REVIEW.md §4.1.4 / B5).
+
+### Fixed
+
+- **B5 — Ctrl-C no longer discards all batch progress.** `BoundedRetryRunner` now installs a SIGINT handler (main thread only): on the first Ctrl-C it sets an interrupt flag, stops scheduling new tasks, drains the in-flight tasks to completion, and returns the partial results instead of re-raising `KeyboardInterrupt`. The prior handler is restored immediately, so a second Ctrl-C hard-interrupts. New `RunMetrics.interrupted` flag signals the partial run.
+- **`batch` and `trans` services keep the checkpoint on interrupt.** Previously the post-run unlink (`if not new_failed: unlink`) could delete the checkpoint after a partial interrupted run. Both services now check `last_metrics.interrupted`: on interrupt the checkpoint is kept and a resume hint is printed; unlink happens only on a clean, fully-successful run. Existing resume logic already handles partial result sets, so interrupted tasks are re-run on `--resume`.
+
+### Tests
+
+- Added `test_sigint_returns_partial_results_and_drains_inflight` (simulates Ctrl-C mid-run, asserts `interrupted` + partial results + drained in-flight) and `test_normal_run_not_marked_interrupted`. 401 passed, 1 skipped.
+
+### Version
+
+- 2.16.3 → 2.16.4
+
 ## 2.16.3 (2026-07-14)
 
 P1.6 — unify `RequestMetadata` construction (B8 root-cause finish). Internal refactor; no CLI surface change.

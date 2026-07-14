@@ -490,8 +490,14 @@ class TranslationService:
 
         retries = getattr(processor, "last_metrics", None)
         retry_count = retries.retried if retries is not None else 0
+        interrupted = getattr(retries, "interrupted", False)
 
-        if failed_count == 0:
+        # B5: keep the checkpoint on interrupt so partial progress survives Ctrl-C.
+        if interrupted:
+            console.print_warning(
+                f"翻译中断: 已保存进度到 {checkpoint_path}，使用 --resume 继续。"
+            )
+        elif failed_count == 0:
             Path(checkpoint_path).unlink(missing_ok=True)
 
         return self._export_text_file(

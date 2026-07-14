@@ -306,7 +306,16 @@ def run_batch_from_config(
     # Rebuild full result list including prior successful results from resume
     all_results_list = list(checkpoint.successful_results) + new_failed
 
-    if not new_failed:
+    # B5: keep the checkpoint on interrupt so progress survives Ctrl-C; only
+    # remove it on a clean, fully-successful run.
+    interrupted = getattr(global_processor.last_metrics, "interrupted", False)
+    if interrupted:
+        saved = len(checkpoint.successful_results)
+        console.print_warning(
+            f"Interrupted: {saved}/{len(tasks)} tasks saved to checkpoint "
+            f"{checkpoint_path}. Re-run with --resume to continue."
+        )
+    elif not new_failed:
         Path(checkpoint_path).unlink(missing_ok=True)
         console.print_info(f"All tasks succeeded. Removed checkpoint: {checkpoint_path}")
 

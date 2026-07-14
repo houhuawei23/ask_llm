@@ -10,7 +10,7 @@
 | 阶段 | 状态 | 版本 |
 |------|------|------|
 | **P0** 承载性 bug 止血 | ✅ 已完成 | v2.16.0 (2026-07-14) |
-| **P1** 执行引擎统一 | 🔄 进行中 | v2.16.1–2.16.3 (2026-07-14) |
+| **P1** 执行引擎统一 | 🔄 进行中 | v2.16.1–2.16.4 (2026-07-14) |
 | P2 配置去全局 + 单一对象 | ⏳ 待开始 | — |
 | P3 Markdown 单一管线 | ⏳ 待开始 | — |
 | P4 服务层/引擎/导出器收尾 | ⏳ 待开始 | — |
@@ -21,7 +21,8 @@
 - ✅ P1.7 — 删除 `batch_processor.py` 重复的 `TYPE_CHECKING` 块。死代码审计结论：`ProviderRetryRegistry.set` / `BoundedRetryRunner.run` / `core/batch.py` shim 均有调用方（单测覆盖或 ~20 模块导入），保留。
 - ✅ **P1.1 / B1** — retry×fallback 调用放大统一为**共享预算升级**（用户确认采用省钱语义）：回退链与重试预算共用 `max_retries+1` 次总预算，第 k 次尝试 `configs[min(k,len-1)]`。单 config 任务行为不变；多 config 任务瞬时错误改为推进链而非重试同 provider。terminal 错误（auth/content/validation）短路。runner 级回归测试断言 `total_calls ≤ tasks×(max_retries+1)`。
 - ✅ **P1.6** — 三处 `RequestMetadata(...)` 构造合并为 `RequestMetadata.from_execution(...)`；温度解析三元（v2.15.1 崩溃路径）收口到唯一工厂。B8 根因收尾。
-- ⏳ 其余 P1 项（上帝类拆分为 Scheduler/TaskExecutor/FallbackPolicy/ProgressPresenter、per-`(provider,model)` 池 sizing、增量 checkpoint B5、`FormatCheckpoint` 迁移）待办。
+- ✅ **B5** — Ctrl-C 不再丢全部进度：`BoundedRetryRunner` 装 SIGINT 处理器（仅主线程），首次中断停止调度新任务、排空在飞任务、返回部分结果（不 re-raise `KeyboardInterrupt`），二次中断硬杀。新增 `RunMetrics.interrupted`。`batch`/`trans` 服务检测中断后保留 checkpoint、打印 resume 提示，仅全成功才 unlink。
+- ⏳ 其余 P1 项（上帝类拆分为 Scheduler/TaskExecutor/FallbackPolicy/ProgressPresenter、per-`(provider,model)` 池 sizing）待办。`FormatCheckpoint` 迁移（P1.9）已评估为领域不匹配，暂缓。
 
 **P0 已落地（v2.16.0）**：B2（CJK 令牌近似+安全系数）、B3（`${VAR}` 告警 + gate 覆盖 trans/paper）、B4（splitter 代码栅栏感知）、B6（per-worker 进度条）、B7（`attempt_history` 改为扁平 `AttemptRecord`）、B8（provider-cache 接缝类型化）、B9（限流超时可配置）、密钥轮换清缓存。完整说明见 `CHANGELOG.md` 2.16.0 条目。
 **P0 延后**：完整 `SecretStr` 迁移 → P2（与配置重构 + 引擎接缝收口一同进行）。
