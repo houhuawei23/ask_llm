@@ -1,5 +1,35 @@
 # Changelog
 
+## 2.16.12 (2026-07-15)
+
+P2 continuation — complete `get_config()` de-globalization. All remaining raising `get_config()` call sites now fall back to built-in defaults, so the core library can be used without an active CLI config. Also fixed a latent B10 infinite-loop bug exposed by the fallback tests.
+
+### Changed
+
+- **P2 — remaining `get_config()` sites migrated to `get_config_or_none()` with defaults.** Replaced raising calls in:
+  - `utils.file_handler` (`chunk_size`, `tqdm_ncols`, `default_output_suffix`)
+  - `core.format_markdown_file` (`formatted_suffix`)
+  - `core.md_heading_formatter` (`format_heading` defaults)
+  - `core.processor` (`default_prompt_template`)
+  - `core.md_body_formatter` (`format_body` defaults)
+  - `core.text_splitter` (`max_chunk_size`)
+  - `services.format_service` (`formatted_suffix`)
+  - `core.paper_explain_pipeline`, `core.paper_explain`, `utils.prompt_resolver` (`project_root_markers`)
+  Each module now carries private `_DEFAULT_*` constants matching `default_config.yml`, so the code works as a library even when `set_config()` was never called. `config.context.get_config()` is retained for callers that truly require an active config.
+
+### Fixed
+
+- **B10 — latent infinite loop in `_write_with_progress` for multibyte text.** The previous byte-total / char-increment mismatch could make `written` (chars) lag `total` (bytes) and slice an empty chunk forever. The writer now slices by characters (preserving UTF-8 boundaries) while advancing a separate byte counter, so the loop always terminates and the progress bar stays accurate. Added safety `break` on empty chunk.
+- **Pre-existing RUF012 in `text_splitter.py`** — `HEADING_LEVELS` is now annotated `ClassVar[list[int]]`.
+
+### Tests
+
+- Updated `tests/unit/test_format_service.py` patch targets from `get_config` to `get_config_or_none`. Full suite: 415 passed, 1 skipped.
+
+### Version
+
+- 2.16.11 → 2.16.12
+
 ## 2.16.11 (2026-07-14)
 
 B10 + B11 — last two correctness bugs from ARCHITECTURE_REVIEW.md §5. **All 11 load-bearing bugs are now fixed.**

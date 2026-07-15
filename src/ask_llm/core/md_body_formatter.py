@@ -11,7 +11,7 @@ from datetime import datetime
 
 from loguru import logger
 
-from ask_llm.config.context import get_config
+from ask_llm.config.context import get_config_or_none
 from ask_llm.core.concurrent import run_bounded_with_retries
 from ask_llm.core.format_checkpoint import (
     CHECKPOINT_VERSION,
@@ -24,6 +24,20 @@ from ask_llm.core.markdown_token_splitter import MarkdownTokenSplitter
 from ask_llm.core.models import RequestMetadata
 from ask_llm.core.processor import RequestProcessor
 from ask_llm.core.text_splitter import TextChunk
+
+
+@dataclass(frozen=True)
+class _FormatBodyDefaults:
+    """Built-in defaults matching default_config.yml."""
+
+    max_chunk_tokens: int = 2400
+    concurrency: int = 32
+    retries: int = 3
+    retry_delay: float = 1.0
+    retry_delay_max: float = 10.0
+
+
+_DEFAULT_FORMAT_BODY = _FormatBodyDefaults()
 
 
 @dataclass
@@ -93,7 +107,8 @@ class BodyFormatter:
         self.prompt_template = prompt_template
         self.prompt_file = prompt_file
 
-        fb_config = get_config().unified_config.format_body
+        lr = get_config_or_none()
+        fb_config = lr.unified_config.format_body if lr is not None else _DEFAULT_FORMAT_BODY
         self.max_chunk_tokens = (
             max_chunk_tokens if max_chunk_tokens is not None else fb_config.max_chunk_tokens
         )

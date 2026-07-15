@@ -38,7 +38,7 @@ def test_resume_body_checkpoint_success_removes_checkpoint(service, mock_config,
     result.checkpoint_path = None
 
     with (
-        patch("ask_llm.services.format_service.get_config") as mock_get_config,
+        patch("ask_llm.services.format_service.get_config_or_none") as mock_get_config,
         patch("ask_llm.services.format_service.FormatCheckpoint") as mock_cls,
         patch("ask_llm.services.format_service.BodyFormatter") as mock_bf,
         patch("ask_llm.services.format_service.FileHandler") as mock_fh,
@@ -75,7 +75,7 @@ def test_resume_body_checkpoint_remove_failure_warns(service, mock_config, tmp_p
     result.checkpoint_path = None
 
     with (
-        patch("ask_llm.services.format_service.get_config") as mock_get_config,
+        patch("ask_llm.services.format_service.get_config_or_none") as mock_get_config,
         patch("ask_llm.services.format_service.FormatCheckpoint") as mock_cls,
         patch("ask_llm.services.format_service.BodyFormatter") as mock_bf,
         patch("ask_llm.services.format_service.FileHandler") as mock_fh,
@@ -139,7 +139,7 @@ def test_resume_body_partial_failure_keeps_checkpoint(service, mock_config, tmp_
     result.checkpoint_path = str(checkpoint_path)
 
     with (
-        patch("ask_llm.services.format_service.get_config") as mock_get_config,
+        patch("ask_llm.services.format_service.get_config_or_none") as mock_get_config,
         patch("ask_llm.services.format_service.FormatCheckpoint") as mock_cls,
         patch("ask_llm.services.format_service.BodyFormatter") as mock_bf,
         patch("ask_llm.services.format_service.FileHandler") as mock_fh,

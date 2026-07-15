@@ -1,14 +1,13 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
 """Retry policy abstraction for the bounded concurrent runner.
 
 Centralizes the previously-hardcoded transient-error keyword list so retry
 behavior can be customized per provider (e.g. Anthropic ``overloaded_error``)
 without modifying the runner internals.
 """
-
-from __future__ import annotations
-
-from dataclasses import dataclass, field
-
 
 # Default keywords indicating a transient / retryable error message.
 DEFAULT_TRANSIENT_KEYWORDS: tuple[str, ...] = (

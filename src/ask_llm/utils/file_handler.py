@@ -5,7 +5,13 @@ from pathlib import Path
 from loguru import logger
 from tqdm import tqdm
 
-from ask_llm.config.context import get_config
+from ask_llm.config.context import get_config_or_none
+
+# Built-in defaults matching default_config.yml so FileHandler can be used
+# without an active CLI config (e.g. library / embedded use).
+_DEFAULT_CHUNK_SIZE = 8192
+_DEFAULT_TQDM_NCOLS = 80
+_DEFAULT_OUTPUT_SUFFIX = "_output"
 
 
 class FileHandler:
@@ -14,12 +20,18 @@ class FileHandler:
     @classmethod
     def _get_chunk_size(cls) -> int:
         """Get chunk size from config."""
-        return get_config().unified_config.file.chunk_size
+        lr = get_config_or_none()
+        if lr is not None:
+            return lr.unified_config.file.chunk_size
+        return _DEFAULT_CHUNK_SIZE
 
     @classmethod
     def _get_tqdm_ncols(cls) -> int:
         """Get progress bar width from config."""
-        return get_config().unified_config.file.tqdm_ncols
+        lr = get_config_or_none()
+        if lr is not None:
+            return lr.unified_config.file.tqdm_ncols
+        return _DEFAULT_TQDM_NCOLS
 
     @classmethod
     def read(cls, path: str | Path, show_progress: bool = False) -> str:
@@ -115,7 +127,7 @@ class FileHandler:
             raise OSError(f"Failed to create directory for {path}: {e}") from e
 
         try:
-            if show_progress and len(content) > cls._get_chunk_size():
+            if show_progress and len(content.encode("utf-8")) > cls._get_chunk_size():
                 cls._write_with_progress(file_path, content)
             else:
                 file_path.write_text(content, encoding="utf-8")
@@ -128,26 +140,34 @@ class FileHandler:
     @classmethod
     def _write_with_progress(cls, path: Path, content: str) -> None:
         """Write file with progress bar."""
-        # B10: total must be in bytes to match pbar.update(len(chunk.encode())).
-        # Using character count made multibyte text (CJK) overshoot 100%.
-        total = len(content.encode("utf-8"))
-        written = 0
+        # B10: total and increments must be in bytes so multibyte text (CJK)
+        # does not overshoot 100%. We still slice by characters (so UTF-8
+        # sequences are never split mid-character) and advance a separate byte
+        # counter to match the byte-based progress total.
+        total_bytes = len(content.encode("utf-8"))
+        char_written = 0
+        byte_written = 0
+        chunk_size = cls._get_chunk_size()
 
         with (
             open(path, "w", encoding="utf-8") as f,
             tqdm(
-                total=total,
+                total=total_bytes,
                 unit="B",
                 unit_scale=True,
                 desc=f"Writing {path.name}",
                 ncols=cls._get_tqdm_ncols(),
             ) as pbar,
         ):
-            while written < total:
-                chunk = content[written : written + cls._get_chunk_size()]
+            while byte_written < total_bytes:
+                chunk = content[char_written : char_written + chunk_size]
+                if not chunk:
+                    break
+                chunk_bytes = chunk.encode("utf-8")
                 f.write(chunk)
-                written += len(chunk)
-                pbar.update(len(chunk.encode("utf-8")))
+                char_written += len(chunk)
+                byte_written += len(chunk_bytes)
+                pbar.update(len(chunk_bytes))
 
     @classmethod
     def generate_output_path(
@@ -171,7 +191,11 @@ class FileHandler:
             return str(custom_path)
 
         if suffix is None:
-            suffix = get_config().unified_config.file.default_output_suffix
+            lr = get_config_or_none()
+            if lr is not None:
+                suffix = lr.unified_config.file.default_output_suffix
+            else:
+                suffix = _DEFAULT_OUTPUT_SUFFIX
 
         input_file = Path(input_path)
         ext = input_file.suffix

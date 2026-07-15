@@ -7,8 +7,17 @@ from pathlib import Path
 
 from loguru import logger
 
-from ask_llm.config.context import get_config
+from ask_llm.config.context import get_config_or_none
 from ask_llm.utils.file_handler import FileHandler
+
+# Built-in default matching default_config.yml so @-path resolution works
+# without an active CLI config (e.g. library / embedded use).
+_DEFAULT_PROJECT_ROOT_MARKERS = (
+    "pyproject.toml",
+    "setup.py",
+    ".git",
+    "default_config.yml",
+)
 
 
 def resolve_prompt_file(prompt_path: str) -> Path:
@@ -29,9 +38,14 @@ def resolve_prompt_file(prompt_path: str) -> Path:
         current_dir = Path.cwd()
         project_root: Path | None = None
         try:
-            markers = get_config().unified_config.project_root_markers
+            lr = get_config_or_none()
+            markers = (
+                lr.unified_config.project_root_markers
+                if lr is not None
+                else _DEFAULT_PROJECT_ROOT_MARKERS
+            )
         except Exception:
-            markers = []
+            markers = _DEFAULT_PROJECT_ROOT_MARKERS
         for marker in markers:
             for parent in [current_dir, *list(current_dir.parents)]:
                 if (parent / marker).exists():

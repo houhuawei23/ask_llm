@@ -3,11 +3,16 @@
 import re
 from abc import ABC, abstractmethod
 from pathlib import Path
+from typing import ClassVar
 
 from loguru import logger
 from pydantic import BaseModel, Field
 
-from ask_llm.config.context import get_config
+from ask_llm.config.context import get_config_or_none
+
+# Built-in default matching default_config.yml so create_splitter works
+# without an active CLI config (e.g. tests / library use).
+_DEFAULT_MAX_CHUNK_SIZE = 2000
 
 
 class TextChunk(BaseModel):
@@ -76,7 +81,11 @@ class TextSplitter(ABC):
             TextSplitter instance
         """
         if max_chunk_size is None:
-            max_chunk_size = get_config().unified_config.text_splitter.max_chunk_size
+            lr = get_config_or_none()
+            if lr is not None:
+                max_chunk_size = lr.unified_config.text_splitter.max_chunk_size
+            else:
+                max_chunk_size = _DEFAULT_MAX_CHUNK_SIZE
         file_type = cls.detect_file_type(file_path)
         if file_type == "markdown":
             return MarkdownSplitter(max_chunk_size=max_chunk_size)
@@ -91,7 +100,7 @@ class MarkdownSplitter(TextSplitter):
 
     # Heading levels tried in order during binary splitting. Override in a
     # subclass to customize the priority/selection of heading levels.
-    HEADING_LEVELS: list[int] = [1, 2, 3, 4, 5, 6]
+    HEADING_LEVELS: ClassVar[list[int]] = [1, 2, 3, 4, 5, 6]
 
     def split(self, text: str) -> list[TextChunk]:
         """

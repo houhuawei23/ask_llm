@@ -18,6 +18,15 @@ from ask_llm.core.paper_explain_pipeline import (
     slugify_output_stem,
 )
 
+# Built-in default matching default_config.yml so @-path resolution works
+# without an active CLI config (e.g. library / embedded use).
+_DEFAULT_PROJECT_ROOT_MARKERS = (
+    "pyproject.toml",
+    "setup.py",
+    ".git",
+    "default_config.yml",
+)
+
 # Standard section keys (order for section runs)
 SECTION_ORDER: list[str] = [
     "abstract",
@@ -394,10 +403,15 @@ def resolve_prompt_path(
         root = project_root
         if root is None:
             try:
-                from ask_llm.config.context import get_config
+                from ask_llm.config.context import get_config_or_none
 
                 cwd = Path.cwd()
-                markers = get_config().unified_config.project_root_markers
+                lr = get_config_or_none()
+                markers = (
+                    lr.unified_config.project_root_markers
+                    if lr is not None
+                    else _DEFAULT_PROJECT_ROOT_MARKERS
+                )
                 for marker in markers:
                     for parent in [cwd, *list(cwd.parents)]:
                         if (parent / marker).exists():

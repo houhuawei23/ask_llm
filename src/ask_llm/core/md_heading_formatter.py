@@ -11,7 +11,7 @@ from typing import Any
 
 from loguru import logger
 
-from ask_llm.config.context import get_config
+from ask_llm.config.context import get_config_or_none
 from ask_llm.core.concurrent import run_bounded_with_retries
 from ask_llm.core.format_checkpoint import (
     FailedChunkInfo,
@@ -20,6 +20,21 @@ from ask_llm.core.format_checkpoint import (
     generate_checkpoint_path,
 )
 from ask_llm.core.processor import RequestProcessor
+
+
+@dataclass(frozen=True)
+class _FormatHeadingDefaults:
+    """Built-in defaults matching default_config.yml."""
+
+    batch_size: int = 160
+    concurrency: int = 8
+    context_heading_count: int = 5
+    retries: int = 3
+    retry_delay: float = 1.0
+    retry_delay_max: float = 10.0
+
+
+_DEFAULT_FORMAT_HEADING = _FormatHeadingDefaults()
 
 
 @dataclass
@@ -165,7 +180,8 @@ class HeadingFormatter:
         self.processor = processor
         self.prompt_template = prompt_template
         self.prompt_file = prompt_file
-        fh_config = get_config().unified_config.format_heading
+        lr = get_config_or_none()
+        fh_config = lr.unified_config.format_heading if lr is not None else _DEFAULT_FORMAT_HEADING
         self.batch_size = batch_size if batch_size is not None else fh_config.batch_size
         self.concurrency = concurrency if concurrency is not None else fh_config.concurrency
         self.retries = retries if retries is not None else fh_config.retries

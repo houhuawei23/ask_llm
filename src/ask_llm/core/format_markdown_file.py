@@ -10,7 +10,7 @@ from pathlib import Path
 
 from loguru import logger
 
-from ask_llm.config.context import get_config
+from ask_llm.config.context import get_config_or_none
 from ask_llm.core.format_checkpoint import FailedChunkInfo
 from ask_llm.core.md_body_formatter import BodyFormatter
 from ask_llm.core.md_heading_formatter import (
@@ -20,6 +20,9 @@ from ask_llm.core.md_heading_formatter import (
 )
 from ask_llm.core.processor import RequestProcessor
 from ask_llm.utils.file_handler import FileHandler
+
+# Built-in default matching default_config.yml for library use without set_config.
+_DEFAULT_FORMATTED_SUFFIX = "_formatted"
 
 
 @dataclass(frozen=True)
@@ -81,16 +84,21 @@ def _resolve_output_path(file_path: str, output: str | None, inplace: bool) -> s
     """Determine output path based on CLI options."""
     if inplace:
         return file_path
+    lr = get_config_or_none()
+    formatted_suffix = (
+        lr.unified_config.file.formatted_suffix
+        if lr is not None
+        else _DEFAULT_FORMATTED_SUFFIX
+    )
     if output:
         if Path(output).is_dir():
             input_file = Path(file_path)
-            formatted_suffix = get_config().unified_config.file.formatted_suffix
             output_name = f"{input_file.stem}{formatted_suffix}{input_file.suffix}"
             return str(Path(output) / output_name)
         return output
     return FileHandler.generate_output_path(
         file_path,
-        suffix=get_config().unified_config.file.formatted_suffix,
+        suffix=formatted_suffix,
     )
 
 

@@ -5,7 +5,7 @@ from collections.abc import Iterator
 
 from loguru import logger
 
-from ask_llm.config.context import get_config
+from ask_llm.config.context import get_config_or_none
 from ask_llm.core.models import (
     ChatHistory,
     MessageRole,
@@ -14,6 +14,10 @@ from ask_llm.core.models import (
 )
 from ask_llm.core.protocols import LLMProviderProtocol, ReasoningChunk
 from ask_llm.utils.token_counter import TokenCounter
+
+# Built-in default matching default_config.yml so RequestProcessor works
+# without an active CLI config (e.g. library / embedded use).
+_DEFAULT_PROMPT_TEMPLATE = "Please process the following text:\n\n{content}"
 
 
 class RequestProcessor:
@@ -39,7 +43,10 @@ class RequestProcessor:
         """Get default prompt template from config."""
         if self._default_prompt_template is not None:
             return self._default_prompt_template
-        return get_config().unified_config.general.default_prompt_template
+        lr = get_config_or_none()
+        if lr is not None:
+            return lr.unified_config.general.default_prompt_template
+        return _DEFAULT_PROMPT_TEMPLATE
 
     def _format_prompt(self, content: str, prompt_template: str | None = None) -> str:
         """

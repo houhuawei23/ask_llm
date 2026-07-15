@@ -19,7 +19,7 @@ from rich.progress import (
     TimeElapsedColumn,
 )
 
-from ask_llm.config.context import get_config
+from ask_llm.config.context import get_config_or_none
 from ask_llm.core.format_checkpoint import FormatCheckpoint
 from ask_llm.core.format_markdown_file import (
     FormatMarkdownOutcome,
@@ -30,6 +30,10 @@ from ask_llm.core.md_body_formatter import BodyFormatter
 from ask_llm.core.processor import RequestProcessor
 from ask_llm.utils.console import console
 from ask_llm.utils.file_handler import FileHandler
+
+# Built-in default matching default_config.yml so FormatService can resume
+# without an active CLI config (e.g. library / embedded use).
+_DEFAULT_FORMATTED_SUFFIX = "_formatted"
 
 
 def _print_format_summary(
@@ -315,10 +319,13 @@ class FormatService:
         elif output:
             out_path = output
         else:
-            out_path = FileHandler.generate_output_path(
-                source_file,
-                suffix=get_config().unified_config.file.formatted_suffix,
+            lr = get_config_or_none()
+            suffix = (
+                lr.unified_config.file.formatted_suffix
+                if lr is not None
+                else _DEFAULT_FORMATTED_SUFFIX
             )
+            out_path = FileHandler.generate_output_path(source_file, suffix=suffix)
 
         try:
             FileHandler.write(out_path, result.text, force=force or inplace)

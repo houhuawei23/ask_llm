@@ -10,8 +10,8 @@
 | 阶段 | 状态 | 版本 |
 |------|------|------|
 | **P0** 承载性 bug 止血 | ✅ 已完成 | v2.16.0 (2026-07-14) |
-| **P1** 执行引擎统一 | 🔄 进行中 | v2.16.1–2.16.7 (2026-07-14) |
-| **P2** 配置去全局 + 单一对象 | 🔄 进行中 | v2.16.8–2.16.10 (2026-07-14) |
+| **P1** 执行引擎统一 | ✅ 已完成 | v2.16.1–2.16.7 (2026-07-14) |
+| **P2** 配置去全局 + 单一对象 | 🔄 进行中 | v2.16.8–2.16.12 (2026-07-15) |
 | P3 Markdown 单一管线 | ⏳ 待开始 | — |
 | P4 服务层/引擎/导出器收尾 | ⏳ 待开始 | — |
 
@@ -23,19 +23,20 @@
 - ✅ **P1.6** — 三处 `RequestMetadata(...)` 构造合并为 `RequestMetadata.from_execution(...)`；温度解析三元（v2.15.1 崩溃路径）收口到唯一工厂。B8 根因收尾。
 - ✅ **B5** — Ctrl-C 不再丢全部进度：`BoundedRetryRunner` 装 SIGINT 处理器（仅主线程），首次中断停止调度新任务、排空在飞任务、返回部分结果（不 re-raise `KeyboardInterrupt`），二次中断硬杀。新增 `RunMetrics.interrupted`。`batch`/`trans` 服务检测中断后保留 checkpoint、打印 resume 提示，仅全成功才 unlink。
 - 🔄 **P1.3（主体完成）** — 上帝类 834→347 LOC，拆出三个协作者：`StreamCollector`（流式+token 收集纯函数）、`ProgressPresenter`（`rich.Progress` + per-worker 槽位池）、`TaskExecutor`（单 config 执行：限流 acquire / adapter 查找 / 流式收集 / metadata / 鉴权错误去重）。`GlobalBatchProcessor` 收为瘦协调器（B1 升级 + 调度）。三者均可独立单测。
-- ⏳ P1.3 余项（Scheduler/FallbackPolicy 进一步拆分，可选）、per-`(provider,model)` 池 sizing（P1.4）待办。`FormatCheckpoint` 迁移（P1.9）已评估为领域不匹配，暂缓。
+- ✅ **P1 完成** — 执行引擎统一阶段结束。剩余可选优化：Scheduler/FallbackPolicy 进一步拆分（可选）、per-`(provider,model)` 池 sizing（P1.4）。`FormatCheckpoint` 迁移（P1.9）已评估为领域不匹配，暂缓。
 
-**P2 进度（v2.16.8）**：
+**P2 进度（v2.16.8–v2.16.12）**：
 - ✅ P2.7 — 冲突 env 覆盖告警：多个 env 变量映射同一 config key 时（如 `ASK_LLM_TRANSLATION_THREADS` 与 `ASK_LLM_TRANSLATION_MAX_CONCURRENT_API_CALLS`），`_apply_env_overrides` 检测并告警指明胜出者（迭代序最后者），不再静默。
 - ✅ P2（去全局，增量）— `TokenCounter._get_encoding` 不再要求 config 已加载：热路径改用 `get_config_or_none()` 并回退 `cl100k_base`，库化/嵌入式使用不再崩（§4.2.3）。
 - ✅ P2.6 — `paper_explain_pipeline.py` 从 `config/` 移到 `core/`（453 LOC 领域逻辑，非配置）；延迟 `get_config()` 读不变；4 处导入方更新（§4.2.6）。
-- ⏳ P2 余项（双叉 Config 合并、其余 `get_config()` 消费者迁移、`SecretStr` 迁移、loader 拆分、provenance）待办。
+- ✅ P2 — 全部剩余 `get_config()` 消费者迁移完成：`file_handler`、`format_markdown_file`、`md_heading_formatter`、`processor`、`md_body_formatter`、`text_splitter`、`format_service`、`paper_explain_pipeline`、`paper_explain`、`prompt_resolver` 均改用 `get_config_or_none()` 并携带与 `default_config.yml` 一致的本地默认值。`config.context.get_config()` 仍保留给真正需要活动配置的调用方。
+- ⏳ P2 余项：`UnifiedConfig`/`AppConfig` 双叉合并、`SecretStr` 迁移、loader 拆分、provenance 待办。
 
 **P0 已落地（v2.16.0）**：B2（CJK 令牌近似+安全系数）、B3（`${VAR}` 告警 + gate 覆盖 trans/paper）、B4（splitter 代码栅栏感知）、B6（per-worker 进度条）、B7（`attempt_history` 改为扁平 `AttemptRecord`）、B8（provider-cache 接缝类型化）、B9（限流超时可配置）、密钥轮换清缓存。完整说明见 `CHANGELOG.md` 2.16.0 条目。
 **P0 延后**：完整 `SecretStr` 迁移 → P2（与配置重构 + 引擎接缝收口一同进行）。
 **未在 P0**：B1（retry×fallback 调用放大）、B5（增量 checkpoint）→ P1；B10/B11（外观）→ 随相关阶段。
 
-> 🎯 **里程碑（v2.16.11）**：§5 承载性 Bug 清单 B1–B11 **全部修复**（B1/B5/B7/B8 于 P1 结构性消失或修复；B2/B3/B4/B6/B9 P0 止血；B10/B11 v2.16.11 收尾）。剩余工作为结构性重构（P2 配置去全局、P3 Markdown 单一管线、P4 服务/引擎收尾），不再有已知承载性 bug。
+> 🎯 **里程碑（v2.16.12）**：§5 承载性 Bug 清单 B1–B11 **全部修复**；P2 `get_config()` 去全局化消费者迁移完成，核心库可无配置使用。剩余工作为结构性重构（P2 `UnifiedConfig`/`AppConfig` 双叉合并、`SecretStr`、loader 拆分；P3 Markdown 单一管线；P4 服务/引擎收尾），不再有已知承载性 bug。
 
 ---
 

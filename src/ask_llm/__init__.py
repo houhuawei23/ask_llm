@@ -1,6 +1,6 @@
 """Ask LLM - A flexible command-line tool for calling multiple LLM APIs."""
 
-__version__ = "2.16.11"
+__version__ = "2.16.12"
 __author__ = "Ask LLM Developer"
 __description__ = "A flexible command-line tool for calling multiple LLM APIs"
 
