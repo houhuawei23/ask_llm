@@ -11,7 +11,7 @@
 |------|------|------|
 | **P0** 承载性 bug 止血 | ✅ 已完成 | v2.16.0 (2026-07-14) |
 | **P1** 执行引擎统一 | ✅ 已完成 | v2.16.1–2.16.7 (2026-07-14) |
-| **P2** 配置去全局 + 单一对象 | 🔄 进行中 | v2.16.8–2.16.12 (2026-07-15) |
+| **P2** 配置去全局 + 单一对象 | 🔄 进行中 | v2.16.8–2.16.16 (2026-07-16) |
 | P3 Markdown 单一管线 | ⏳ 待开始 | — |
 | P4 服务层/引擎/导出器收尾 | ⏳ 待开始 | — |
 
@@ -30,7 +30,11 @@
 - ✅ P2（去全局，增量）— `TokenCounter._get_encoding` 不再要求 config 已加载：热路径改用 `get_config_or_none()` 并回退 `cl100k_base`，库化/嵌入式使用不再崩（§4.2.3）。
 - ✅ P2.6 — `paper_explain_pipeline.py` 从 `config/` 移到 `core/`（453 LOC 领域逻辑，非配置）；延迟 `get_config()` 读不变；4 处导入方更新（§4.2.6）。
 - ✅ P2 — 全部剩余 `get_config()` 消费者迁移完成：`file_handler`、`format_markdown_file`、`md_heading_formatter`、`processor`、`md_body_formatter`、`text_splitter`、`format_service`、`paper_explain_pipeline`、`paper_explain`、`prompt_resolver` 均改用 `get_config_or_none()` 并携带与 `default_config.yml` 一致的本地默认值。`config.context.get_config()` 仍保留给真正需要活动配置的调用方。
-- ⏳ P2 余项：`UnifiedConfig`/`AppConfig` 双叉合并、`SecretStr` 迁移、loader 拆分、provenance 待办。
+- ✅ P2.8 / B12（v2.16.13）— 修复生产级崩溃：`global_batch_runner` 与 `notebook_translator` 读取不存在的 `ConfigManager.unified_config`（AttributeError；测试用 MagicMock 掩盖）。`ConfigManager(app_config, unified_config)` 新增可选参数与只读属性，两处构造点（`cli_session`、`format_cmd`）均传入，限流配置真正到达 `GlobalBatchProcessor`。
+- ✅ P2.9（v2.16.14）— 配置单一对象：`UnifiedConfig` 吸收 `providers`/`default_provider`/`default_model`，`ConfigLoader.load` 单次校验（原先同一 dict 校验两遍、互相静默忽略对方字段）；`AppConfig` 改为派生视图（`_app_config_from_unified`，保留首 provider 回退告警）。
+- ✅ P2.10（v2.16.15）— `SecretStr` 迁移：`ProviderConfig.api_key` 静态存储为 `SecretStr`（repr/日志/json dump 全遮蔽）；新增 `get_api_key()` 与 `EngineConfigView`（llm_engine 边界一次性解包，repr 再遮蔽），6 处 `create_provider_adapter` 直连点全部收口。
+- ✅ P2.11（v2.16.16）— `loader.py` 拆分（§4.2.4）：613→311 LOC，新增 `config/env.py`（`${VAR}`+`ASK_LLM_*`）、`config/merge.py`、`config/providers_catalog.py`；`pricing.py`/`provider_specs.py` 改从 `config.env` 导入 `resolve_env_vars`。无行为变化。
+- ⏳ P2 余项：provenance（`_deep_merge` 记录每叶来源，`--debug-config` 真实报告）待办。
 
 **P0 已落地（v2.16.0）**：B2（CJK 令牌近似+安全系数）、B3（`${VAR}` 告警 + gate 覆盖 trans/paper）、B4（splitter 代码栅栏感知）、B6（per-worker 进度条）、B7（`attempt_history` 改为扁平 `AttemptRecord`）、B8（provider-cache 接缝类型化）、B9（限流超时可配置）、密钥轮换清缓存。完整说明见 `CHANGELOG.md` 2.16.0 条目。
 **P0 延后**：完整 `SecretStr` 迁移 → P2（与配置重构 + 引擎接缝收口一同进行）。

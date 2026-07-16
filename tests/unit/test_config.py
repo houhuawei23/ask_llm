@@ -71,7 +71,7 @@ class TestConfigLoader:
         try:
             os.environ["ASK_LLM_TRANSLATION_THREADS"] = "3"
             os.environ["ASK_LLM_TRANSLATION_MAX_CONCURRENT_API_CALLS"] = "7"
-            with patch("ask_llm.config.loader.logger") as mock_logger:
+            with patch("ask_llm.config.env.logger") as mock_logger:
                 load_result = ConfigLoader.load(sample_config_file)
             # MAX_CONCURRENT_API_CALLS is later in ENV_TO_CONFIG order -> wins.
             assert load_result.unified_config.translation.max_concurrent_api_calls == 7
@@ -91,7 +91,7 @@ class TestConfigLoader:
 
         try:
             os.environ["ASK_LLM_TRANSLATION_THREADS"] = "4"
-            with patch("ask_llm.config.loader.logger") as mock_logger:
+            with patch("ask_llm.config.env.logger") as mock_logger:
                 load_result = ConfigLoader.load(sample_config_file)
             assert load_result.unified_config.translation.max_concurrent_api_calls == 4
             warning_msgs = " ".join(

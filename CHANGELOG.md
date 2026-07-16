@@ -1,5 +1,26 @@
 # Changelog
 
+## 2.16.16 (2026-07-16)
+
+P2 structural — `config/loader.py` split by responsibility (review §4.2.4). No behavior change.
+
+### Changed
+
+- **`config/loader.py` 613 → 311 LOC**, now only orchestration: path resolution, YAML I/O, layer merge order, provider format conversion, single-pass validation.
+- **New `config/env.py`** (177 LOC) — `resolve_env_vars` (`${VAR}` expansion), `ENV_TO_CONFIG` mapping, `_apply_env_overrides`, `_parse_env_value`, and the P2.7 conflicting-env warnings.
+- **New `config/merge.py`** (45 LOC) — `_deep_merge` layered merge.
+- **New `config/providers_catalog.py`** (120 LOC) — `providers.yml` candidate paths + runtime-field extraction (`_load_providers_yml`).
+- `utils/pricing.py` and `utils/provider_specs.py` now import `resolve_env_vars` from `ask_llm.config.env` (its real home) instead of `ask_llm.config.loader`.
+- Tests that patched `ask_llm.config.loader.logger` for env-conflict warnings now patch `ask_llm.config.env.logger`.
+
+### Tests
+
+- Full suite: 417 passed, 1 skipped.
+
+### Version
+
+- Bumped to 2.16.16 in `pyproject.toml`, `src/ask_llm/__init__.py`, `README.md`.
+
 ## 2.16.15 (2026-07-16)
 
 P2 security — API keys are now `SecretStr` at rest. Keys stay masked in `repr()`, logs, and `model_dump(mode='json')`; the plain value is unwrapped exactly once at the llm_engine HTTP-client boundary.
