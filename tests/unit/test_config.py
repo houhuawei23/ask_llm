@@ -167,6 +167,18 @@ class TestConfigManager:
         assert manager.config == app_config
         assert manager.current_provider_name == "test"
 
+    def test_unified_config_wiring(self, app_config):
+        """B12 regression: ConfigManager exposes the unified config it was given."""
+        from ask_llm.config.unified_config import UnifiedConfig
+
+        manager = ConfigManager(app_config)
+        assert manager.unified_config is None
+
+        unified = UnifiedConfig()
+        manager = ConfigManager(app_config, unified)
+        assert manager.unified_config is unified
+        assert manager.unified_config.rate_limits is not None
+
     def test_set_provider(self, app_config):
         """Test setting provider."""
         # Create config with multiple providers

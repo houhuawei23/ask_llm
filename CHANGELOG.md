@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.16.13 (2026-07-16)
+
+P2 structural — first step of the config-object merge: `ConfigManager` now carries the unified config alongside `AppConfig`, fixing a production-crashing latent bug (B12).
+
+### Fixed
+
+- **B12 — `ConfigManager.unified_config` did not exist (AttributeError).** `core/global_batch_runner.py` and `utils/notebook_translator.py` read `config_manager.unified_config.rate_limits` on the trans/paper/batch hot path, but `ConfigManager` never defined the attribute — any real (non-mocked) run would crash with `AttributeError: 'ConfigManager' object has no attribute 'unified_config'`. Tests passed only because they used `MagicMock` or monkeypatched the attribute.
+
+### Changed
+
+- **`ConfigManager(app_config, unified_config=None)`** — new optional constructor arg and read-only `unified_config` property. Both production construction sites (`config/cli_session.py`, `cli/commands/format_cmd.py`) now pass `load_result.unified_config`, so rate limits actually reach `GlobalBatchProcessor`. Single-arg constructions (tests, tooling) remain valid.
+
+### Tests
+
+- New `test_unified_config_wiring` regression test in `tests/unit/test_config.py`. Full suite: 416 passed, 1 skipped.
+
+### Version
+
+- Bumped to 2.16.13 in `pyproject.toml`, `src/ask_llm/__init__.py`, `README.md`.
+
 ## 2.16.12 (2026-07-15)
 
 P2 continuation — complete `get_config()` de-globalization. All remaining raising `get_config()` call sites now fall back to built-in defaults, so the core library can be used without an active CLI config. Also fixed a latent B10 infinite-loop bug exposed by the fallback tests.

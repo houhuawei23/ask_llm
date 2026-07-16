@@ -22,7 +22,7 @@ def load_cli_session(
     """
     load_result = ConfigLoader.load(config_path)
     set_config(load_result)
-    config_manager = ConfigManager(load_result.app_config)
+    config_manager = ConfigManager(load_result.app_config, load_result.unified_config)
     return load_result, config_manager
 
 

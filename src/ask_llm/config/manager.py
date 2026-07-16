@@ -4,20 +4,25 @@ from typing import Any
 
 from loguru import logger
 
+from ask_llm.config.unified_config import UnifiedConfig
 from ask_llm.core.models import AppConfig, ProviderConfig
 
 
 class ConfigManager:
     """Manage application configuration with CLI overrides."""
 
-    def __init__(self, config: AppConfig):
+    def __init__(self, config: AppConfig, unified_config: UnifiedConfig | None = None):
         """
         Initialize with base configuration.
 
         Args:
             config: Base application configuration
+            unified_config: Unified (non-provider) configuration sections. Optional for
+                backward compatibility; callers that need rate limits or unified
+                sections should always pass it (load_cli_session does).
         """
         self._base_config = config
+        self._unified_config = unified_config
         self._current_provider: str = config.default_provider
         self._overrides: dict[str, Any] = {}
         # Track the source of each override for transparency/debugging.
@@ -28,6 +33,11 @@ class ConfigManager:
     def config(self) -> AppConfig:
         """Get base configuration."""
         return self._base_config
+
+    @property
+    def unified_config(self) -> UnifiedConfig | None:
+        """Get the unified (non-provider) configuration, if attached."""
+        return self._unified_config
 
     @property
     def current_provider_name(self) -> str:
