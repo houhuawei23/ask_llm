@@ -1,5 +1,6 @@
 """Core functionality for Ask LLM."""
 
+from ask_llm.core.binary_splitter import BinarySplitter, BudgetPolicy, TokenBudget
 from ask_llm.core.chat import ChatSession
 from ask_llm.core.md_heading_formatter import (
     HeadingApplier,
@@ -11,8 +12,6 @@ from ask_llm.core.models import AppConfig, ChatHistory, ChatMessage, ProviderCon
 from ask_llm.core.processor import RequestProcessor
 from ask_llm.core.protocols import LLMProviderProtocol
 from ask_llm.core.text_splitter import (
-    MarkdownSplitter,
-    PlainTextSplitter,
     TextChunk,
     TextSplitter,
 )
@@ -20,6 +19,8 @@ from ask_llm.core.translator import Translator
 
 __all__ = [
     "AppConfig",
+    "BinarySplitter",
+    "BudgetPolicy",
     "ChatHistory",
     "ChatMessage",
     "ChatSession",
@@ -28,11 +29,10 @@ __all__ = [
     "HeadingFormatter",
     "HeadingMatch",
     "LLMProviderProtocol",
-    "MarkdownSplitter",
-    "PlainTextSplitter",
     "ProviderConfig",
     "RequestProcessor",
     "TextChunk",
     "TextSplitter",
+    "TokenBudget",
     "Translator",
 ]

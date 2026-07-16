@@ -11,6 +11,8 @@ from ask_llm.config.loader import ConfigLoader
 from ask_llm.config.manager import ConfigManager
 from ask_llm.core.batch import BatchResult, BatchTask, ModelConfig, TaskStatus
 from ask_llm.core.models import RequestMetadata
+from ask_llm.core.markdown_token_splitter import MarkdownTokenSplitter
+from ask_llm.utils.token_counter import TokenCounter
 from ask_llm.core.text_splitter import TextChunk, TextSplitter
 from ask_llm.core.translator import Translator
 from ask_llm.utils.translation_exporter import TranslationExporter
@@ -38,12 +40,15 @@ Third paragraph with more content.
             file_type = TextSplitter.detect_file_type(temp_path)
             assert file_type == "text"
 
-            # Test text splitting
-            splitter = TextSplitter.create_splitter(temp_path, max_chunk_size=100)
+            # Test text splitting (token budget; char-based create_splitter removed in v2.17)
+            splitter = MarkdownTokenSplitter("deepseek-chat", max_chunk_tokens=25)
             chunks = splitter.split(test_content)
 
             assert len(chunks) >= 1
-            assert all(len(chunk.content) <= 100 for chunk in chunks)
+            assert all(
+                TokenCounter.count_tokens(chunk.content, "deepseek-chat") <= 25
+                for chunk in chunks
+            )
 
             # Test translator setup
             translator = Translator(target_language="zh", source_language="en")
@@ -77,13 +82,13 @@ Content for section 2.
             file_type = TextSplitter.detect_file_type(temp_path)
             assert file_type == "markdown"
 
-            # Test Markdown splitting with large chunk size (should return single chunk)
-            splitter = TextSplitter.create_splitter(temp_path, max_chunk_size=1000)
+            # Test Markdown splitting with large token budget (should return single chunk)
+            splitter = MarkdownTokenSplitter("deepseek-chat", max_chunk_tokens=1000)
             chunks = splitter.split(markdown_content)
             assert len(chunks) == 1
 
-            # Test with small chunk size (should split)
-            splitter = TextSplitter.create_splitter(temp_path, max_chunk_size=50)
+            # Test with small token budget (should split)
+            splitter = MarkdownTokenSplitter("deepseek-chat", max_chunk_tokens=12)
             chunks = splitter.split(markdown_content)
             assert len(chunks) >= 1
             # May have heading metadata if split by headings, or paragraph metadata if split by paragraphs
@@ -94,9 +99,9 @@ Content for section 2.
 
     def test_translation_exporter_integration(self):
         """Test translation exporter with real data flow."""
-        # Create test chunks - use small max_chunk_size to force splitting
+        # Create test chunks - use small token budget to force splitting
         text = "First chunk.\n\nSecond chunk."
-        splitter = TextSplitter.create_splitter("test.txt", max_chunk_size=20)
+        splitter = MarkdownTokenSplitter("deepseek-chat", max_chunk_tokens=5)
         chunks = splitter.split(text)
         # Should have at least one chunk, may have more if split
         assert len(chunks) >= 1
@@ -186,7 +191,7 @@ Content for section 2.
 
         # Create test chunks
         text_content = "First paragraph.\n\nSecond paragraph."
-        chunks = TextSplitter.create_splitter("test.txt", max_chunk_size=100).split(text_content)
+        chunks = MarkdownTokenSplitter("deepseek-chat", max_chunk_tokens=100).split(text_content)
 
         model_config = ModelConfig(provider="test", model="test-model")
         tasks = translator.create_translation_tasks(chunks, model_config)
@@ -215,7 +220,7 @@ Paragraph three.
             assert file_type == "text"
 
             # Step 2: Split text
-            splitter = TextSplitter.create_splitter(input_path, max_chunk_size=1000)
+            splitter = MarkdownTokenSplitter("deepseek-chat", max_chunk_tokens=1000)
             chunks = splitter.split(test_content)
             assert len(chunks) >= 1
 
@@ -268,7 +273,7 @@ More content.
             assert file_type == "markdown"
 
             # With large max_chunk_size, should return single chunk
-            splitter = TextSplitter.create_splitter(input_path, max_chunk_size=1000)
+            splitter = MarkdownTokenSplitter("deepseek-chat", max_chunk_tokens=1000)
             chunks = splitter.split(markdown_content)
             assert len(chunks) == 1
 

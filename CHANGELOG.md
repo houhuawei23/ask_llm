@@ -1,5 +1,37 @@
 # Changelog
 
+## 2.17.1 (2026-07-16)
+
+P3.2 — budget-pluggable `BinarySplitter`; dead char-based splitters deleted (review §4.4.2, item 2).
+
+### Added
+
+- **New `core/binary_splitter.py`** — the single split algorithm (heading/paragraph binary strategy, fence-aware, display-math merge) now takes a `BudgetPolicy`. `TokenBudget(model, max_tokens, prompt_overhead=0)` budgets **prompt + content**: per-chunk content cap is `max_tokens - prompt_overhead` (review §4.4.4: large template + near-full context could overflow with a content-only budget).
+- `MarkdownTokenSplitter(model, max_chunk_tokens, prompt_overhead_tokens=0)` — new optional overhead parameter; the class is now a thin compat wrapper delegating to `BinarySplitter(TokenBudget(...))`. Existing two-arg callers unchanged.
+- `tests/unit/test_binary_splitter.py` — 12 tests: overhead budget math, fence integrity (intact when it fits, hard-split as documented last resort), budget compliance of every chunk, wrapper/impl parity.
+
+### Removed
+
+- **Char-based splitters (dead in production)**: `MarkdownSplitter`, `PlainTextSplitter`, and `TextSplitter.create_splitter` from `core/text_splitter.py` (629 → 71 LOC; kept `TextChunk` + `TextSplitter` base with `detect_file_type`). Production used only the token splitter; the char classes lived only in tests and re-exports.
+- `core/__init__.py` no longer exports the deleted classes; exports `BinarySplitter`, `BudgetPolicy`, `TokenBudget` instead.
+
+### Changed
+
+- `tests/unit/test_text_splitter.py` rewritten to cover the remaining primitives (`TextChunk`, `detect_file_type`).
+- `tests/integration/test_trans.py` splitting flows migrated from `create_splitter` (char budget) to `MarkdownTokenSplitter` (token budget).
+
+### Metrics
+
+- Splitter-pair LOC: ~935 (two ~80%-duplicate implementations) → 564 total, of which the algorithm exists exactly once (`binary_splitter.py`); `text_splitter.py` and `markdown_token_splitter.py` are now primitives + a 64-line compat wrapper.
+
+### Tests
+
+- Full suite: 432 passed, 1 skipped (+13 new, −12 removed).
+
+### Version
+
+- Bumped to 2.17.1 in `pyproject.toml`, `src/ask_llm/__init__.py`, `README.md`.
+
 ## 2.17.0 (2026-07-16)
 
 P3 start — single Markdown structure parser (review §4.4, item 1). Minor version bump per the review's release plan (P1–P3 each ship a minor).
