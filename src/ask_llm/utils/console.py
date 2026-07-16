@@ -22,6 +22,14 @@ _LOGURU_CONSOLE_FORMAT = (
     "<level>{message}</level>"
 )
 
+# Component-free variant for append=True (embedded use): host loguru records
+# may not carry an ``extra["component"]`` and would break the keyed format.
+_LOGURU_PLAIN_FORMAT = (
+    "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
+    "<level>{level: <8}</level> | "
+    "<level>{message}</level>"
+)
+
 # 不在模块导入时注册 loguru sink：否则在 logger.remove() 之前会叠加默认 handler，
 # 出现每条日志重复两次；且 logger.configure(extra=...) 会污染宿主（如 paper_pipeline_beta）的全局 component。
 # 统一由 Console.setup()（Typer callback）执行 logger.remove() + configure + add。
@@ -33,28 +41,24 @@ class Console:
 
     - Loguru: print_success/info/warning/error map to logger levels.
     - Rich: print (styled/Panel), print_markdown, print_table, progress, print_stream, etc.
+
+    The shared instance is the module-level ``console`` below; the class is a
+    plain class (the historical ``__new__``/``_initialized`` singleton dance
+    was redundant — see P4.9).
     """
-
-    _instance: Console | None = None
-
-    def __new__(cls) -> Console:
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-        return cls._instance
 
     def __init__(self):
         """Initialize console."""
-        if not hasattr(self, "_initialized"):
-            self._console = RichConsole()
-            self._quiet = False
-            self._debug = False
-            self._initialized = True
+        self._console = RichConsole()
+        self._quiet = False
+        self._debug = False
 
     def setup(
         self,
         quiet: bool = False,
         debug: bool = False,
         log_format: str = "text",
+        append: bool = False,
     ) -> None:
         """
         Setup console configuration.
@@ -63,13 +67,18 @@ class Console:
             quiet: Suppress non-error output
             debug: Enable debug output
             log_format: ``text`` (human-readable) or ``json`` (machine-parseable)
+            append: When True, keep existing loguru sinks and global ``extra``
+                (embedded/library use — do not wipe the host application's
+                logging). When False (default, CLI use), reset sinks and set
+                the ``ask-llm`` component extra.
         """
         self._quiet = quiet
         self._debug = debug
         self._log_format = log_format
 
-        logger.remove()
-        logger.configure(extra={"component": "ask-llm"})
+        if not append:
+            logger.remove()
+            logger.configure(extra={"component": "ask-llm"})
 
         if quiet:
             level = "ERROR"
@@ -89,14 +98,23 @@ class Console:
             )
             return
 
-        fmt = _LOGURU_CONSOLE_FORMAT
+        fmt = _LOGURU_PLAIN_FORMAT if append else _LOGURU_CONSOLE_FORMAT
         if debug:
             fmt = (
-                "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
-                "<cyan>{extra[component]}</cyan> | "
-                "<level>{level: <8}</level> | "
-                "<dim>{name}:{function}:{line}</dim> | "
-                "<level>{message}</level>"
+                (
+                    "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
+                    "<level>{level: <8}</level> | "
+                    "<dim>{name}:{function}:{line}</dim> | "
+                    "<level>{message}</level>"
+                )
+                if append
+                else (
+                    "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
+                    "<cyan>{extra[component]}</cyan> | "
+                    "<level>{level: <8}</level> | "
+                    "<dim>{name}:{function}:{line}</dim> | "
+                    "<level>{message}</level>"
+                )
             )
 
         logger.add(

@@ -13,7 +13,7 @@
 | **P1** 执行引擎统一 | ✅ 已完成 | v2.16.1–2.16.7 (2026-07-14) |
 | **P2** 配置去全局 + 单一对象 | ✅ 已完成 | v2.16.8–2.16.17 (2026-07-16) |
 | **P3** Markdown 单一管线 | ✅ 已完成 | v2.17.0–2.17.5 (2026-07-16) |
-| P4 服务层/引擎/导出器收尾 | 🔄 进行中 | v2.18.0 (2026-07-16) |
+| P4 服务层/引擎/导出器收尾 | 🔄 进行中 | v2.18.0–2.18.1 (2026-07-16) |
 
 **P1 进度（v2.16.1–2.16.2）**：
 - ✅ P1.2 — 删除死的单模型 `BatchProcessor` 平行层级（~330 LOC，仅 shim 再导出，从未实例化；`GlobalBatchProcessor` 不继承它）。
@@ -49,7 +49,8 @@
 
 **P4 进度（v2.18.0）**：
 - ✅ P4.8 — 关键词表统一：`core/error_keywords.py` 单一规则表 `(keyword → category, transient)`；`ErrorCategory` 移入（telemetry 再导出兼容）；`classify_error` 委托；`DEFAULT_TRANSIENT_KEYWORDS` 派生（历史关键词保持可重试，速率/超时/网络变体扩充为可重试，ssl/cert/proxy 保持不可重试）。7 新单测。
-- ⏳ P4 余项：CommandRunner + 共享 checkpoint 生命周期、展示剥离（SessionResult）、path_resolver、CLI bootstrap 统一、TranslationService 拆分、EngineAdapter facade、导出器统一、console 单例清理、file_handler 进度解耦。
+- ✅ P4.9（v2.18.1）— console 单例清理：`__new__`/`_initialized` 冗余删除（模块级实例本就唯一）；`setup(append=True)` 不擦宿主 sink/extra（嵌入式使用安全），append 模式用无 component 格式防 KeyError。
+- ⏳ P4 余项：CommandRunner + 共享 checkpoint 生命周期、展示剥离（SessionResult）、path_resolver、CLI bootstrap 统一、TranslationService 拆分、EngineAdapter facade、导出器统一、file_handler 进度解耦。
 
 **P0 已落地（v2.16.0）**：B2（CJK 令牌近似+安全系数）、B3（`${VAR}` 告警 + gate 覆盖 trans/paper）、B4（splitter 代码栅栏感知）、B6（per-worker 进度条）、B7（`attempt_history` 改为扁平 `AttemptRecord`）、B8（provider-cache 接缝类型化）、B9（限流超时可配置）、密钥轮换清缓存。完整说明见 `CHANGELOG.md` 2.16.0 条目。
 **P0 延后**：完整 `SecretStr` 迁移 → P2（与配置重构 + 引擎接缝收口一同进行）。

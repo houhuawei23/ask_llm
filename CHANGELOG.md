@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.18.1 (2026-07-16)
+
+P4.9 — console singleton cleanup + non-destructive embedded setup (review §P4 item 9).
+
+### Changed
+
+- **`Console` is a plain class now** — the `__new__`/`_initialized` singleton dance is deleted; the module-level `console = Console()` remains the shared instance (it always was the effective one).
+- **`Console.setup(append=False)`** — new `append` parameter. With `append=True` (embedded/library use), existing loguru sinks and the global `extra` config are **kept** (no `logger.remove()`, no `logger.configure(extra=...)`) so the host application's logging is not wiped. Append mode also uses a component-free log format (`_LOGURU_PLAIN_FORMAT`) because host records may not carry `extra["component"]`. Default `append=False` keeps CLI behavior unchanged (reset sinks, set `ask-llm` component).
+
+### Tests
+
+- Full suite: 447 passed, 1 skipped. Smoke-tested append mode: host sink preserved, ask-llm sink added alongside.
+
+### Version
+
+- Bumped to 2.18.1 in `pyproject.toml`, `src/ask_llm/__init__.py`, `README.md`.
+
 ## 2.18.0 (2026-07-16)
 
 P4 start — unified error-keyword table (review §P4 item 8). Minor version bump per the review's release plan (P1–P3 each shipped a minor; P4 continues).
