@@ -1,5 +1,23 @@
 # Changelog
 
+## 2.18.8 (2026-07-16)
+
+P4.2 — `PaperService` no longer exits the process; statuses replace `typer.Exit` (review §P4 item 2).
+
+### Changed
+
+- **`PaperSessionResult.status`** (new field): `"ok" | "dry_run" | "nothing_to_do" | "failed"` (+ `error`). `PaperService.explain_paper` returns it instead of raising `typer.Exit` on dry-run completion, nothing-to-do, and job failures. The service layer is now typer-free (only docstring mentions remain).
+- **`cli/commands/paper.py`** translates statuses to exit codes (`failed` → 1, `dry_run`/`nothing_to_do` → 0).
+- **Latent bug fixed**: `typer.Exit` subclasses `RuntimeError` (via click), so the command's `except RuntimeError` handler was swallowing `typer.Exit(0)` and misreporting it as "API error: 0". An `except typer.Exit: raise` guard now precedes it.
+
+### Tests
+
+- Full suite: 451 passed, 1 skipped. Smoke-tested `paper --dry-run` exit code (0, no spurious error output).
+
+### Version
+
+- Bumped to 2.18.8 in `pyproject.toml`, `src/ask_llm/__init__.py`, `README.md`.
+
 ## 2.18.7 (2026-07-16)
 
 P4.1 — shared checkpoint lifecycle in `core/command_runner.py`; batch and translation services migrated; paper retry hardcode removed (review §P4 item 1).

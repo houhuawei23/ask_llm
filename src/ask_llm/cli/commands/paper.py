@@ -212,9 +212,16 @@ def paper(
         )
 
         try:
-            service.explain_paper(path, options)
+            session_result = service.explain_paper(path, options)
         finally:
             service.export_report(report)
+
+        # P4.2: service returns statuses; the CLI owns exit codes.
+        if session_result.status == "failed":
+            console.print_error(f"Paper explain failed: {session_result.error}")
+            raise typer.Exit(1)
+        if session_result.status in ("dry_run", "nothing_to_do"):
+            raise typer.Exit(0)
 
     except FileNotFoundError as e:
         console.print_error(str(e))
@@ -222,6 +229,10 @@ def paper(
     except ValueError as e:
         console.print_error(str(e))
         raise typer.Exit(1) from e
+    except typer.Exit:
+        # typer.Exit subclasses RuntimeError (click) — must re-raise before the
+        # RuntimeError handler below swallows it as an "API error".
+        raise
     except RuntimeError as e:
         console.print_error(f"API error: {e}")
         raise typer.Exit(1) from e

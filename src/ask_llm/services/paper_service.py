@@ -80,8 +80,16 @@ class PaperJobResult:
 
 @dataclass
 class PaperSessionResult:
-    """Aggregate result of a paper-explain session."""
+    """Aggregate result of a paper-explain session.
 
+    ``status`` replaces the historical ``typer.Exit`` control flow (P4.2):
+    the service never exits the process; the CLI translates the status to an
+    exit code.
+    """
+
+    # "ok" | "dry_run" | "nothing_to_do" | "failed"
+    status: str = "ok"
+    error: str | None = None
     job_results: list[PaperJobResult] = field(default_factory=list)
     statistics: dict[str, BatchStatistics] = field(default_factory=dict)
     total_jobs: int = 0
@@ -137,14 +145,14 @@ class PaperService:
 
         Returns:
             PaperSessionResult aggregating per-job outcomes and statistics.
+            ``status`` is "ok", "dry_run", "nothing_to_do", or "failed" — the
+            CLI maps these to exit codes (P4.2; the service never raises
+            ``typer.Exit``).
 
         Raises:
             ValueError: If run_mode is invalid or input is not a file/directory.
             FileNotFoundError: If required files are missing.
-            typer.Exit: On dry-run completion or when no jobs remain.
         """
-        import typer
-
         run_norm = options.run_mode.strip().lower()
         if run_norm not in ("sections", "full", "all"):
             raise ValueError("--run must be one of: sections, full, all")
@@ -193,7 +201,11 @@ class PaperService:
                 section_job_model,
                 current_provider,
             )
-            raise typer.Exit(0)
+            return PaperSessionResult(
+                status="dry_run",
+                total_jobs=len(jobs),
+                explain_root=explain_root,
+            )
 
         jobs_with_orig_idx, skipped_count = self._apply_resume_or_force(
             jobs,
@@ -205,7 +217,12 @@ class PaperService:
 
         if not jobs_with_orig_idx:
             console.print_info("All sections already completed. Nothing to do.")
-            raise typer.Exit(0)
+            return PaperSessionResult(
+                status="nothing_to_do",
+                total_jobs=len(jobs),
+                skipped_count=skipped_count,
+                explain_root=explain_root,
+            )
 
         idx_to_meta: dict[int, tuple[str, str, str | None]] = {}
         paper_tasks: list[BatchTask] = []
@@ -267,7 +284,14 @@ class PaperService:
         if failed:
             for r in failed:
                 console.print_error(f"Paper job {r.task_id} failed: {r.error or 'unknown error'}")
-            raise typer.Exit(1)
+            errors = "; ".join(f"job {r.task_id}: {r.error or 'unknown'}" for r in failed)
+            return PaperSessionResult(
+                status="failed",
+                error=errors,
+                total_jobs=len(jobs),
+                skipped_count=skipped_count,
+                explain_root=explain_root,
+            )
 
         session_result = PaperSessionResult(
             total_jobs=len(jobs),
