@@ -6,6 +6,11 @@ import re
 
 from loguru import logger
 
+from ask_llm.core.markdown_structure import (
+    CODE_FENCE_PATTERN,
+    HEADING_PATTERN,
+    MarkdownStructure,
+)
 from ask_llm.core.text_splitter import TextChunk, TextSplitter
 from ask_llm.utils.token_counter import TokenCounter
 
@@ -13,9 +18,10 @@ from ask_llm.utils.token_counter import TokenCounter
 class MarkdownTokenSplitter(TextSplitter):
     """Split Markdown using heading/paragraph binary strategy with a token cap."""
 
-    HEADING_PATTERN = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
-    # Matches a markdown code fence: ``` or ~~~ (with optional language / trailing text).
-    CODE_FENCE_PATTERN = re.compile(r"^(```|~~~).*$", re.MULTILINE)
+    # Kept for backward compatibility; canonical definitions live in
+    # ask_llm.core.markdown_structure.
+    HEADING_PATTERN = HEADING_PATTERN
+    CODE_FENCE_PATTERN = CODE_FENCE_PATTERN
     # Matches a display-math block: $$ ... $$ potentially spanning multiple lines.
     DISPLAY_MATH_PATTERN = re.compile(r"^\$\$[\s\S]*?\$\$", re.MULTILINE)
 
@@ -40,19 +46,7 @@ class MarkdownTokenSplitter(TextSplitter):
         without this, a ``#`` inside a code fence is treated as a heading and used
         as a split point, and a long fenced block is cut mid-fence.
         """
-        ranges: list[tuple[int, int]] = []
-        in_code = False
-        block_start = 0
-        for match in cls.CODE_FENCE_PATTERN.finditer(text):
-            if not in_code:
-                block_start = match.start()
-                in_code = True
-            else:
-                ranges.append((block_start, match.end()))
-                in_code = False
-        if in_code:
-            ranges.append((block_start, len(text)))
-        return ranges
+        return MarkdownStructure.parse(text).fence_ranges
 
     @classmethod
     def _pos_in_code_fence(cls, ranges: list[tuple[int, int]], pos: int) -> bool:
@@ -74,16 +68,8 @@ class MarkdownTokenSplitter(TextSplitter):
                 )
             ]
 
-        fence_ranges = self._find_code_fence_ranges(text)
-        headings = []
-        for match in self.HEADING_PATTERN.finditer(text):
-            pos = match.start()
-            # Skip headings that are actually ``#`` lines inside a fenced code block.
-            if self._pos_in_code_fence(fence_ranges, pos):
-                continue
-            level = len(match.group(1))
-            title = match.group(2)
-            headings.append((level, title, pos))
+        structure = MarkdownStructure.parse(text)
+        headings = [(h.level, h.title, h.start_pos) for h in structure.headings]
 
         if not headings:
             logger.debug("No headings found in Markdown, using binary paragraph splitting (tokens)")

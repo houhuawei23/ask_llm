@@ -19,6 +19,11 @@ from ask_llm.core.format_checkpoint import (
     SuccessfulChunkInfo,
     generate_checkpoint_path,
 )
+from ask_llm.core.markdown_structure import (
+    CODE_FENCE_PATTERN,
+    HEADING_PATTERN,
+    MarkdownStructure,
+)
 from ask_llm.core.processor import RequestProcessor
 
 
@@ -49,13 +54,17 @@ class HeadingMatch:
 
 
 class HeadingExtractor:
-    """Extract headings from markdown text, excluding code blocks."""
+    """Extract headings from markdown text, excluding code blocks and frontmatter.
 
-    # Regex to match markdown headings: # Title, ## Title, etc.
-    HEADING_PATTERN = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
+    Delegates structure parsing to :class:`MarkdownStructure` (P3.1): fence
+    ranges, frontmatter range, and heading spans are computed in one pass
+    there; this class only adapts the spans to ``HeadingMatch`` objects.
+    """
 
-    # Regex to match markdown code fences: ``` or ~~~ (with optional language)
-    CODE_FENCE_PATTERN = re.compile(r"^(```|~~~).*$", re.MULTILINE)
+    # Kept for backward compatibility (external references/tests); the
+    # canonical definitions live in ask_llm.core.markdown_structure.
+    HEADING_PATTERN = HEADING_PATTERN
+    CODE_FENCE_PATTERN = CODE_FENCE_PATTERN
 
     @classmethod
     def _find_code_block_ranges(cls, text: str) -> list[tuple[int, int]]:
@@ -64,29 +73,13 @@ class HeadingExtractor:
         Returns:
             List of (start, end) tuples for each code block.
         """
-        ranges = []
-        in_code_block = False
-        block_start = 0
-
-        for match in cls.CODE_FENCE_PATTERN.finditer(text):
-            if not in_code_block:
-                block_start = match.start()
-                in_code_block = True
-            else:
-                # End of code block (match.end() includes the newline after fence)
-                ranges.append((block_start, match.end()))
-                in_code_block = False
-
-        # Handle unclosed code block (treat rest of text as code block)
-        if in_code_block:
-            ranges.append((block_start, len(text)))
-
-        return ranges
+        return MarkdownStructure.parse(text).fence_ranges
 
     @classmethod
     def extract(cls, text: str) -> list[HeadingMatch]:
         """
-        Extract all headings from markdown text, excluding those inside code blocks.
+        Extract all headings from markdown text, excluding those inside code
+        blocks and YAML frontmatter.
 
         Args:
             text: Markdown text content
@@ -94,14 +87,14 @@ class HeadingExtractor:
         Returns:
             List of HeadingMatch objects in order of appearance
         """
-        code_ranges = cls._find_code_block_ranges(text)
+        structure = MarkdownStructure.parse(text)
 
         headings = []
-        for match in cls.HEADING_PATTERN.finditer(text):
+        for match in HEADING_PATTERN.finditer(text):
             start_pos = match.start()
 
-            # Skip headings inside code blocks
-            if any(start <= start_pos < end for start, end in code_ranges):
+            # Skip headings inside code blocks / frontmatter
+            if structure.is_protected(start_pos):
                 continue
 
             level = len(match.group(1))  # Number of # characters

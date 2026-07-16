@@ -1,5 +1,29 @@
 # Changelog
 
+## 2.17.0 (2026-07-16)
+
+P3 start — single Markdown structure parser (review §4.4, item 1). Minor version bump per the review's release plan (P1–P3 each ship a minor).
+
+### Added
+
+- **New `core/markdown_structure.py`** — `MarkdownStructure.parse(text)` produces, in one pass: code-fence ranges (unclosed fence extends to EOF), YAML frontmatter range (only a `---` block at offset 0), and heading spans with levels. Headings inside fences **or frontmatter** are never real headings. Canonical `HEADING_PATTERN` / `CODE_FENCE_PATTERN` now live here (previously defined identically in three modules).
+- **Frontmatter protection (new)** — a `# foo` inside YAML frontmatter is no longer treated as a heading by the heading formatter or the token splitter.
+- `tests/unit/test_markdown_structure.py` — 13 tests: fence pairing/unclosed/tildes, frontmatter detection/exclusion, heading levels/positions, `is_protected`, and consumer-equivalence checks.
+
+### Changed
+
+- **`HeadingExtractor`** (`md_heading_formatter.py`) delegates fence-range and heading scanning to `MarkdownStructure`; `_find_code_block_ranges` kept as a thin compatibility shim. `HeadingMatch` output unchanged.
+- **`MarkdownTokenSplitter`** (`markdown_token_splitter.py`) consumes `MarkdownStructure` in `split()`; `_find_code_fence_ranges` kept as a thin compatibility shim. Split algorithm unchanged.
+- Both modules re-export `HEADING_PATTERN` / `CODE_FENCE_PATTERN` from the canonical module for backward compatibility.
+
+### Tests
+
+- Full suite: 431 passed, 1 skipped (+13 new).
+
+### Version
+
+- Bumped to 2.17.0 in `pyproject.toml`, `src/ask_llm/__init__.py`, `README.md`.
+
 ## 2.16.17 (2026-07-16)
 
 P2 final — config provenance. Every config leaf now records which layer supplied its final value; `ask-llm config show --debug-config` reports it per key (review §4.2.4 "provenance 误导").
