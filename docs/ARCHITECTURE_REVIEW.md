@@ -13,7 +13,7 @@
 | **P1** 执行引擎统一 | ✅ 已完成 | v2.16.1–2.16.7 (2026-07-14) |
 | **P2** 配置去全局 + 单一对象 | ✅ 已完成 | v2.16.8–2.16.17 (2026-07-16) |
 | **P3** Markdown 单一管线 | ✅ 已完成 | v2.17.0–2.17.5 (2026-07-16) |
-| P4 服务层/引擎/导出器收尾 | 🔄 进行中 | v2.18.0–2.18.5 (2026-07-16) |
+| P4 服务层/引擎/导出器收尾 | 🔄 进行中 | v2.18.0–2.18.6 (2026-07-16) |
 
 **P1 进度（v2.16.1–2.16.2）**：
 - ✅ P1.2 — 删除死的单模型 `BatchProcessor` 平行层级（~330 LOC，仅 shim 再导出，从未实例化；`GlobalBatchProcessor` 不继承它）。
@@ -53,6 +53,7 @@
 - ✅ P4.3（v2.18.2）— `_resolve_trans_input_paths`/`_is_directory_output` 移入 `utils/path_resolver.py`；`TranslationService` 改从 utils 导入（消除 service→cli 层违规）；`cli/common.py` 再导出兼容。
 - ✅ P4.10（v2.18.3）— file_handler 进度解耦：`read_chunked`/`write_chunked` 接受 `on_chunk(bytes)` 回调，tqdm 仅为回调的一个消费者；B10 字节精度保持。4 新单测。
 - ✅ P4.6（v2.18.4）— `EngineAdapter` facade（`utils/engine_facade.py`）：`llm_engine` 成单模块私有依赖（grep 不变量成立）。`EngineConfigView` 移入（provider_cache 再导出兼容）；6 处 `create_provider_adapter` 直连 + paper/trans fail-fast import + loader 的 `load_providers_config` 函数内 import（含静默 bare except，§4.2.4）全部收编。
+- ✅ P4.6b（v2.18.6）— 命名修正：`provider_router`→`fallback_chain`、`provider_specs`→`model_limits`（含测试改名），三 service 导入更新。
 - ✅ P4.7（v2.18.5）— 导出器统一：`BatchResult.project()` 唯一投影；`core/response_parser.py` 收编 `_unwrap_translation_payload`（含 LaTeX 转义修复）；`utils/export_formats.py` 单一 `_detect_format`；翻译 JSON 导出改流式 iterencode。
 - ⏳ P4 余项：CommandRunner + 共享 checkpoint 生命周期、展示剥离（SessionResult）、CLI bootstrap 统一、TranslationService 拆分。
 

@@ -39,13 +39,13 @@ from ask_llm.core.paper_explain_pipeline import (
 )
 from ask_llm.core.tasks.builders import build_paper_explain_task
 from ask_llm.utils.console import console
+from ask_llm.utils.fallback_chain import build_fallback_chain
 from ask_llm.utils.file_handler import FileHandler
-from ask_llm.utils.pricing import format_cost_estimate
-from ask_llm.utils.provider_router import build_fallback_chain
-from ask_llm.utils.provider_specs import (
+from ask_llm.utils.model_limits import (
     load_providers_model_limits,
     resolve_paper_max_tokens,
 )
+from ask_llm.utils.pricing import format_cost_estimate
 from ask_llm.utils.token_counter import TokenCounter
 
 PricingMap = dict[tuple[str, str], dict[str, float]]

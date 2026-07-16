@@ -1,5 +1,23 @@
 # Changelog
 
+## 2.18.6 (2026-07-16)
+
+P4.6 follow-up — naming corrections from the review (§P4 item 6): `provider_router` → `fallback_chain`, `provider_specs` → `model_limits`.
+
+### Changed
+
+- `utils/provider_router.py` renamed to `utils/fallback_chain.py` (it builds fallback chains; it never routed anything).
+- `utils/provider_specs.py` renamed to `utils/model_limits.py` (it loads per-model context/max_output limits).
+- Imports updated in `batch_service`, `translation_service`, `paper_service`; `tests/unit/test_provider_specs.py` renamed to `test_model_limits.py`.
+
+### Tests
+
+- Full suite: 451 passed, 1 skipped.
+
+### Version
+
+- Bumped to 2.18.6 in `pyproject.toml`, `src/ask_llm/__init__.py`, `README.md`.
+
 ## 2.18.5 (2026-07-16)
 
 P4.7 — exporter unification (review §P4 item 7).

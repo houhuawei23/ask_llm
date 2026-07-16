@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from ask_llm.utils.provider_specs import (
+from ask_llm.utils.model_limits import (
     ModelLimits,
     load_providers_model_limits,
     resolve_paper_max_tokens,

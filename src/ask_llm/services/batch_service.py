@@ -31,10 +31,10 @@ from ask_llm.utils.api_key_gate import (
 from ask_llm.utils.batch_exporter import BatchResultExporter
 from ask_llm.utils.batch_loader import BatchConfigLoader
 from ask_llm.utils.console import console
+from ask_llm.utils.fallback_chain import build_fallback_chain
 from ask_llm.utils.interactive_config import InteractiveConfigHelper
 from ask_llm.utils.pricing import format_cost_estimate
 from ask_llm.utils.provider_cache import ProviderAdapterCache
-from ask_llm.utils.provider_router import build_fallback_chain
 
 PricingMap = dict[tuple[str, str], dict[str, float]]
 

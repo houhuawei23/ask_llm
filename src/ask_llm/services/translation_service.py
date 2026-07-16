@@ -27,10 +27,10 @@ from ask_llm.core.text_splitter import TextChunk, TextSplitter
 from ask_llm.core.translator import Translator
 from ask_llm.utils.chunk_balance import plain_text_chunks_by_tokens, rebalance_translation_chunks
 from ask_llm.utils.console import console
+from ask_llm.utils.fallback_chain import build_fallback_chain
 from ask_llm.utils.file_handler import FileHandler
 from ask_llm.utils.notebook_translator import NotebookTranslator
 from ask_llm.utils.pricing import format_cost_estimate
-from ask_llm.utils.provider_router import build_fallback_chain
 from ask_llm.utils.translation_exporter import TranslationExporter
 
 PricingMap = dict[tuple[str, str], dict[str, float]]

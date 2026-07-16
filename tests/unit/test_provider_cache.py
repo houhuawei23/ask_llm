@@ -97,10 +97,10 @@ def test_dict_config_still_works_but_warns_deprecation():
     assert mock_create.call_count == 1
     # The facade receives a real ProviderConfig (object semantics preserved);
     # the EngineConfigView unwraps the SecretStr key inside the facade (P4.6).
-    from ask_llm.core.models import ProviderConfig as _PC
+    from ask_llm.core.models import ProviderConfig as ProviderConfigModel
 
     built_config = mock_create.call_args[0][0]
-    assert isinstance(built_config, _PC)
+    assert isinstance(built_config, ProviderConfigModel)
     assert built_config.api_provider == "openai"
     assert built_config.get_api_key() == "sk-test"
     assert result is mock_provider
