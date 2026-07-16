@@ -260,7 +260,7 @@ def test_run_batch_from_config_applies_fallback_chain(tmp_path):
     processor.calculate_statistics.return_value = {}
 
     with (
-        patch("ask_llm.services.batch_service.run_global_batch_tasks") as mock_run,
+        patch("ask_llm.core.command_runner.run_global_batch_tasks") as mock_run,
         patch("ask_llm.utils.provider_cache.create_engine_adapter") as mock_adapter,
     ):
         mock_provider = MagicMock()
@@ -303,7 +303,7 @@ def test_run_batch_from_config_skips_fallback_when_disabled(tmp_path):
     processor.calculate_statistics.return_value = {}
 
     with (
-        patch("ask_llm.services.batch_service.run_global_batch_tasks") as mock_run,
+        patch("ask_llm.core.command_runner.run_global_batch_tasks") as mock_run,
         patch("ask_llm.utils.provider_cache.create_engine_adapter") as mock_adapter,
     ):
         mock_provider = MagicMock()

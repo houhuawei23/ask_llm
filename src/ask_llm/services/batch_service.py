@@ -18,10 +18,9 @@ from loguru import logger
 from ask_llm.config.manager import ConfigManager
 from ask_llm.config.unified_config import BatchConfig as UnifiedBatchConfig
 from ask_llm.core.batch import BatchResult, BatchTask, ModelConfig
-from ask_llm.core.batch_checkpoint import BatchCheckpoint
-from ask_llm.core.batch_models import BatchStatistics, TaskStatus
+from ask_llm.core.batch_models import BatchStatistics
+from ask_llm.core.command_runner import run_with_checkpoint
 from ask_llm.core.execution_report import ExecutionReport, build_report_from_batch_results
-from ask_llm.core.global_batch_runner import run_global_batch_tasks
 from ask_llm.core.models import AppConfig
 from ask_llm.utils.api_key_gate import (
     api_key_is_missing_or_unresolved,
@@ -249,23 +248,28 @@ def run_batch_from_config(
             global_tasks.append(global_task)
             task_id_counter += 1
 
-    # Checkpoint handling for resume
+    # Shared checkpoint lifecycle (P4.1): resume-filter -> run -> merge ->
+    # save -> unlink on clean full success.
     checkpoint_path = resume_checkpoint_path or _default_batch_checkpoint_path(config_file)
-    checkpoint = BatchCheckpoint.create(command="batch", config_digest=config_file)
-    prior_successful_results: list[BatchResult] = []
+    outcome = run_with_checkpoint(
+        command="batch",
+        config_digest=config_file,
+        checkpoint_path=checkpoint_path,
+        tasks=global_tasks,
+        config_manager=config_manager,
+        resume=bool(resume_checkpoint_path and Path(resume_checkpoint_path).exists()),
+        max_retries=retries,
+        retry_delay=retry_delay,
+        retry_delay_max=retry_delay_max,
+        max_workers=threads,
+        verbose=verbose,
+        show_progress=True,
+        clamp_workers_to_task_count=False,
+    )
 
-    if resume_checkpoint_path and Path(resume_checkpoint_path).exists():
-        checkpoint = BatchCheckpoint.load(resume_checkpoint_path)
-        prior_successful_results = list(checkpoint.successful_results)
-        remaining_tasks = [t for t in global_tasks if not checkpoint.is_completed(t.task_id)]
-        console.print_info(
-            f"Resuming from checkpoint: {len(remaining_tasks)}/{len(global_tasks)} tasks remaining"
-        )
-        global_tasks = remaining_tasks
-
-    if not global_tasks:
+    if outcome.all_previously_completed:
         console.print_info("All tasks already completed according to checkpoint.")
-        all_results_list = list(prior_successful_results)
+        all_results_list = list(outcome.results)
         model_statistics = BatchStatistics.from_results(all_results_list)
         report = build_report_from_batch_results(
             "batch",
@@ -284,39 +288,15 @@ def run_batch_from_config(
             report=report,
         )
 
-    all_results_list, global_processor = run_global_batch_tasks(
-        global_tasks,
-        config_manager,
-        max_workers=threads,
-        max_retries=retries,
-        retry_delay=retry_delay,
-        retry_delay_max=retry_delay_max,
-        verbose=verbose,
-        show_progress=True,
-        clamp_workers_to_task_count=False,
-    )
+    all_results_list = outcome.results
+    global_processor = outcome.processor
 
-    # Merge new successful results into checkpoint and persist
-    new_successful = [r for r in all_results_list if r.status == TaskStatus.SUCCESS]
-    new_failed = [r for r in all_results_list if r.status == TaskStatus.FAILED]
-    checkpoint.merge(new_successful)
-    checkpoint.mark_all_failed_for_retry(new_failed)
-    checkpoint.save(checkpoint_path)
-
-    # Rebuild full result list including prior successful results from resume
-    all_results_list = list(checkpoint.successful_results) + new_failed
-
-    # B5: keep the checkpoint on interrupt so progress survives Ctrl-C; only
-    # remove it on a clean, fully-successful run.
-    interrupted = getattr(global_processor.last_metrics, "interrupted", False)
-    if interrupted:
-        saved = len(checkpoint.successful_results)
+    if outcome.interrupted:
         console.print_warning(
-            f"Interrupted: {saved}/{len(tasks)} tasks saved to checkpoint "
-            f"{checkpoint_path}. Re-run with --resume to continue."
+            f"Interrupted: progress saved to checkpoint {checkpoint_path}. "
+            f"Re-run with --resume to continue."
         )
-    elif not new_failed:
-        Path(checkpoint_path).unlink(missing_ok=True)
+    elif outcome.checkpoint_deleted:
         console.print_info(f"All tasks succeeded. Removed checkpoint: {checkpoint_path}")
 
     model_statistics = global_processor.calculate_statistics(all_results_list)

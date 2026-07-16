@@ -62,7 +62,7 @@ def test_batch_run_creates_checkpoint_for_failed_task(tmp_path):
     processor = MagicMock()
     processor.calculate_statistics.return_value = {}
 
-    with patch("ask_llm.services.batch_service.run_global_batch_tasks") as mock_run:
+    with patch("ask_llm.core.command_runner.run_global_batch_tasks") as mock_run:
         mock_run.return_value = ([result], processor)
         with patch("ask_llm.utils.provider_cache.create_engine_adapter") as mock_adapter:
             mock_provider = MagicMock()
@@ -113,7 +113,7 @@ def test_batch_resume_skips_completed_tasks(tmp_path):
     processor.calculate_statistics.return_value = {}
 
     with (
-        patch("ask_llm.services.batch_service.run_global_batch_tasks") as mock_run,
+        patch("ask_llm.core.command_runner.run_global_batch_tasks") as mock_run,
         patch("ask_llm.utils.provider_cache.create_engine_adapter") as mock_adapter,
     ):
         mock_provider = MagicMock()

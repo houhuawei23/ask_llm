@@ -17,10 +17,8 @@ from loguru import logger
 from ask_llm.config.manager import ConfigManager
 from ask_llm.config.unified_config import UnifiedConfig
 from ask_llm.core.batch import BatchResult, BatchTask, ModelConfig
-from ask_llm.core.batch_checkpoint import BatchCheckpoint
-from ask_llm.core.batch_models import TaskStatus
+from ask_llm.core.command_runner import run_with_checkpoint
 from ask_llm.core.execution_report import ExecutionReport, build_report_from_batch_results
-from ask_llm.core.global_batch_runner import run_global_batch_tasks
 from ask_llm.core.markdown_token_splitter import MarkdownTokenSplitter
 from ask_llm.core.models import AppConfig
 from ask_llm.core.text_splitter import TextChunk, TextSplitter
@@ -412,43 +410,24 @@ class TranslationService:
         console.print(f"[bold]Translating: {job.file_path}[/bold]")
 
         checkpoint_path = self._checkpoint_path(job.output_path)
-        checkpoint = BatchCheckpoint.create(command="trans", config_digest=job.file_path)
-        tasks = job.tasks
 
-        if options.resume and Path(checkpoint_path).exists():
-            checkpoint = BatchCheckpoint.load(checkpoint_path)
-            completed_ids = set(checkpoint.completed_task_ids)
-            tasks = [t for t in job.tasks if t.task_id not in completed_ids]
-            console.print_info(
-                f"Resuming from checkpoint: {len(tasks)}/{len(job.tasks)} chunk(s) remaining"
-            )
-
-        if not tasks:
-            console.print_info("All chunks already translated according to checkpoint.")
-            results = list(checkpoint.successful_results)
-            results.sort(key=lambda r: r.task_id)
-            self._batch_results.extend(results)
-            Path(checkpoint_path).unlink(missing_ok=True)
-            return self._export_text_file(
-                job,
-                results,
-                options.preserve_format,
-                options.include_original,
-                force=force,
-                retries=0,
-            )
-
+        # Shared checkpoint lifecycle (P4.1). Canonical drift resolution:
+        # early-return with all chunks previously completed now KEEPS the
+        # checkpoint (batch behavior) instead of unlinking it.
         try:
-            new_results, processor = run_global_batch_tasks(
-                tasks,
-                self.config_manager,
-                max_workers=options.threads,
+            outcome = run_with_checkpoint(
+                command="trans",
+                config_digest=job.file_path,
+                checkpoint_path=checkpoint_path,
+                tasks=job.tasks,
+                config_manager=self.config_manager,
+                resume=bool(options.resume and Path(checkpoint_path).exists()),
                 max_retries=options.retries,
+                max_workers=options.threads,
                 show_progress=not stream,
                 clamp_workers_to_task_count=True,
                 stream_api=stream_api,
             )
-            self._batch_results.extend(new_results)
         except Exception as e:
             console.print_error(f"Failed to translate {job.file_path}: {e}")
             logger.exception("Translation error")
@@ -461,13 +440,23 @@ class TranslationService:
                 error=str(e),
             )
 
-        checkpoint.merge([r for r in new_results if r.status == TaskStatus.SUCCESS])
-        failed_results = [r for r in new_results if r.status == TaskStatus.FAILED]
-        checkpoint.mark_all_failed_for_retry(failed_results)
-        checkpoint.save(checkpoint_path)
+        if outcome.all_previously_completed:
+            console.print_info("All chunks already translated according to checkpoint.")
+            results = sorted(outcome.results, key=lambda r: r.task_id)
+            self._batch_results.extend(results)
+            return self._export_text_file(
+                job,
+                results,
+                options.preserve_format,
+                options.include_original,
+                force=force,
+                retries=0,
+            )
 
-        results = list(checkpoint.successful_results) + failed_results
-        results.sort(key=lambda r: r.task_id)
+        processor = outcome.processor
+        self._batch_results.extend(outcome.new_results)
+
+        results = sorted(outcome.results, key=lambda r: r.task_id)
 
         failed_count = sum(1 for r in results if r.status.value == "failed")
         successful_chunks = sum(1 for r in results if r.status.value == "success")
@@ -488,17 +477,13 @@ class TranslationService:
                 error="API authentication error",
             )
 
-        retries = getattr(processor, "last_metrics", None)
-        retry_count = retries.retried if retries is not None else 0
-        interrupted = getattr(retries, "interrupted", False)
+        metrics = getattr(processor, "last_metrics", None)
+        retry_count = metrics.retried if metrics is not None else 0
 
-        # B5: keep the checkpoint on interrupt so partial progress survives Ctrl-C.
-        if interrupted:
+        if outcome.interrupted:
             console.print_warning(
                 f"翻译中断: 已保存进度到 {checkpoint_path}，使用 --resume 继续。"
             )
-        elif failed_count == 0:
-            Path(checkpoint_path).unlink(missing_ok=True)
 
         return self._export_text_file(
             job,

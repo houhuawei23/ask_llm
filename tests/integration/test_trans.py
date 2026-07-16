@@ -440,7 +440,7 @@ class TestTransPerFileBatching:
         captured_calls: list[list[BatchTask]] = []
         fake = self._make_fake_run_global_batch_tasks(captured_calls)
         monkeypatch.setattr(
-            "ask_llm.services.translation_service.run_global_batch_tasks",
+            "ask_llm.core.command_runner.run_global_batch_tasks",
             fake,
         )
 
@@ -521,7 +521,7 @@ class TestTransPerFileBatching:
             return results, _FakeProcessor()
 
         monkeypatch.setattr(
-            "ask_llm.services.translation_service.run_global_batch_tasks",
+            "ask_llm.core.command_runner.run_global_batch_tasks",
             fake_run_global_batch_tasks,
         )
 

@@ -257,7 +257,7 @@ class PaperService:
             paper_tasks,
             self.config_manager,
             max_workers=options.concurrency,
-            max_retries=3,
+            max_retries=self.unified_config.paper.retries,
             show_progress=True,
             clamp_workers_to_task_count=True,
         )

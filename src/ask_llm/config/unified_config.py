@@ -326,6 +326,11 @@ class PaperConfig(BaseModel):
         le=64,
         description="Max parallel LLM calls for ask-llm paper (ThreadPoolExecutor)",
     )
+    retries: int = Field(
+        default=3,
+        ge=0,
+        description="Max retry attempts per paper-explain job (was hardcoded 3 before v2.18.7)",
+    )
     max_output_tokens: int = Field(
         default=65536,
         ge=1,

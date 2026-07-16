@@ -94,6 +94,7 @@ paper:
   prompt_dir: "@prompts/paper"
   pipeline_config: "@prompts/paper-explain-pipeline.yml"  # job key → prompt file mapping
   concurrency: 32                # parallel LLM calls (I/O-bound; cap to respect rate limits)
+  retries: 3                     # max retry attempts per explain job
   max_output_tokens: 65536         # clamped per model by providers.yml max_output.maximum
   full_model: deepseek-reasoner    # full-text job only; saves reasoning_content when API returns it
   request_timeout_seconds: 600.0  # HTTP timeout (default provider timeout is often 60s; reasoner needs more)

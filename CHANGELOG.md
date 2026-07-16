@@ -1,5 +1,31 @@
 # Changelog
 
+## 2.18.7 (2026-07-16)
+
+P4.1 — shared checkpoint lifecycle in `core/command_runner.py`; batch and translation services migrated; paper retry hardcode removed (review §P4 item 1).
+
+### Added
+
+- **New `core/command_runner.py`** — `run_with_checkpoint(...)`: the single canonical implementation of the create → optional resume load → filter completed → run → merge → mark failed → save → unlink-on-full-success flow, previously copied (with drift) into `batch_service` and `translation_service`. Returns a `CheckpointRunOutcome` (merged results, this-run results, failures, `interrupted` / `all_previously_completed` / `checkpoint_deleted` flags, processor handle).
+- **`PaperConfig.retries: int = 3`** (new config field, in `default_config.yml` too) — the paper service's hardcoded `max_retries=3` is gone.
+
+### Changed
+
+- **`batch_service.run_batch_from_config`** and **`translation_service._translate_and_export_text_file`** now delegate to `run_with_checkpoint` (~70 LOC of duplicated lifecycle deleted across both).
+- **Drift resolution (canonical choices):**
+  - Early return with everything already completed: checkpoint is **kept** (batch behavior); translation previously unlinked it.
+  - Unlink happens only on a non-interrupted run with zero failures (both services already agreed).
+  - `interrupted` detection uses `getattr(processor, "last_metrics", None)` (fixes a latent AttributeError with light processor fakes).
+- Test patches retargeted from `*_service.run_global_batch_tasks` to `core.command_runner.run_global_batch_tasks`.
+
+### Tests
+
+- Full suite: 451 passed, 1 skipped.
+
+### Version
+
+- Bumped to 2.18.7 in `pyproject.toml`, `src/ask_llm/__init__.py`, `README.md`.
+
 ## 2.18.6 (2026-07-16)
 
 P4.6 follow-up — naming corrections from the review (§P4 item 6): `provider_router` → `fallback_chain`, `provider_specs` → `model_limits`.

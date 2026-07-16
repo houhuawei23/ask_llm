@@ -78,7 +78,7 @@ def test_translation_creates_checkpoint_on_failure(tmp_path):
     processor = MagicMock()
     processor.last_metrics = MagicMock(retried=0)
 
-    with patch("ask_llm.services.translation_service.run_global_batch_tasks") as mock_run:
+    with patch("ask_llm.core.command_runner.run_global_batch_tasks") as mock_run:
         mock_run.return_value = ([failed_result], processor)
         with patch.object(service, "_export_text_file") as mock_export:
             mock_export.return_value = MagicMock(success=False)
@@ -119,7 +119,7 @@ def test_translation_resume_skips_completed_chunks(tmp_path):
     checkpoint.save(f"{job.output_path}.trans_checkpoint.json")
 
     with (
-        patch("ask_llm.services.translation_service.run_global_batch_tasks") as mock_run,
+        patch("ask_llm.core.command_runner.run_global_batch_tasks") as mock_run,
         patch.object(service, "_export_text_file") as mock_export,
     ):
         mock_export.return_value = MagicMock(success=True)
