@@ -163,7 +163,7 @@ class TranslationService:
             ValueError: If input or configuration is invalid.
         """
         # Import CLI helpers locally to avoid a top-level circular import with cli.app.
-        from ask_llm.cli.common import _is_directory_output, _resolve_trans_input_paths
+        from ask_llm.utils.path_resolver import _is_directory_output, _resolve_trans_input_paths
 
         session_result = TranslationSessionResult()
         _t0 = time.perf_counter()

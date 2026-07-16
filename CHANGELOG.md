@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.18.2 (2026-07-16)
+
+P4.3 — path resolution moved out of the CLI layer (review §P4 item 3).
+
+### Changed
+
+- **New `utils/path_resolver.py`** — `_resolve_trans_input_paths` and `_is_directory_output` now live here. `TranslationService` imports them from `utils` instead of `cli.common` (a service→CLI layer violation). `cli/common.py` re-exports both for backward compatibility (`ask_llm.cli` public surface unchanged).
+
+### Tests
+
+- Full suite: 447 passed, 1 skipped.
+
+### Version
+
+- Bumped to 2.18.2 in `pyproject.toml`, `src/ask_llm/__init__.py`, `README.md`.
+
 ## 2.18.1 (2026-07-16)
 
 P4.9 — console singleton cleanup + non-destructive embedded setup (review §P4 item 9).
