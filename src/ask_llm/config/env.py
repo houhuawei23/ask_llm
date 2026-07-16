@@ -109,8 +109,14 @@ def _warn_conflicting_env_overrides() -> None:
             )
 
 
-def _apply_env_overrides(data: dict[str, Any]) -> dict[str, Any]:
-    """Apply ASK_LLM_* environment variable overrides to config data."""
+def _apply_env_overrides(
+    data: dict[str, Any], provenance: dict[str, str] | None = None
+) -> dict[str, Any]:
+    """Apply ASK_LLM_* environment variable overrides to config data.
+
+    When *provenance* is given, each applied override is recorded as
+    ``{"<dotted.key>": "env:<VAR_NAME>"}``.
+    """
     result = copy.deepcopy(data)
     _warn_conflicting_env_overrides()
     legacy_chunk = os.getenv("ASK_LLM_TRANSLATION_MAX_CHUNK_SIZE")
@@ -125,6 +131,8 @@ def _apply_env_overrides(data: dict[str, Any]) -> dict[str, Any]:
             try:
                 parsed = _parse_env_value(env_val, key_path)
                 _set_nested(result, key_path, parsed)
+                if provenance is not None:
+                    provenance[".".join(key_path)] = f"env:{env_var}"
                 logger.debug(f"Config override from {env_var}")
             except (ValueError, TypeError) as e:
                 logger.warning(f"Invalid env {env_var}={env_val!r}: {e}")

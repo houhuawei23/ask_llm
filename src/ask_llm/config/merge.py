@@ -2,12 +2,34 @@
 
 Merge order in ``ConfigLoader.load``: package default < providers.yml < user
 config < env overrides. Overlay values take precedence.
+
+``record_leaves`` supports config provenance: recording which layer supplied
+each leaf value so ``config show --debug-config`` can report it.
 """
 
 from __future__ import annotations
 
 import copy
 from typing import Any
+
+
+def record_leaves(
+    data: Any,
+    source: str,
+    provenance: dict[str, str],
+    parts: tuple[str, ...] = (),
+) -> None:
+    """Record *source* for every leaf path in *data* (dotted notation).
+
+    Call layers in precedence order (lowest first); later calls overwrite
+    earlier labels, so the final mapping names the layer that actually won
+    each key.
+    """
+    if isinstance(data, dict) and data:
+        for k, v in data.items():
+            record_leaves(v, source, provenance, (*parts, str(k)))
+    elif parts:
+        provenance[".".join(parts)] = source
 
 
 def _deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:

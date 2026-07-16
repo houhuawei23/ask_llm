@@ -1,5 +1,29 @@
 # Changelog
 
+## 2.16.17 (2026-07-16)
+
+P2 final — config provenance. Every config leaf now records which layer supplied its final value; `ask-llm config show --debug-config` reports it per key (review §4.2.4 "provenance 误导").
+
+### Added
+
+- **`LoadResult.provenance: dict[str, str]`** — dotted key path → source label (`package default (<path>)`, `providers.yml (<path>)`, `<user config path>`, or `env:<VAR_NAME>`). Layers are recorded lowest-to-highest precedence, so each label names the layer that actually won the key. Key paths use raw config-file naming (e.g. `providers.deepseek.base_url`, before the `api_*` conversion).
+- **`config/merge.record_leaves`** — provenance recording helper.
+- **`--debug-config` per-key value-source report**, grouped by source with key counts.
+- `_load_providers_yml` now also returns the source path it loaded from.
+- New test `test_provenance_records_winning_layer`.
+
+### Changed
+
+- `_apply_env_overrides(data, provenance=None)` records applied overrides as `env:<VAR_NAME>` entries.
+
+### Tests
+
+- Full suite: 418 passed, 1 skipped. CLI smoke-tested `config show --debug-config` with an env override.
+
+### Version
+
+- Bumped to 2.16.17 in `pyproject.toml`, `src/ask_llm/__init__.py`, `README.md`.
+
 ## 2.16.16 (2026-07-16)
 
 P2 structural — `config/loader.py` split by responsibility (review §4.2.4). No behavior change.

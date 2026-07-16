@@ -29,6 +29,23 @@ class TestConfigLoader:
         with pytest.raises(FileNotFoundError):
             ConfigLoader.load(temp_dir / "nonexistent.yml")
 
+    def test_provenance_records_winning_layer(self, sample_config_file):
+        """P2.12: LoadResult.provenance names the layer that supplied each key."""
+        try:
+            os.environ["ASK_LLM_TRANSLATION_TARGET_LANGUAGE"] = "fr"
+            load_result = ConfigLoader.load(sample_config_file)
+            prov = load_result.provenance
+            assert prov, "provenance should not be empty"
+            # Env override wins over file layers.
+            assert prov["translation.target_language"] == (
+                "env:ASK_LLM_TRANSLATION_TARGET_LANGUAGE"
+            )
+            # Keys present in the user file are attributed to it.
+            user_file_keys = [k for k, s in prov.items() if str(sample_config_file) in s]
+            assert user_file_keys, "expected keys attributed to the user config file"
+        finally:
+            os.environ.pop("ASK_LLM_TRANSLATION_TARGET_LANGUAGE", None)
+
     def test_load_invalid_yaml(self, temp_dir):
         """Test loading invalid YAML raises error."""
         config_path = temp_dir / "invalid.yml"

@@ -20,7 +20,7 @@ import yaml
 from loguru import logger
 
 from ask_llm.config.env import _apply_env_overrides, resolve_env_vars
-from ask_llm.config.merge import _deep_merge
+from ask_llm.config.merge import _deep_merge, record_leaves
 from ask_llm.config.providers_catalog import _load_providers_yml
 from ask_llm.config.unified_config import UnifiedConfig
 from ask_llm.core.models import AppConfig
@@ -29,10 +29,19 @@ from ask_llm.core.models import AppConfig
 class LoadResult:
     """Result of loading default_config.yml, containing both provider and unified config."""
 
-    def __init__(self, app_config: AppConfig, unified_config: UnifiedConfig, config_path: Path):
+    def __init__(
+        self,
+        app_config: AppConfig,
+        unified_config: UnifiedConfig,
+        config_path: Path,
+        provenance: dict[str, str] | None = None,
+    ):
         self.app_config = app_config
         self.unified_config = unified_config
         self.config_path = config_path
+        # Per-leaf dotted key -> source label (file path or "env:<VAR>") naming
+        # the layer that supplied the final value. See config/merge.record_leaves.
+        self.provenance: dict[str, str] = provenance or {}
 
 
 class ConfigLoader:
@@ -105,6 +114,11 @@ class ConfigLoader:
             )
         base_data = cls._load_yaml(pkg_path)
 
+        # Provenance: record layers from lowest to highest precedence so the
+        # last label written for each leaf names the layer that actually won.
+        provenance: dict[str, str] = {}
+        record_leaves(base_data, f"package default ({pkg_path})", provenance)
+
         # 2. Merge user config over base (if user config is different from package)
         if user_path != pkg_path:
             logger.debug(f"Loading user config from: {user_path}")
@@ -115,14 +129,17 @@ class ConfigLoader:
 
         # 3. Merge providers.yml as fallback for provider runtime config.
         #    Priority: default_config.yml (user) > providers.yml > package built-in.
-        providers_yml_data = _load_providers_yml()
+        providers_yml_data, providers_yml_path = _load_providers_yml()
         if providers_yml_data:
             # providers.yml fills in missing providers but does NOT override
             # providers already defined in default_config.yml.
             data = _deep_merge(providers_yml_data, data)
+            record_leaves(providers_yml_data, f"providers.yml ({providers_yml_path})", provenance)
+        if user_path != pkg_path:
+            record_leaves(user_data, str(user_path), provenance)
 
         # 4. Apply environment variable overrides
-        data = _apply_env_overrides(data)
+        data = _apply_env_overrides(data, provenance)
 
         # 5. Validate required sections
         if "providers" not in data:
@@ -162,7 +179,10 @@ class ConfigLoader:
 
         logger.info(f"Configuration loaded successfully from: {user_path}")
         return LoadResult(
-            app_config=app_config, unified_config=unified_config, config_path=user_path
+            app_config=app_config,
+            unified_config=unified_config,
+            config_path=user_path,
+            provenance=provenance,
         )
 
     @classmethod

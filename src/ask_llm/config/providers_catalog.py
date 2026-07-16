@@ -44,7 +44,7 @@ def _candidate_providers_yml_paths() -> list[Path]:
     return paths
 
 
-def _load_providers_yml() -> dict[str, Any]:
+def _load_providers_yml() -> tuple[dict[str, Any], Path | None]:
     """
     Load provider runtime config from the first existing providers.yml.
 
@@ -53,8 +53,9 @@ def _load_providers_yml() -> dict[str, Any]:
     (context_length, max_output, pricing_per_million_tokens, etc.).
 
     Returns:
-        Dict with shape {"providers": {...}, "default_provider": ..., "default_model": ...}
-        or empty dict if no providers.yml found.
+        Tuple of (data, source_path). ``data`` has shape
+        ``{"providers": {...}, "default_provider": ..., "default_model": ...}``;
+        ``({}, None)`` when no providers.yml was found.
     """
     for p in _candidate_providers_yml_paths():
         if not p.is_file():
@@ -107,14 +108,17 @@ def _load_providers_yml() -> dict[str, Any]:
                 f"Loaded provider runtime config from {p.resolve()} "
                 f"({len(cleaned_providers)} providers)"
             )
-            return {
-                "providers": cleaned_providers,
-                "default_provider": default_provider,
-                "default_model": default_model,
-            }
+            return (
+                {
+                    "providers": cleaned_providers,
+                    "default_provider": default_provider,
+                    "default_model": default_model,
+                },
+                p.resolve(),
+            )
         except OSError as e:
             logger.warning(f"Could not read providers.yml at {p}: {e}")
         except (yaml.YAMLError, TypeError, ValueError) as e:
             logger.warning(f"Invalid YAML in providers.yml at {p}: {e}")
 
-    return {}
+    return {}, None
