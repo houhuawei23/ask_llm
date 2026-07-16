@@ -16,7 +16,15 @@ from pydantic import BaseModel, Field
 
 
 class TextChunk(BaseModel):
-    """A chunk of text with metadata."""
+    """A chunk of text with metadata.
+
+    Chunk-id convention (P3.7, single convention): every producer —
+    ``BinarySplitter``, ``plain_text_chunks_by_tokens``, and
+    ``rebalance_translation_chunks`` — emits **dense, zero-based ids in
+    document order** (``0..n-1``). Rebalancing may renumber, but only ever
+    to another dense zero-based sequence, so ``chunk_id`` is always a valid
+    positional index into the chunk list it came from.
+    """
 
     content: str = Field(..., description="Chunk content")
     chunk_id: int = Field(..., description="Chunk ID")

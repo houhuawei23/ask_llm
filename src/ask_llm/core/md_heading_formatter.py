@@ -6,6 +6,7 @@ and applies the formatted headings back to the original text.
 
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from loguru import logger
@@ -138,10 +139,38 @@ class HeadingFormatStats:
 class HeadingFormatter(ChunkedLLMJob):
     """Format headings using LLM API."""
 
-    # Instruction for context-aware batch processing (uses original headings, enables concurrent)
-    CONTEXT_BATCH_INSTRUCTION = """注意：以下输入用 --- 分隔。前部分为前文标题（原始格式，供层级和编号规律参考），后部分为待格式化标题。请根据前文与后文的衔接关系，为后部分分配合适级别。只输出后部分的格式化结果，每行一个，保持顺序。
+    # Fallback if the prompt file is unavailable (e.g. broken symlink in a
+    # minimal install). Canonical source: prompts/md-heading-context-batch.md.
+    _CONTEXT_BATCH_INSTRUCTION_FALLBACK = (
+        "注意：以下输入用 --- 分隔。前部分为前文标题（原始格式，供层级和编号规律参考），"
+        "后部分为待格式化标题。请根据前文与后文的衔接关系，为后部分分配合适级别。"
+        "只输出后部分的格式化结果，每行一个，保持顺序。\n\n"
+    )
+    _context_batch_instruction_cache: str | None = None
 
-"""
+    @classmethod
+    def context_batch_instruction(cls) -> str:
+        """Context-batch instruction, loaded from the prompt file (P3.6).
+
+        Prompt text lives in ``prompts/md-heading-context-batch.md`` instead of
+        the class body; the embedded string is only a defensive fallback.
+        """
+        if cls._context_batch_instruction_cache is not None:
+            return cls._context_batch_instruction_cache
+        instruction: str | None = None
+        try:
+            prompt_file = Path(__file__).resolve().parent.parent / "prompts" / (
+                "md-heading-context-batch.md"
+            )
+            if prompt_file.is_file():
+                instruction = prompt_file.read_text(encoding="utf-8")
+        except OSError:
+            instruction = None
+        if not instruction or not instruction.strip():
+            instruction = cls._CONTEXT_BATCH_INSTRUCTION_FALLBACK
+        # Preserve the historical trailing blank line before 【前文标题】.
+        cls._context_batch_instruction_cache = instruction.rstrip("\n") + "\n\n"
+        return cls._context_batch_instruction_cache
 
     def __init__(
         self,
@@ -195,7 +224,7 @@ class HeadingFormatter(ChunkedLLMJob):
 
         if context_headings:
             content = (
-                self.CONTEXT_BATCH_INSTRUCTION
+                self.context_batch_instruction()
                 + "【前文标题，供层级参考】\n"
                 + "\n".join(context_headings)
                 + "\n\n---\n\n【待格式化，只输出此部分】\n\n"

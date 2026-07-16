@@ -1,5 +1,23 @@
 # Changelog
 
+## 2.17.5 (2026-07-16)
+
+P3.6 + P3.7 — prompt text externalized; chunk-id convention unified and tested. **P3 (Markdown 单一管线) complete.**
+
+### Added
+
+- **New prompt file `prompts/md-heading-context-batch.md`** — canonical home of the heading context-batch instruction (review §4.4.6 "提示词字符串混进类体"). `HeadingFormatter.context_batch_instruction()` loads it from the package `prompts/` tree (cached); the embedded string remains only as a defensive fallback. Trailing blank line preserved for byte-identical prompts.
+- **Chunk-id convention documented on `TextChunk`** (P3.7): every producer — `BinarySplitter`, `plain_text_chunks_by_tokens`, `rebalance_translation_chunks` — emits dense zero-based ids in document order (`0..n-1`); rebalancing may renumber but only to another dense zero-based sequence, so `chunk_id` always indexes the list it came from.
+- `TestChunkIdConvention` tests for both producers.
+
+### Tests
+
+- Full suite: 440 passed, 1 skipped (+2 new).
+
+### Version
+
+- Bumped to 2.17.5 in `pyproject.toml`, `src/ask_llm/__init__.py`, `README.md`.
+
 ## 2.17.4 (2026-07-16)
 
 P3.5 — `format_service` branch merge + title resume wired end-to-end (review §4.4.6, item 5).

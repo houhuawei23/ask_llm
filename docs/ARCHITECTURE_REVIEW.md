@@ -12,7 +12,7 @@
 | **P0** 承载性 bug 止血 | ✅ 已完成 | v2.16.0 (2026-07-14) |
 | **P1** 执行引擎统一 | ✅ 已完成 | v2.16.1–2.16.7 (2026-07-14) |
 | **P2** 配置去全局 + 单一对象 | ✅ 已完成 | v2.16.8–2.16.17 (2026-07-16) |
-| P3 Markdown 单一管线 | 🔄 进行中 | v2.17.0–2.17.4 (2026-07-16) |
+| **P3** Markdown 单一管线 | ✅ 已完成 | v2.17.0–2.17.5 (2026-07-16) |
 | P4 服务层/引擎/导出器收尾 | ⏳ 待开始 | — |
 
 **P1 进度（v2.16.1–2.16.2）**：
@@ -43,7 +43,9 @@
 - ✅ P3.3（v2.17.2）— `ChunkedLLMJob` 基类（`core/chunked_llm_job.py`，182 LOC）：init 回退、prompt 加载、runner 接线、checkpoint save/resume 骨架单份；`HeadingFormatter`/`BodyFormatter` 降为薄子类。**非对称 resume 消灭**：`HeadingFormatter.resume_from_checkpoint` 新增（此前 title checkpoint 只写不能恢复，§4.4.6），按标题序号合并，回归测试覆盖。
 - ✅ P3.4（v2.17.3）— position-aware 重组：`BodyFormatter._join_chunks_position_aware` 消费 `TextChunk.start_pos/end_pos`（此前正文侧死重），恢复原块间空白而非强制 `\n\n`；硬切分（character/hard_token_split）邻接空分隔符原样拼接（列表项/紧凑表格不再被插入空行）。spans 不构成干净分区时回退 legacy `_join_chunks`。5 新测试。
 - ✅ P3.5（v2.17.4）— `format_service.format_one` 单一调度器：title/body 分叉只存一处，sequential/parallel 两份 if/else 删除（各 ~30 LOC）。**title resume 端到端接线**：`FormatService.resume_from_checkpoint` 支持 title checkpoint（此前直接 raise），经 `HeadingFormatter.resume_from_checkpoint` + `HeadingApplier` 合并写回；标题数不匹配报清晰 RuntimeError。
-- ⏳ P3 余项：prompt 外迁（`CONTEXT_BATCH_INSTRUCTION` 等）、chunk-id 统一。
+- ✅ P3.6（v2.17.5）— prompt 外迁：`CONTEXT_BATCH_INSTRUCTION` 移入 `prompts/md-heading-context-batch.md`（包内 prompts 树加载 + 缓存），类体内仅留防御性 fallback。
+- ✅ P3.7（v2.17.5）— chunk-id 约定统一并文档化于 `TextChunk`：所有产出方（BinarySplitter / plain_text_chunks_by_tokens / rebalance）均发密集 0..n-1 文档序 id；rebalance 重编号亦保持密集零基。约定测试覆盖两产出方。
+- 🎯 **P3 完成** — 单一解析器（frontmatter+fence 保护集中）、BinarySplitter 单一算法（prompt+content 预算）、ChunkedLLMJob 基类（对称 resume）、position-aware 重组、format_one 调度器、prompt 外迁、chunk-id 统一，全部落地。
 
 **P0 已落地（v2.16.0）**：B2（CJK 令牌近似+安全系数）、B3（`${VAR}` 告警 + gate 覆盖 trans/paper）、B4（splitter 代码栅栏感知）、B6（per-worker 进度条）、B7（`attempt_history` 改为扁平 `AttemptRecord`）、B8（provider-cache 接缝类型化）、B9（限流超时可配置）、密钥轮换清缓存。完整说明见 `CHANGELOG.md` 2.16.0 条目。
 **P0 延后**：完整 `SecretStr` 迁移 → P2（与配置重构 + 引擎接缝收口一同进行）。

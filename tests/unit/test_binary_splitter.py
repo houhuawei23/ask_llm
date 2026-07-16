@@ -107,3 +107,29 @@ class TestBinarySplitter:
         chunks = splitter.split(text)
         plain = MarkdownTokenSplitter(MODEL, 100).split(text)
         assert len(chunks) >= len(plain)
+
+
+class TestChunkIdConvention:
+    """P3.7: all producers emit dense zero-based ids in document order."""
+
+    def test_binary_splitter_ids_dense_ordered(self):
+        text = "\n\n".join(f"Paragraph {i}. " + "text " * 50 for i in range(8))
+        chunks = _split(text, 60)
+        assert [c.chunk_id for c in chunks] == list(range(len(chunks)))
+        # positions non-decreasing in id order
+        starts = [c.start_pos for c in chunks]
+        assert starts == sorted(starts)
+
+    def test_rebalance_ids_dense_ordered(self):
+        from ask_llm.core.text_splitter import TextChunk
+        from ask_llm.utils.chunk_balance import rebalance_translation_chunks
+
+        chunks = [
+            TextChunk(content="word " * 80, chunk_id=0, start_pos=0, end_pos=400),
+            TextChunk(content="tiny", chunk_id=1, start_pos=400, end_pos=404),
+            TextChunk(content="tiny2", chunk_id=2, start_pos=404, end_pos=409),
+        ]
+        out = rebalance_translation_chunks(
+            chunks, model=MODEL, max_chunk_tokens=40, min_merge_tokens=10, enabled=True
+        )
+        assert [c.chunk_id for c in out] == list(range(len(out)))
