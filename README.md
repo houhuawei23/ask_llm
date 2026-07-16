@@ -200,10 +200,16 @@ ask_llm/
 
 ### Batch, translation, and paper internals
 
-- `ask_llm.config.cli_session` — shared config load (`ConfigLoader` + `set_config`), `ConfigManager`, CLI overrides, and API key gate used by `trans`, `paper`, and `batch`.
+- `ask_llm.config.cli_session` — shared config load (`ConfigLoader` + `set_config`), `ConfigManager`, CLI overrides, API key gate, pricing hint, and `bootstrap_command()` used by `trans`, `paper`, and `batch`.
 - `ask_llm.core.global_batch_runner` — `run_global_batch_tasks` creates `GlobalBatchProcessor` and runs `process_global_tasks` (optional worker clamp vs. task count for paper).
+- `ask_llm.core.command_runner` — `run_with_checkpoint` shared checkpoint lifecycle (resume filter → run → merge → save → unlink on clean success) for `batch` and `trans`.
+- `ask_llm.core.markdown_structure` — single-pass Markdown parser (fence ranges, frontmatter, heading spans) consumed by splitting and formatting.
+- `ask_llm.core.binary_splitter` — budget-pluggable Markdown splitter (`TokenBudget` with `prompt_overhead`); `MarkdownTokenSplitter` is a thin compat wrapper.
+- `ask_llm.core.chunked_llm_job` — shared orchestration base for `HeadingFormatter` / `BodyFormatter` (prompt loading, runner wiring, checkpoint save/resume).
+- `ask_llm.utils.engine_facade` — the only module importing `llm_engine` (`create_engine_adapter`, `EngineConfigView`, `load_engine_providers_config`).
 - `ask_llm.core.tasks.builders` — factories such as `build_paper_explain_task` for typed `BatchTask` construction.
 - `BatchTask.task_kind` — `translation_chunk` or `paper_explain`; legacy `paper_mode=True` still maps to `paper_explain`.
+- `ask_llm.services.translation_service` — aggregator; per-file work lives in `text_file_translator` and `notebook_file_translator` collaborators.
 
 ## Development
 
