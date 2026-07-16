@@ -1,5 +1,27 @@
 # Changelog
 
+## 2.17.4 (2026-07-16)
+
+P3.5 — `format_service` branch merge + title resume wired end-to-end (review §4.4.6, item 5).
+
+### Added
+
+- **`format_service.format_one(file, format_type=..., **opts)`** — single per-file formatting dispatcher. The title/body branch now lives here exactly once; `run_sequential_format` and `run_parallel_format` both call it (previously the same if/else was copied into both runners, review §4.4.6).
+- **Title checkpoint resume in `FormatService.resume_from_checkpoint`** — previously raised `ValueError("标题格式化暂不支持 checkpoint 恢复")`. Now it resumes failed heading batches via `HeadingFormatter.resume_from_checkpoint` (P3.3), re-extracts headings from the source file, merges with `HeadingApplier`, and writes output through the same path as body resume. A heading-count mismatch (source file changed since the checkpoint) raises a clear `RuntimeError` advising a fresh run.
+
+### Changed
+
+- Replaced the outdated `test_resume_title_checkpoint_raises` with `test_resume_title_checkpoint_supported`.
+- `run_sequential_format` / `run_parallel_format` lost ~30 LOC of duplicated branching each.
+
+### Tests
+
+- Full suite: 438 passed, 1 skipped.
+
+### Version
+
+- Bumped to 2.17.4 in `pyproject.toml`, `src/ask_llm/__init__.py`, `README.md`.
+
 ## 2.17.3 (2026-07-16)
 
 P3.4 — position-aware reassembly for body formatting (review §4.4.4, item 4).

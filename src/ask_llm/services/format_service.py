@@ -27,6 +27,11 @@ from ask_llm.core.format_markdown_file import (
     format_one_markdown_file,
 )
 from ask_llm.core.md_body_formatter import BodyFormatter
+from ask_llm.core.md_heading_formatter import (
+    HeadingApplier,
+    HeadingExtractor,
+    HeadingFormatter,
+)
 from ask_llm.core.processor import RequestProcessor
 from ask_llm.utils.console import console
 from ask_llm.utils.file_handler import FileHandler
@@ -34,6 +39,59 @@ from ask_llm.utils.file_handler import FileHandler
 # Built-in default matching default_config.yml so FormatService can resume
 # without an active CLI config (e.g. library / embedded use).
 _DEFAULT_FORMATTED_SUFFIX = "_formatted"
+
+
+def format_one(
+    file_path: str,
+    *,
+    format_type: str,
+    processor: RequestProcessor,
+    model: str,
+    prompt_file_resolved: str,
+    heading_batch_size: int | None = None,
+    heading_concurrency: int | None = None,
+    body_max_chunk_tokens: int | None = None,
+    body_concurrency: int | None = None,
+    output: str | None = None,
+    inplace: bool = False,
+    force: bool = False,
+    retries: int | None = None,
+    retry_delay: float | None = None,
+    retry_delay_max: float | None = None,
+) -> FormatMarkdownOutcome:
+    """Single dispatcher for per-file formatting (P3.5).
+
+    The title/body branch lives here exactly once; sequential and parallel
+    runners both call this instead of duplicating the if/else.
+    """
+    if format_type == "title":
+        return format_one_markdown_file(
+            file_path,
+            processor=processor,
+            prompt_file_resolved=prompt_file_resolved,
+            heading_batch_size=heading_batch_size,
+            heading_concurrency=heading_concurrency,
+            retries=retries,
+            retry_delay=retry_delay,
+            retry_delay_max=retry_delay_max,
+            output=output,
+            inplace=inplace,
+            force=force,
+        )
+    return format_body_markdown_file(
+        file_path,
+        processor=processor,
+        model=model,
+        prompt_file_resolved=prompt_file_resolved,
+        body_max_chunk_tokens=body_max_chunk_tokens,
+        body_concurrency=body_concurrency,
+        retries=retries,
+        retry_delay=retry_delay,
+        retry_delay_max=retry_delay_max,
+        output=output,
+        inplace=inplace,
+        force=force,
+    )
 
 
 def _print_format_summary(
@@ -110,35 +168,23 @@ def run_sequential_format(
         console.print()
         console.print(f"[bold]处理: {file_path}[/bold]")
 
-        if format_type == "title":
-            outcome = format_one_markdown_file(
-                file_path,
-                processor=processor,
-                prompt_file_resolved=prompt_file_resolved,
-                heading_batch_size=heading_batch_size,
-                heading_concurrency=heading_concurrency,
-                retries=retries,
-                retry_delay=retry_delay,
-                retry_delay_max=retry_delay_max,
-                output=output,
-                inplace=inplace,
-                force=force,
-            )
-        else:
-            outcome = format_body_markdown_file(
-                file_path,
-                processor=processor,
-                model=model,
-                prompt_file_resolved=prompt_file_resolved,
-                body_max_chunk_tokens=body_max_chunk_tokens,
-                body_concurrency=body_concurrency,
-                retries=retries,
-                retry_delay=retry_delay,
-                retry_delay_max=retry_delay_max,
-                output=output,
-                inplace=inplace,
-                force=force,
-            )
+        outcome = format_one(
+            file_path,
+            format_type=format_type,
+            processor=processor,
+            model=model,
+            prompt_file_resolved=prompt_file_resolved,
+            heading_batch_size=heading_batch_size,
+            heading_concurrency=heading_concurrency,
+            body_max_chunk_tokens=body_max_chunk_tokens,
+            body_concurrency=body_concurrency,
+            output=output,
+            inplace=inplace,
+            force=force,
+            retries=retries,
+            retry_delay=retry_delay,
+            retry_delay_max=retry_delay_max,
+        )
 
         ok, in_toks, out_toks = _handle_outcome(outcome, format_type)
         if ok:
@@ -192,37 +238,24 @@ def run_parallel_format(
     )
 
     def _submit_file(pool: ThreadPoolExecutor, fp: str) -> Any:
-        if format_type == "title":
-            return pool.submit(
-                format_one_markdown_file,
-                fp,
-                processor=processor,
-                prompt_file_resolved=prompt_file_resolved,
-                heading_batch_size=heading_batch_size,
-                heading_concurrency=heading_concurrency,
-                retries=retries,
-                retry_delay=retry_delay,
-                retry_delay_max=retry_delay_max,
-                output=output,
-                inplace=inplace,
-                force=force,
-            )
-        else:
-            return pool.submit(
-                format_body_markdown_file,
-                fp,
-                processor=processor,
-                model=model,
-                prompt_file_resolved=prompt_file_resolved,
-                body_max_chunk_tokens=body_max_chunk_tokens,
-                body_concurrency=body_concurrency,
-                retries=retries,
-                retry_delay=retry_delay,
-                retry_delay_max=retry_delay_max,
-                output=output,
-                inplace=inplace,
-                force=force,
-            )
+        return pool.submit(
+            format_one,
+            fp,
+            format_type=format_type,
+            processor=processor,
+            model=model,
+            prompt_file_resolved=prompt_file_resolved,
+            heading_batch_size=heading_batch_size,
+            heading_concurrency=heading_concurrency,
+            body_max_chunk_tokens=body_max_chunk_tokens,
+            body_concurrency=body_concurrency,
+            output=output,
+            inplace=inplace,
+            force=force,
+            retries=retries,
+            retry_delay=retry_delay,
+            retry_delay_max=retry_delay_max,
+        )
 
     with Progress(*progress_columns, console=console.rich_console, transient=False) as progress:
         task_id = progress.add_task(
@@ -291,9 +324,12 @@ class FormatService:
             inplace: Overwrite the source file.
             force: Overwrite existing output file.
 
+        Supports both body and title checkpoints (P3.5; title resume was
+        previously rejected).
+
         Raises:
-            ValueError: If title-mode resume is requested.
-            RuntimeError: If writing output fails.
+            RuntimeError: If writing output fails, or the resumed heading count
+                does not match the source file.
         """
         checkpoint = FormatCheckpoint.load(checkpoint_path)
         source_file = checkpoint.source_file
@@ -311,8 +347,28 @@ class FormatService:
                 processor=self.processor,
                 model=self.model,
             )
+            final_text = result.text
+            still_failed = result.failed_chunks
+            updated_checkpoint = result.checkpoint_path
         else:
-            raise ValueError("标题格式化暂不支持 checkpoint 恢复，请直接重新运行 format 命令。")
+            # Title resume (P3.5): re-process failed heading batches, then
+            # re-apply the merged heading list onto the source document.
+            result = HeadingFormatter.resume_from_checkpoint(
+                checkpoint_path,
+                processor=self.processor,
+            )
+            source_text = FileHandler.read(source_file)
+            headings = HeadingExtractor.extract(source_text)
+            if len(result.formatted_headings) != len(headings):
+                raise RuntimeError(
+                    f"恢复结果标题数 ({len(result.formatted_headings)}) 与源文件标题数 "
+                    f"({len(headings)}) 不一致，无法安全合并；请直接重新运行 format 命令。"
+                )
+            final_text = HeadingApplier().apply(
+                source_text, headings, result.formatted_headings
+            )
+            still_failed = result.failed_batches
+            updated_checkpoint = result.checkpoint_path
 
         if inplace:
             out_path = source_file
@@ -328,16 +384,16 @@ class FormatService:
             out_path = FileHandler.generate_output_path(source_file, suffix=suffix)
 
         try:
-            FileHandler.write(out_path, result.text, force=force or inplace)
+            FileHandler.write(out_path, final_text, force=force or inplace)
         except Exception as exc:
             raise RuntimeError(f"写入失败: {exc}") from exc
 
-        if result.failed_chunks:
+        if still_failed:
             console.print_warning(
-                f"部分成功: {len(result.failed_chunks)} 个 chunk 仍失败，原始内容已保留"
+                f"部分成功: {len(still_failed)} 个 chunk/batch 仍失败，原始内容已保留"
             )
-            if result.checkpoint_path:
-                console.print_info(f"更新后的 checkpoint: {result.checkpoint_path}")
+            if updated_checkpoint:
+                console.print_info(f"更新后的 checkpoint: {updated_checkpoint}")
         else:
             console.print_success(f"全部完成！已保存: {out_path}")
             try:

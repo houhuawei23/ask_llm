@@ -102,7 +102,8 @@ def test_resume_body_checkpoint_remove_failure_warns(service, mock_config, tmp_p
     assert str(checkpoint_path) in warned
 
 
-def test_resume_title_checkpoint_raises(service, tmp_path):
+def test_resume_title_checkpoint_supported(service, mock_config, tmp_path):
+    """P3.5: title checkpoints resume (was ValueError before P3.3/P3.5)."""
     checkpoint_path = tmp_path / "doc.md.title_checkpoint.json"
     checkpoint_path.write_text("{}", encoding="utf-8")
 
@@ -112,15 +113,35 @@ def test_resume_title_checkpoint_raises(service, tmp_path):
     mock_checkpoint.failed_chunks = []
     mock_checkpoint.successful_chunks = []
 
-    with patch("ask_llm.services.format_service.FormatCheckpoint") as mock_cls:
+    result = MagicMock()
+    result.formatted_headings = ["# A", "## B"]
+    result.failed_batches = []
+    result.checkpoint_path = None
+
+    with (
+        patch("ask_llm.services.format_service.get_config_or_none") as mock_get_config,
+        patch("ask_llm.services.format_service.FormatCheckpoint") as mock_cls,
+        patch("ask_llm.services.format_service.HeadingFormatter") as mock_hf,
+        patch("ask_llm.services.format_service.HeadingExtractor") as mock_hex,
+        patch("ask_llm.services.format_service.HeadingApplier") as mock_happ,
+        patch("ask_llm.services.format_service.FileHandler") as mock_fh,
+        patch("ask_llm.services.format_service.os.remove") as mock_remove,
+    ):
+        mock_get_config.return_value = mock_config
         mock_cls.load.return_value = mock_checkpoint
-        with pytest.raises(ValueError, match="标题格式化暂不支持 checkpoint 恢复"):
-            service.resume_from_checkpoint(
-                str(checkpoint_path),
-                output=None,
-                inplace=False,
-                force=False,
-            )
+        mock_hf.resume_from_checkpoint.return_value = result
+        mock_hex.extract.return_value = [MagicMock(), MagicMock()]
+        mock_happ.return_value.apply.return_value = "merged text"
+        mock_fh.read.return_value = "# A\n\n## B\n"
+        service.resume_from_checkpoint(
+            str(checkpoint_path),
+            output=None,
+            inplace=False,
+            force=False,
+        )
+
+    mock_fh.write.assert_called_once()
+    mock_remove.assert_called_once_with(str(checkpoint_path))
 
 
 def test_resume_body_partial_failure_keeps_checkpoint(service, mock_config, tmp_path):
