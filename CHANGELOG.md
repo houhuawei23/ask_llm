@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.18.3 (2026-07-16)
+
+P4.10 — file I/O decoupled from progress rendering (review §P4 item 10).
+
+### Added
+
+- **`FileHandler.read_chunked(path, on_chunk=None)`** and **`FileHandler.write_chunked(path, content, on_chunk=None)`** — progress-free I/O cores taking an `on_chunk(bytes)` callback. tqdm bars (`_read_with_progress` / `_write_with_progress`) are now just one consumer of that callback (`pbar.update`); library/embedded callers can meter progress themselves or ignore it. Byte-accurate accounting (B10) preserved: character-based slicing, byte-based reporting.
+- `tests/unit/test_file_handler.py` — 4 tests: byte sums match payload, callbacks optional.
+
+### Tests
+
+- Full suite: 451 passed, 1 skipped (+4 new).
+
+### Version
+
+- Bumped to 2.18.3 in `pyproject.toml`, `src/ask_llm/__init__.py`, `README.md`.
+
 ## 2.18.2 (2026-07-16)
 
 P4.3 — path resolution moved out of the CLI layer (review §P4 item 3).
