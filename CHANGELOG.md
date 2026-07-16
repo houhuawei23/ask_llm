@@ -1,5 +1,27 @@
 # Changelog
 
+## 2.18.0 (2026-07-16)
+
+P4 start — unified error-keyword table (review §P4 item 8). Minor version bump per the review's release plan (P1–P3 each shipped a minor; P4 continues).
+
+### Added
+
+- **New `core/error_keywords.py`** — single canonical rule table `ERROR_KEYWORD_RULES: (keyword → ErrorCategory, transient)`. `ErrorCategory` now lives here (re-exported from `telemetry` for backward compatibility). Rule order preserves the historical classification precedence (auth → rate limit → timeout → content filter → model error → network → validation; transient-but-uncategorized server errors last).
+- `tests/unit/test_error_keywords.py` — 7 tests: precedence, per-category classification, UNKNOWN fallback, retry-table derivation, historical-keyword parity, terminal-category invariant.
+
+### Changed
+
+- **`telemetry.classify_error`** delegates to the rule table (`classify_error_message`); the six hand-maintained keyword tuples are deleted.
+- **`retry_policy.DEFAULT_TRANSIENT_KEYWORDS`** is derived from the table (`TRANSIENT_KEYWORDS`). It is a superset of the old hardcoded list: rate-limit variants (`rate_limit`, `too many requests`, `throttled`, `quota exceeded`, `insufficient_quota`), timeout variants (`timed out`, `time out`, `deadline exceeded`), and network variants (`connect`, `dns`, `unreachable`, `refused`) are now also retryable. TLS/proxy signatures (`ssl`, `certificate`, `proxy`) stay non-transient (usually misconfiguration). All pre-existing transient keywords remain retryable (parity test).
+
+### Tests
+
+- Full suite: 440 passed, 1 skipped.
+
+### Version
+
+- Bumped to 2.18.0 in `pyproject.toml`, `src/ask_llm/__init__.py`, `README.md`.
+
 ## 2.17.5 (2026-07-16)
 
 P3.6 + P3.7 — prompt text externalized; chunk-id convention unified and tested. **P3 (Markdown 单一管线) complete.**

@@ -3,30 +3,29 @@
 Provides error classification, request/task log context, and helpers for
 injecting correlation IDs into Loguru logs without leaking CLI details into
 core modules.
+
+Error classification consumes the single keyword rule table in
+``ask_llm.core.error_keywords`` (P4.8); ``ErrorCategory`` is re-exported here
+for backward compatibility.
 """
 
 from __future__ import annotations
 
 import uuid
-from enum import Enum
 from typing import Any
 
 from loguru import logger
 from pydantic import BaseModel, Field
 
+from ask_llm.core.error_keywords import ErrorCategory, classify_error_message
 
-class ErrorCategory(str, Enum):
-    """High-level failure category for an API call or task attempt."""
-
-    SUCCESS = "success"
-    AUTHENTICATION = "authentication"
-    RATE_LIMIT = "rate_limit"
-    TIMEOUT = "timeout"
-    CONTENT_FILTER = "content_filter"
-    MODEL_ERROR = "model_error"
-    NETWORK_ERROR = "network_error"
-    VALIDATION_ERROR = "validation_error"
-    UNKNOWN = "unknown"
+__all__ = [
+    "ErrorCategory",
+    "LogContext",
+    "bind_context",
+    "classify_error",
+    "should_fallback_for_error",
+]
 
 
 class LogContext(BaseModel):
@@ -66,101 +65,13 @@ class LogContext(BaseModel):
 def classify_error(error_message: str | None) -> ErrorCategory:
     """Classify a raw error message into a stable :class:`ErrorCategory`.
 
+    Delegates to the single keyword rule table in
+    ``ask_llm.core.error_keywords`` (first matching rule in table order wins).
     The heuristic is intentionally conservative: we only categorize errors that
     are clearly identifiable from common provider/HTTP signatures. Everything
     else falls back to ``UNKNOWN`` so users are not misled.
     """
-    if not error_message:
-        return ErrorCategory.UNKNOWN
-
-    text = error_message.lower()
-
-    auth_keywords = (
-        "401",
-        "403",
-        "authentication",
-        "unauthorized",
-        "invalid api key",
-        "api key invalid",
-        "authentication_error",
-        "access denied",
-        "invalid token",
-    )
-    if any(k in text for k in auth_keywords):
-        return ErrorCategory.AUTHENTICATION
-
-    rate_limit_keywords = (
-        "429",
-        "rate limit",
-        "rate_limit",
-        "too many requests",
-        "throttled",
-        "quota exceeded",
-        "insufficient_quota",
-    )
-    if any(k in text for k in rate_limit_keywords):
-        return ErrorCategory.RATE_LIMIT
-
-    timeout_keywords = (
-        "timeout",
-        "timed out",
-        "time out",
-        "deadline exceeded",
-    )
-    if any(k in text for k in timeout_keywords):
-        return ErrorCategory.TIMEOUT
-
-    content_filter_keywords = (
-        "content filter",
-        "content_filter",
-        "content policy",
-        "moderation",
-        "safety",
-        "blocked",
-        "inappropriate content",
-        "content rejected",
-    )
-    if any(k in text for k in content_filter_keywords):
-        return ErrorCategory.CONTENT_FILTER
-
-    model_error_keywords = (
-        "model not found",
-        "invalid model",
-        "model error",
-        "bad request",
-        "invalid_request_error",
-        "context length",
-        "too long",
-        "maximum context",
-    )
-    if any(k in text for k in model_error_keywords):
-        return ErrorCategory.MODEL_ERROR
-
-    network_keywords = (
-        "connection",
-        "connect",
-        "network",
-        "dns",
-        "unreachable",
-        "refused",
-        "ssl",
-        "certificate",
-        "proxy",
-    )
-    if any(k in text for k in network_keywords):
-        return ErrorCategory.NETWORK_ERROR
-
-    validation_keywords = (
-        "validation",
-        "invalid",
-        "required",
-        "missing",
-        "not found in cache",
-    )
-    if any(k in text for k in validation_keywords):
-        return ErrorCategory.VALIDATION_ERROR
-
-    return ErrorCategory.UNKNOWN
+    return classify_error_message(error_message)
 
 
 def should_fallback_for_error(category: ErrorCategory) -> bool:

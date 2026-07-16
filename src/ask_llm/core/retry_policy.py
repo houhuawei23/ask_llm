@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from ask_llm.core.error_keywords import TRANSIENT_KEYWORDS
+
 """Retry policy abstraction for the bounded concurrent runner.
 
 Centralizes the previously-hardcoded transient-error keyword list so retry
@@ -10,21 +12,11 @@ without modifying the runner internals.
 """
 
 # Default keywords indicating a transient / retryable error message.
-DEFAULT_TRANSIENT_KEYWORDS: tuple[str, ...] = (
-    "timeout",
-    "connection",
-    "network",
-    "rate limit",
-    "429",
-    "503",
-    "502",
-    "500",
-    # Common provider-specific overload signals
-    "overloaded",
-    "overloaded_error",
-    "temporarily unavailable",
-    "try again",
-)
+# Derived from the single keyword rule table (P4.8): every transient rule's
+# keyword is retryable. This is a superset of the historical hardcoded list —
+# rate-limit/timeout/network variants previously only used for categorization
+# are now also retryable.
+DEFAULT_TRANSIENT_KEYWORDS: tuple[str, ...] = TRANSIENT_KEYWORDS
 
 
 @dataclass
