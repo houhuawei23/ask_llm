@@ -16,16 +16,7 @@ from ask_llm.utils.api_key_gate import (
     require_resolved_api_key,
 )
 from ask_llm.utils.console import console
-
-try:
-    from llm_engine import create_provider_adapter
-except ImportError:
-    console.print_error(
-        "llm_engine is required but not installed. Please install it with: pip install llm-engine"
-    )
-    raise
-
-from ask_llm.utils.provider_cache import EngineConfigView
+from ask_llm.utils.engine_facade import create_engine_adapter
 
 
 def ask(
@@ -212,9 +203,7 @@ def ask(
             require_resolved_api_key(config_manager, config_manager.current_provider_name)
 
         provider_config = config_manager.get_provider_config()
-        llm_provider = create_provider_adapter(
-            EngineConfigView(provider_config), default_model=final_model
-        )
+        llm_provider = create_engine_adapter(provider_config, default_model=final_model)
         processor = RequestProcessor(llm_provider)
         service.set_processor(processor)
 

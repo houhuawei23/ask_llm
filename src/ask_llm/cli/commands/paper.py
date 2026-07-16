@@ -18,7 +18,9 @@ from ask_llm.utils.console import console
 from ask_llm.utils.pricing import load_providers_pricing
 
 try:
-    import llm_engine  # noqa: F401 — fail fast if engine missing
+    from ask_llm.utils import (
+        engine_facade as _engine_facade,  # noqa: F401 — fail fast if engine missing
+    )
 except ImportError:
     console.print_error(
         "llm_engine is required but not installed. Please install it with: pip install llm-engine"

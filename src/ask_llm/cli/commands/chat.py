@@ -15,17 +15,8 @@ from ask_llm.utils.api_key_gate import (
     require_resolved_api_key,
 )
 from ask_llm.utils.console import console
+from ask_llm.utils.engine_facade import create_engine_adapter
 from ask_llm.utils.file_handler import FileHandler
-
-try:
-    from llm_engine import create_provider_adapter
-except ImportError:
-    console.print_error(
-        "llm_engine is required but not installed. Please install it with: pip install llm-engine"
-    )
-    raise
-
-from ask_llm.utils.provider_cache import EngineConfigView
 
 
 def chat(
@@ -130,9 +121,7 @@ def chat(
             provider_config = config_manager.get_provider_config()
 
             # Initialize provider using llm_engine factory
-            llm_provider = create_provider_adapter(
-                EngineConfigView(provider_config), default_model=final_model
-            )
+            llm_provider = create_engine_adapter(provider_config, default_model=final_model)
 
             # Load initial context
             initial_context = None

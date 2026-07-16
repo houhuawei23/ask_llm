@@ -1,5 +1,31 @@
 # Changelog
 
+## 2.18.4 (2026-07-16)
+
+P4.6 — `EngineAdapter` facade: `llm_engine` is now a single-module private dependency (review §P4 item 6).
+
+### Added
+
+- **New `utils/engine_facade.py`** — the only module importing `llm_engine` (grep invariant verified: `import llm_engine` / `from llm_engine` appears nowhere else in `src/ask_llm`). Exports:
+  - `EngineConfigView` (moved from `provider_cache`; re-exported there for backward compatibility) — unwraps the `SecretStr` key exactly once at the HTTP-client boundary.
+  - `create_engine_adapter(config, default_model=None)` — fresh adapter creation; accepts `ProviderConfig` or a pre-built view.
+  - `load_engine_providers_config()` — the engine's providers.yml catalog (base_url fallback), returning `{}` on any failure instead of the old bare `except Exception: pass` in the loader's hot path.
+
+### Changed
+
+- All six direct `create_provider_adapter` call sites (`cli/commands/{ask,chat,config,format_cmd}.py`, `utils/interactive_config.py`, `utils/provider_cache.py`) now go through the facade.
+- `cli/commands/{paper,trans}.py` fail-fast engine presence checks import the facade instead of `llm_engine` directly.
+- `config/loader.py` `_convert_providers_format` uses `load_engine_providers_config()` (no more function-local engine import with a silent bare except, review §4.2.4).
+- Tests patching `provider_cache.create_provider_adapter` retargeted to `create_engine_adapter`.
+
+### Tests
+
+- Full suite: 451 passed, 1 skipped.
+
+### Version
+
+- Bumped to 2.18.4 in `pyproject.toml`, `src/ask_llm/__init__.py`, `README.md`.
+
 ## 2.18.3 (2026-07-16)
 
 P4.10 — file I/O decoupled from progress rendering (review §P4 item 10).

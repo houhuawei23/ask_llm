@@ -4,6 +4,9 @@ Creating a provider adapter (and the underlying HTTP client) is not free.
 This module provides a process-wide LRU cache so that repeated calls to the
 same provider/model reuse the same adapter instance, keeping HTTP connections
 warm and reducing startup latency.
+
+Engine access goes through ``ask_llm.utils.engine_facade`` (P4.6); the
+``EngineConfigView`` compatibility import lives here too.
 """
 
 from __future__ import annotations
@@ -11,10 +14,11 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Any
 
-from llm_engine import create_provider_adapter
-
 from ask_llm.core.models import ProviderConfig
 from ask_llm.core.protocols import LLMProviderProtocol
+from ask_llm.utils.engine_facade import EngineConfigView, create_engine_adapter
+
+__all__ = ["EngineConfigView", "ProviderAdapterCache"]
 
 _DICT_DEPRECATION_MSG = (
     "Passing a dict to ProviderAdapterCache.get is deprecated; pass a "
@@ -43,44 +47,6 @@ def _to_provider_config(config: ProviderConfig | dict[str, Any]) -> ProviderConf
     raise TypeError(
         f"ProviderAdapterCache.get expects a ProviderConfig (or dict), got {type(config).__name__}"
     )
-
-
-class EngineConfigView:
-    """Plain-attribute view of a ``ProviderConfig`` for the llm_engine boundary.
-
-    llm_engine reads ``config.api_key`` as a plain string (``getattr``) and
-    forwards it to the HTTP client. Our ``ProviderConfig`` stores the key as
-    ``SecretStr``, so this view unwraps it exactly once at the boundary and
-    masks it again in ``repr`` to avoid accidental log leaks.
-    """
-
-    __slots__ = (
-        "api_base",
-        "api_key",
-        "api_provider",
-        "api_temperature",
-        "api_top_p",
-        "max_tokens",
-        "models",
-        "timeout",
-    )
-
-    def __init__(self, pc: ProviderConfig):
-        self.api_provider = pc.api_provider
-        self.api_key = pc.get_api_key()
-        self.api_base = pc.api_base
-        self.models = list(pc.models)
-        self.api_temperature = pc.api_temperature
-        self.api_top_p = pc.api_top_p
-        self.max_tokens = pc.max_tokens
-        self.timeout = pc.timeout
-
-    def __repr__(self) -> str:
-        masked = "***" if self.api_key else ""
-        return (
-            f"EngineConfigView(api_provider={self.api_provider!r}, api_key={masked!r}, "
-            f"api_base={self.api_base!r}, models={self.models!r})"
-        )
 
 
 @lru_cache(maxsize=128)
@@ -112,9 +78,7 @@ def _create_cached_adapter(
         max_tokens=max_tokens,
         timeout=timeout,
     )
-    return create_provider_adapter(
-        EngineConfigView(provider_config), default_model=default_model or None
-    )
+    return create_engine_adapter(provider_config, default_model=default_model or None)
 
 
 class ProviderAdapterCache:

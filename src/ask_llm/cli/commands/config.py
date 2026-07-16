@@ -7,22 +7,13 @@ from typing import Annotated
 
 import typer
 
+from ask_llm.cli.common import _config_init
 from ask_llm.cli.errors import cli_errors
 from ask_llm.config.context import set_config
 from ask_llm.config.loader import ConfigLoader
 from ask_llm.utils.api_key_gate import api_key_is_missing_or_unresolved
 from ask_llm.utils.console import console
-
-try:
-    from llm_engine import create_provider_adapter
-except ImportError:
-    console.print_error(
-        "llm_engine is required but not installed. Please install it with: pip install llm-engine"
-    )
-    raise
-
-from ask_llm.cli.common import _config_init
-from ask_llm.utils.provider_cache import EngineConfigView
+from ask_llm.utils.engine_facade import create_engine_adapter
 
 
 def config(
@@ -145,9 +136,7 @@ def config(
                         console.print("  Error: No default model available")
                         continue
 
-                    llm_provider = create_provider_adapter(
-                        EngineConfigView(pc), default_model=test_default_model
-                    )
+                    llm_provider = create_engine_adapter(pc, default_model=test_default_model)
                     success, message, latency = llm_provider.test_connection()
 
                     if success:

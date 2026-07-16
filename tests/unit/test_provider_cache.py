@@ -30,7 +30,7 @@ def _clear_cache():
 
 def test_cache_returns_same_adapter_for_same_config():
     config = _make_config()
-    with patch("ask_llm.utils.provider_cache.create_provider_adapter") as mock_create:
+    with patch("ask_llm.utils.provider_cache.create_engine_adapter") as mock_create:
         adapter = MagicMock()
         mock_create.return_value = adapter
         first = ProviderAdapterCache.get(config, default_model="gpt-4")
@@ -43,7 +43,7 @@ def test_cache_returns_same_adapter_for_same_config():
 def test_cache_creates_separate_adapter_for_different_provider():
     config_a = _make_config(api_provider="openai")
     config_b = _make_config(api_provider="deepseek", api_base="https://api.deepseek.com/v1")
-    with patch("ask_llm.utils.provider_cache.create_provider_adapter") as mock_create:
+    with patch("ask_llm.utils.provider_cache.create_engine_adapter") as mock_create:
         mock_create.side_effect = [MagicMock(), MagicMock()]
         ProviderAdapterCache.get(config_a, default_model="gpt-4")
         ProviderAdapterCache.get(config_b, default_model="deepseek-chat")
@@ -53,7 +53,7 @@ def test_cache_creates_separate_adapter_for_different_provider():
 
 def test_cache_clear_resets_state():
     config = _make_config()
-    with patch("ask_llm.utils.provider_cache.create_provider_adapter") as mock_create:
+    with patch("ask_llm.utils.provider_cache.create_engine_adapter") as mock_create:
         mock_create.return_value = MagicMock()
         ProviderAdapterCache.get(config, default_model="gpt-4")
         ProviderAdapterCache.clear()
@@ -64,7 +64,7 @@ def test_cache_clear_resets_state():
 
 def test_cache_info_tracks_hits_and_misses():
     config = _make_config()
-    with patch("ask_llm.utils.provider_cache.create_provider_adapter") as mock_create:
+    with patch("ask_llm.utils.provider_cache.create_engine_adapter") as mock_create:
         mock_create.return_value = MagicMock()
         ProviderAdapterCache.get(config, default_model="gpt-4")
         ProviderAdapterCache.get(config, default_model="gpt-4")
@@ -88,21 +88,21 @@ def test_dict_config_still_works_but_warns_deprecation():
         "max_tokens": None,
         "timeout": 60.0,
     }
-    with patch("ask_llm.utils.provider_cache.create_provider_adapter") as mock_create:
+    with patch("ask_llm.utils.provider_cache.create_engine_adapter") as mock_create:
         mock_provider = MagicMock()
         mock_create.return_value = mock_provider
         with pytest.warns(DeprecationWarning, match="deprecated"):
             result = ProviderAdapterCache.get(config, default_model="gpt-4")
 
     assert mock_create.call_count == 1
-    # The engine receives an EngineConfigView: object semantics preserved and
-    # the SecretStr key unwrapped exactly once at the llm_engine boundary.
-    from ask_llm.utils.provider_cache import EngineConfigView
+    # The facade receives a real ProviderConfig (object semantics preserved);
+    # the EngineConfigView unwraps the SecretStr key inside the facade (P4.6).
+    from ask_llm.core.models import ProviderConfig as _PC
 
     built_config = mock_create.call_args[0][0]
-    assert isinstance(built_config, EngineConfigView)
+    assert isinstance(built_config, _PC)
     assert built_config.api_provider == "openai"
-    assert built_config.api_key == "sk-test"  # plain str for the HTTP client
+    assert built_config.get_api_key() == "sk-test"
     assert result is mock_provider
 
 

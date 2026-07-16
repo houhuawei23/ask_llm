@@ -329,7 +329,7 @@ def test_build_provider_cache_includes_fallbacks():
     )
     cm.config.get_provider_config.return_value = base_cfg
 
-    with patch("ask_llm.utils.provider_cache.create_provider_adapter") as mock_create:
+    with patch("ask_llm.utils.provider_cache.create_engine_adapter") as mock_create:
         mock_create.return_value = MagicMock()
         cache = ProviderManager(cm).build_provider_cache([task])
 
@@ -374,7 +374,7 @@ def test_process_global_tasks_creates_per_worker_progress_bars():
 
     with (
         patch("ask_llm.core.progress_presenter.Progress") as mock_progress_cls,
-        patch("ask_llm.utils.provider_cache.create_provider_adapter", return_value=primary),
+        patch("ask_llm.utils.provider_cache.create_engine_adapter", return_value=primary),
         _patch_rate_limiter() as limiter_patch,
         _patch_token_helpers(),
         patch("ask_llm.core.task_executor.RequestProcessor") as mock_rp,
@@ -428,7 +428,7 @@ def test_process_global_tasks_bounded_calls_with_fallback_chain():
 
     with (
         patch("ask_llm.core.progress_presenter.Progress"),
-        patch("ask_llm.utils.provider_cache.create_provider_adapter", return_value=primary),
+        patch("ask_llm.utils.provider_cache.create_engine_adapter", return_value=primary),
         _patch_rate_limiter() as limiter_patch,
         _patch_token_helpers(),
         patch("ask_llm.core.task_executor.RequestProcessor") as mock_rp,

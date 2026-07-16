@@ -9,7 +9,9 @@ import typer
 from loguru import logger
 
 try:
-    import llm_engine  # noqa: F401 — fail fast if engine missing
+    from ask_llm.utils import (
+        engine_facade as _engine_facade,  # noqa: F401 — fail fast if engine missing
+    )
 except ImportError:
     from ask_llm.utils.console import console
 

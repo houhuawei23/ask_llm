@@ -24,6 +24,7 @@ from ask_llm.config.merge import _deep_merge, record_leaves
 from ask_llm.config.providers_catalog import _load_providers_yml
 from ask_llm.config.unified_config import UnifiedConfig
 from ask_llm.core.models import AppConfig
+from ask_llm.utils.engine_facade import load_engine_providers_config
 
 
 class LoadResult:
@@ -244,14 +245,10 @@ class ConfigLoader:
 
             base_url = provider_config.get("base_url", "")
             if not base_url:
-                try:
-                    from llm_engine.config_loader import load_providers_config
-
-                    providers_config = load_providers_config()
-                    if providers_config and name in providers_config.get("providers", {}):
-                        base_url = providers_config["providers"][name].get("base_url", "")
-                except Exception:
-                    pass
+                # Engine catalog fallback (via the engine facade seam, P4.6).
+                providers_config = load_engine_providers_config()
+                if name in providers_config.get("providers", {}):
+                    base_url = providers_config["providers"][name].get("base_url", "")
 
             if not base_url:
                 raise ValueError(
