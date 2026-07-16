@@ -1,5 +1,31 @@
 # Changelog
 
+## 2.19.0 (2026-07-16)
+
+P4.5 — `TranslationService` split into per-file collaborators; cross-thread mutable accumulator removed. **P4 (服务层/引擎/导出器收尾) complete.**
+
+### Added
+
+- **`services/text_file_translator.py`** — `TextFileTranslator` owns the text/markdown per-file flow (prepare → split → tasks → checkpointed translate → export). `TextTranslationJob` lives here (alias `_TextTranslationJob` kept on the service for compatibility).
+- **`services/notebook_file_translator.py`** — `NotebookFileTranslator` owns the single-notebook flow.
+- **`services/translation_options.py`** — shared value types (`TranslationOptions`, `TranslationJobResult`, `TranslationSessionResult`). `TranslationJobResult.results` (new field) carries per-chunk `BatchResult`s.
+- RUF001/RUF002 exemptions for the two new modules (Chinese user-facing strings).
+
+### Changed
+
+- **`TranslationService` 824 → 375 LOC**, now an aggregator: resolves inputs, delegates per-file work to the collaborators, and aggregates session results. Presentation helpers, `_accumulate`, and `export_report` behavior preserved byte-for-byte.
+- **Cross-thread mutable accumulator removed**: per-chunk results travel inside `TranslationJobResult.results` and are folded into `self._batch_results` only on the main thread (`_accumulate`). Previously worker threads called `list.extend` on shared state (GIL-atomic but semantically racy ordering).
+- Compat delegates kept: `service._prepare_text_file`, `service._translate_and_export_text_file`, `_TextTranslationJob`.
+- Test patches retargeted to the collaborator modules.
+
+### Tests
+
+- Full suite: 451 passed, 1 skipped.
+
+### Version
+
+- Bumped to 2.19.0 in `pyproject.toml`, `src/ask_llm/__init__.py`, `README.md`.
+
 ## 2.18.9 (2026-07-16)
 
 P4.4 — unified CLI bootstrap (review §P4 item 4, §4.3.2 duplicated pricing block).

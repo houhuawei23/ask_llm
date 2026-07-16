@@ -87,16 +87,16 @@ def test_prepare_text_file_applies_fallback_chain(tmp_path: Path):
             "ask_llm.services.translation_service.TextSplitter.detect_file_type",
             return_value="text",
         ),
-        patch("ask_llm.services.translation_service.FileHandler.read", return_value="hello world"),
+        patch("ask_llm.services.text_file_translator.FileHandler.read", return_value="hello world"),
         patch(
-            "ask_llm.services.translation_service.plain_text_chunks_by_tokens",
+            "ask_llm.services.text_file_translator.plain_text_chunks_by_tokens",
             return_value=[chunk],
         ),
         patch(
-            "ask_llm.services.translation_service.rebalance_translation_chunks",
+            "ask_llm.services.text_file_translator.rebalance_translation_chunks",
             return_value=[chunk],
         ),
-        patch("ask_llm.services.translation_service.Translator") as mock_translator_cls,
+        patch("ask_llm.services.text_file_translator.Translator") as mock_translator_cls,
     ):
         mock_translator = MagicMock()
         mock_translator.create_translation_tasks.return_value = [task]
@@ -138,16 +138,16 @@ def test_prepare_text_file_skips_fallback_when_disabled(tmp_path: Path):
             "ask_llm.services.translation_service.TextSplitter.detect_file_type",
             return_value="text",
         ),
-        patch("ask_llm.services.translation_service.FileHandler.read", return_value="hello world"),
+        patch("ask_llm.services.text_file_translator.FileHandler.read", return_value="hello world"),
         patch(
-            "ask_llm.services.translation_service.plain_text_chunks_by_tokens",
+            "ask_llm.services.text_file_translator.plain_text_chunks_by_tokens",
             return_value=[chunk],
         ),
         patch(
-            "ask_llm.services.translation_service.rebalance_translation_chunks",
+            "ask_llm.services.text_file_translator.rebalance_translation_chunks",
             return_value=[chunk],
         ),
-        patch("ask_llm.services.translation_service.Translator") as mock_translator_cls,
+        patch("ask_llm.services.text_file_translator.Translator") as mock_translator_cls,
     ):
         mock_translator = MagicMock()
         mock_translator.create_translation_tasks.return_value = [task]
