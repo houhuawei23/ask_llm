@@ -6,18 +6,16 @@ and applies the formatted headings back to the original text.
 
 import re
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Any
 
 from loguru import logger
 
 from ask_llm.config.context import get_config_or_none
-from ask_llm.core.concurrent import run_bounded_with_retries
+from ask_llm.core.chunked_llm_job import ChunkedLLMJob
 from ask_llm.core.format_checkpoint import (
     FailedChunkInfo,
     FormatCheckpoint,
     SuccessfulChunkInfo,
-    generate_checkpoint_path,
 )
 from ask_llm.core.markdown_structure import (
     CODE_FENCE_PATTERN,
@@ -137,7 +135,7 @@ class HeadingFormatStats:
     batches_failed: int = 0
 
 
-class HeadingFormatter:
+class HeadingFormatter(ChunkedLLMJob):
     """Format headings using LLM API."""
 
     # Instruction for context-aware batch processing (uses original headings, enables concurrent)
@@ -170,23 +168,19 @@ class HeadingFormatter:
             retry_delay: Initial retry delay in seconds (default from config)
             retry_delay_max: Max retry delay cap in seconds (default from config)
         """
-        self.processor = processor
-        self.prompt_template = prompt_template
-        self.prompt_file = prompt_file
         lr = get_config_or_none()
         fh_config = lr.unified_config.format_heading if lr is not None else _DEFAULT_FORMAT_HEADING
-        self.batch_size = batch_size if batch_size is not None else fh_config.batch_size
-        self.concurrency = concurrency if concurrency is not None else fh_config.concurrency
-        self.retries = retries if retries is not None else fh_config.retries
-        self.retry_delay = retry_delay if retry_delay is not None else fh_config.retry_delay
-        self.retry_delay_max = (
-            retry_delay_max if retry_delay_max is not None else fh_config.retry_delay_max
+        super().__init__(
+            processor,
+            prompt_template=prompt_template,
+            prompt_file=prompt_file,
+            concurrency=self._pick(concurrency, fh_config.concurrency),
+            retries=self._pick(retries, fh_config.retries),
+            retry_delay=self._pick(retry_delay, fh_config.retry_delay),
+            retry_delay_max=self._pick(retry_delay_max, fh_config.retry_delay_max),
         )
+        self.batch_size = self._pick(batch_size, fh_config.batch_size)
         self._context_heading_count = fh_config.context_heading_count
-
-        # Load prompt from file if specified
-        if prompt_file:
-            self.prompt_template = self._load_prompt_from_file(prompt_file)
 
     def _process_batch(
         self,
@@ -299,16 +293,10 @@ class HeadingFormatter:
                 failed_batches=[],
             )
 
-        template = self.prompt_template
-        if not template and self.prompt_file:
-            template = self._load_prompt_from_file(self.prompt_file)
-        if not template:
-            raise ValueError(
-                "Prompt template required for heading formatting. "
-                "Set format_heading.default_prompt_file in default_config.yml."
-            )
-        self.prompt_template = template
-        assert self.prompt_template is not None
+        template = self._resolve_template(
+            "Prompt template required for heading formatting. "
+            "Set format_heading.default_prompt_file in default_config.yml."
+        )
 
         batches: list[tuple[int, list[HeadingMatch], list[str] | None]] = []
         for i in range(0, len(headings), self.batch_size):
@@ -333,13 +321,9 @@ class HeadingFormatter:
                 f"(concurrency: {max_workers})"
             )
 
-        batch_results_list = run_bounded_with_retries(
+        batch_results_list = self._run_units(
             batch_items,
             self._process_batch_worker,
-            max_workers=max_workers,
-            max_retries=self.retries,
-            retry_delay=self.retry_delay,
-            retry_delay_max=self.retry_delay_max,
             is_failed=lambda r: not r.success,
             error_message=lambda r: r.failed_info.error or "",
             retry_count_from_result=lambda r: r.retry_count,
@@ -377,40 +361,173 @@ class HeadingFormatter:
         )
 
         # Save checkpoint if any batches failed
-        checkpoint_path: str | None = None
-        if failed_batches and source_file:
-            checkpoint_path = str(generate_checkpoint_path(source_file, "title"))
-            successful = []
-            offset = 0
-            for bidx in sorted(batch_results.keys()):
-                res = batch_results[bidx]
-                if res.success:
-                    for fh in res.formatted:
-                        successful.append(
-                            SuccessfulChunkInfo(chunk_id=offset, formatted_content=fh)
-                        )
-                        offset += 1
-                else:
-                    offset += len(res.original_headings)
+        successful = []
+        offset = 0
+        for bidx in sorted(batch_results.keys()):
+            res = batch_results[bidx]
+            if res.success:
+                for fh in res.formatted:
+                    successful.append(SuccessfulChunkInfo(chunk_id=offset, formatted_content=fh))
+                    offset += 1
+            else:
+                offset += len(res.original_headings)
 
-            checkpoint = FormatCheckpoint(
-                version=1,
-                source_file=source_file,
-                format_type="title",
-                model="",
-                prompt_template=template,
-                max_chunk_tokens=None,
-                created_at=datetime.now().isoformat(),
-                failed_chunks=failed_batches,
-                successful_chunks=successful,
-            )
-            checkpoint.save(checkpoint_path)
+        checkpoint_path = self._save_checkpoint(
+            source_file=source_file,
+            format_type="title",
+            model="",
+            prompt_template=template,
+            max_chunk_tokens=None,
+            failed_chunks=failed_batches,
+            successful_chunks=successful,
+        )
 
         return HeadingFormatResult(
             formatted_headings=all_formatted,
             stats=stats,
             failed_batches=failed_batches,
             checkpoint_path=checkpoint_path,
+        )
+
+    @staticmethod
+    def _lines_to_matches(lines: list[str]) -> list[HeadingMatch]:
+        """Rebuild minimal HeadingMatch objects from raw heading lines (resume)."""
+        matches = []
+        for line in lines:
+            stripped = line.lstrip("#")
+            level = len(line) - len(stripped) if line.startswith("#") else 0
+            matches.append(
+                HeadingMatch(
+                    raw_text=line,
+                    start_pos=0,
+                    end_pos=len(line),
+                    level=level,
+                    title=stripped.strip(),
+                )
+            )
+        return matches
+
+    def _resume_batch_worker(
+        self, unit: tuple[int, list[HeadingMatch]], retry_count: int
+    ) -> "HeadingFormatter._BatchResult":
+        """Re-process one failed batch from a checkpoint. Runner handles retry/backoff."""
+        offset, matches = unit
+        template = self.prompt_template
+        assert template is not None
+        try:
+            formatted = self._process_batch(matches, template, offset, 0, None)
+            return HeadingFormatter._BatchResult(
+                batch_idx=offset,
+                success=True,
+                formatted=formatted,
+                original_headings=[h.raw_text for h in matches],
+                retry_count=retry_count,
+            )
+        except Exception as e:
+            return HeadingFormatter._BatchResult(
+                batch_idx=offset,
+                success=False,
+                original_headings=[h.raw_text for h in matches],
+                retry_count=retry_count,
+                failed_info=FailedChunkInfo(
+                    chunk_id=offset,
+                    content="\n".join(h.raw_text for h in matches),
+                    prompt_template=template,
+                    error=str(e),
+                    retry_count=retry_count,
+                ),
+            )
+
+    @classmethod
+    def resume_from_checkpoint(
+        cls,
+        checkpoint_path: str,
+        processor: RequestProcessor,
+    ) -> HeadingFormatResult:
+        """Resume title formatting from a checkpoint file.
+
+        Symmetric with ``BodyFormatter.resume_from_checkpoint`` (P3.3): loads
+        the checkpoint, re-processes only the failed batches, and merges with
+        previously successful headings by heading ordinal.
+
+        Args:
+            checkpoint_path: Path to checkpoint JSON file
+            processor: RequestProcessor instance
+
+        Returns:
+            HeadingFormatResult with complete formatted headings
+        """
+        checkpoint = FormatCheckpoint.load(checkpoint_path)
+        formatter = cls(processor=processor, prompt_template=checkpoint.prompt_template)
+
+        stats = HeadingFormatStats()
+        still_failed: list[FailedChunkInfo] = []
+
+        # Ordinal -> formatted heading line, seeded from prior successes.
+        result_map: dict[int, str] = {
+            sc.chunk_id: sc.formatted_content for sc in checkpoint.successful_chunks
+        }
+
+        # Rebuild failed batches: failed content is "\n"-joined raw heading
+        # lines; chunk_id is the first heading ordinal of the batch.
+        units: list[tuple[int, list[HeadingMatch]]] = []
+        for fc in checkpoint.failed_chunks:
+            lines = [ln for ln in fc.content.split("\n") if ln.strip()]
+            if lines:
+                units.append((fc.chunk_id, cls._lines_to_matches(lines)))
+
+        retry_results = formatter._retry_failed_units(
+            checkpoint,
+            units,
+            formatter._resume_batch_worker,
+            is_failed=lambda r: not r.success,
+            error_message=lambda r: r.failed_info.error or "",
+            retry_count_from_result=lambda r: r.retry_count,
+            order_key=lambda r: r.batch_idx,
+        )
+        for res in retry_results:
+            if res.success:
+                for j, formatted in enumerate(res.formatted):
+                    result_map[res.batch_idx + j] = formatted
+                stats.batches_processed += 1
+                logger.info(f"[HeadingFormat] resumed batch at {res.batch_idx} succeeded")
+            else:
+                for j, original in enumerate(res.original_headings):
+                    result_map[res.batch_idx + j] = original
+                stats.batches_failed += 1
+                still_failed.append(res.failed_info)
+                logger.warning(
+                    f"[HeadingFormat] resumed batch at {res.batch_idx} still failed: "
+                    f"{res.failed_info.error}"
+                )
+
+        all_ids = sorted(result_map.keys())
+        all_formatted = [result_map[i] for i in all_ids]
+
+        # Save updated checkpoint if still failing
+        successful = [
+            SuccessfulChunkInfo(chunk_id=cid, formatted_content=result_map[cid])
+            for cid in all_ids
+            if not any(
+                f.chunk_id <= cid < f.chunk_id + len(f.content.split("\n")) for f in still_failed
+            )
+        ]
+        checkpoint_path_updated = formatter._save_checkpoint(
+            source_file=checkpoint.source_file,
+            format_type=checkpoint.format_type,
+            model=checkpoint.model,
+            prompt_template=checkpoint.prompt_template,
+            max_chunk_tokens=checkpoint.max_chunk_tokens,
+            failed_chunks=still_failed,
+            successful_chunks=successful,
+            checkpoint_path=checkpoint_path,
+        )
+
+        return HeadingFormatResult(
+            formatted_headings=all_formatted,
+            stats=stats,
+            failed_batches=still_failed,
+            checkpoint_path=checkpoint_path_updated,
         )
 
     def _parse_formatted_headings(

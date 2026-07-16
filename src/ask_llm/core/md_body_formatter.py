@@ -2,23 +2,23 @@
 
 Splits markdown text into chunks using heading-aware token-based splitting,
 formats each chunk concurrently via LLM API, and merges the results.
+
+Orchestration skeleton (config fallback, prompt loading, runner wiring,
+checkpoint save/resume) lives in :class:`ChunkedLLMJob` (P3.3).
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
 
 from loguru import logger
 
 from ask_llm.config.context import get_config_or_none
-from ask_llm.core.concurrent import run_bounded_with_retries
+from ask_llm.core.chunked_llm_job import ChunkedLLMJob
 from ask_llm.core.format_checkpoint import (
-    CHECKPOINT_VERSION,
     FailedChunkInfo,
     FormatCheckpoint,
     SuccessfulChunkInfo,
-    generate_checkpoint_path,
 )
 from ask_llm.core.markdown_token_splitter import MarkdownTokenSplitter
 from ask_llm.core.models import RequestMetadata
@@ -74,7 +74,7 @@ class _ChunkResult:
     failed_info: FailedChunkInfo = field(default_factory=lambda: FailedChunkInfo(0, "", "", "", 0))
 
 
-class BodyFormatter:
+class BodyFormatter(ChunkedLLMJob):
     """Format markdown body using LLM API."""
 
     def __init__(
@@ -102,26 +102,19 @@ class BodyFormatter:
             retry_delay: Initial retry delay in seconds (default from config)
             retry_delay_max: Max retry delay cap in seconds (default from config)
         """
-        self.processor = processor
-        self.model = model
-        self.prompt_template = prompt_template
-        self.prompt_file = prompt_file
-
         lr = get_config_or_none()
         fb_config = lr.unified_config.format_body if lr is not None else _DEFAULT_FORMAT_BODY
-        self.max_chunk_tokens = (
-            max_chunk_tokens if max_chunk_tokens is not None else fb_config.max_chunk_tokens
+        super().__init__(
+            processor,
+            prompt_template=prompt_template,
+            prompt_file=prompt_file,
+            concurrency=self._pick(concurrency, fb_config.concurrency),
+            retries=self._pick(retries, fb_config.retries),
+            retry_delay=self._pick(retry_delay, fb_config.retry_delay),
+            retry_delay_max=self._pick(retry_delay_max, fb_config.retry_delay_max),
         )
-        self.concurrency = concurrency if concurrency is not None else fb_config.concurrency
-        self.retries = retries if retries is not None else fb_config.retries
-        self.retry_delay = retry_delay if retry_delay is not None else fb_config.retry_delay
-        self.retry_delay_max = (
-            retry_delay_max if retry_delay_max is not None else fb_config.retry_delay_max
-        )
-
-        # Load prompt from file if specified
-        if prompt_file:
-            self.prompt_template = self._load_prompt_from_file(prompt_file)
+        self.model = model
+        self.max_chunk_tokens = self._pick(max_chunk_tokens, fb_config.max_chunk_tokens)
 
     def format_body(
         self,
@@ -152,16 +145,10 @@ class BodyFormatter:
         if not text.strip():
             return BodyFormatResult(text="", stats=stats, failed_chunks=[])
 
-        template = self.prompt_template
-        if not template and self.prompt_file:
-            template = self._load_prompt_from_file(self.prompt_file)
-        if not template:
-            raise ValueError(
-                "Prompt template required for body formatting. "
-                "Set format_body.default_prompt_file in default_config.yml."
-            )
-        self.prompt_template = template
-        assert self.prompt_template is not None
+        template = self._resolve_template(
+            "Prompt template required for body formatting. "
+            "Set format_body.default_prompt_file in default_config.yml."
+        )
 
         splitter = MarkdownTokenSplitter(
             model=self.model,
@@ -180,27 +167,21 @@ class BodyFormatter:
             f"retries={self.retries}"
         )
 
-        # Process chunks through the shared bounded runner (single queue, unified retry/backoff).
-        max_workers = min(self.concurrency, len(chunks))
         if len(chunks) > 1:
             logger.info(
                 f"[BodyFormat] processing {len(chunks)} chunks concurrently "
-                f"(max_workers={max_workers}, max_chunk_tokens={self.max_chunk_tokens})"
+                f"(max_workers={min(self.concurrency, len(chunks))}, "
+                f"max_chunk_tokens={self.max_chunk_tokens})"
             )
 
-        chunk_results_list = run_bounded_with_retries(
+        sorted_results: list[_ChunkResult] = self._run_units(
             chunks,
             self._process_chunk_worker,
-            max_workers=max_workers,
-            max_retries=self.retries,
-            retry_delay=self.retry_delay,
-            retry_delay_max=self.retry_delay_max,
             is_failed=lambda r: not r.success,
             error_message=lambda r: r.failed_info.error or "",
             retry_count_from_result=lambda r: r.retry_count,
             order_key=lambda r: r.chunk_id,
         )
-        sorted_results: list[_ChunkResult] = chunk_results_list
 
         # Collect results in order
         final_chunks: list[str] = []
@@ -235,29 +216,23 @@ class BodyFormatter:
         formatted_text = self._join_chunks(final_chunks)
 
         # Save checkpoint if any chunks failed
-        checkpoint_path: str | None = None
-        if failed_chunks and source_file:
-            checkpoint_path = str(generate_checkpoint_path(source_file, "body"))
-            successful = [
-                SuccessfulChunkInfo(
-                    chunk_id=i,
-                    formatted_content=sr.formatted,
-                )
-                for i, sr in enumerate(sorted_results)
-                if sr.success
-            ]
-            checkpoint = FormatCheckpoint(
-                version=1,
-                source_file=source_file,
-                format_type="body",
-                model=self.model,
-                prompt_template=template,
-                max_chunk_tokens=self.max_chunk_tokens,
-                created_at=datetime.now().isoformat(),
-                failed_chunks=failed_chunks,
-                successful_chunks=successful,
+        successful = [
+            SuccessfulChunkInfo(
+                chunk_id=i,
+                formatted_content=sr.formatted,
             )
-            checkpoint.save(checkpoint_path)
+            for i, sr in enumerate(sorted_results)
+            if sr.success
+        ]
+        checkpoint_path = self._save_checkpoint(
+            source_file=source_file,
+            format_type="body",
+            model=self.model,
+            prompt_template=template,
+            max_chunk_tokens=self.max_chunk_tokens,
+            failed_chunks=failed_chunks,
+            successful_chunks=successful,
+        )
 
         return BodyFormatResult(
             text=formatted_text,
@@ -381,13 +356,10 @@ class BodyFormatter:
         failed_chunks_inputs = [
             TextChunk(content=fc.content, chunk_id=fc.chunk_id) for fc in checkpoint.failed_chunks
         ]
-        retry_results = run_bounded_with_retries(
+        retry_results = formatter._retry_failed_units(
+            checkpoint,
             failed_chunks_inputs,
             formatter._process_chunk_worker,
-            max_workers=min(formatter.concurrency, len(failed_chunks_inputs) or 1),
-            max_retries=formatter.retries,
-            retry_delay=formatter.retry_delay,
-            retry_delay_max=formatter.retry_delay_max,
             is_failed=lambda r: not r.success,
             error_message=lambda r: r.failed_info.error or "",
             retry_count_from_result=lambda r: r.retry_count,
@@ -416,26 +388,21 @@ class BodyFormatter:
         formatted_text = cls._join_chunks(final_chunks)
 
         # Save updated checkpoint if still failing
-        checkpoint_path_updated: str | None = None
-        if still_failed:
-            checkpoint_path_updated = checkpoint_path
-            successful = [
-                SuccessfulChunkInfo(chunk_id=cid, formatted_content=result_map[cid])
-                for cid in all_ids
-                if cid not in {f.chunk_id for f in still_failed}
-            ]
-            updated = FormatCheckpoint(
-                version=CHECKPOINT_VERSION,
-                source_file=checkpoint.source_file,
-                format_type=checkpoint.format_type,
-                model=checkpoint.model,
-                prompt_template=checkpoint.prompt_template,
-                max_chunk_tokens=checkpoint.max_chunk_tokens,
-                created_at=datetime.now().isoformat(),
-                failed_chunks=still_failed,
-                successful_chunks=successful,
-            )
-            updated.save(checkpoint_path)
+        successful = [
+            SuccessfulChunkInfo(chunk_id=cid, formatted_content=result_map[cid])
+            for cid in all_ids
+            if cid not in {f.chunk_id for f in still_failed}
+        ]
+        checkpoint_path_updated = formatter._save_checkpoint(
+            source_file=checkpoint.source_file,
+            format_type=checkpoint.format_type,
+            model=checkpoint.model,
+            prompt_template=checkpoint.prompt_template,
+            max_chunk_tokens=checkpoint.max_chunk_tokens,
+            failed_chunks=still_failed,
+            successful_chunks=successful,
+            checkpoint_path=checkpoint_path,
+        )
 
         return BodyFormatResult(
             text=formatted_text,
@@ -443,23 +410,3 @@ class BodyFormatter:
             failed_chunks=still_failed,
             checkpoint_path=checkpoint_path_updated,
         )
-
-    @staticmethod
-    def _load_prompt_from_file(prompt_path: str) -> str:
-        """Load prompt template from file.
-
-        Supports @ prefix for relative paths from project root.
-
-        Args:
-            prompt_path: Path to prompt file (may start with @)
-
-        Returns:
-            Prompt template content
-
-        Raises:
-            FileNotFoundError: If prompt file not found
-            OSError: If file cannot be read
-        """
-        from ask_llm.utils.prompt_resolver import load_prompt_template
-
-        return load_prompt_template(prompt_path)

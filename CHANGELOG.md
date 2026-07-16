@@ -1,5 +1,28 @@
 # Changelog
 
+## 2.17.2 (2026-07-16)
+
+P3.3 — `ChunkedLLMJob` base class; both formatters demoted to thin subclasses; **title checkpoints can now be resumed** (review §4.4.5, item 3).
+
+### Added
+
+- **New `core/chunked_llm_job.py`** — shared orchestration skeleton for chunked LLM jobs: config-fallback helper (`_pick`), prompt resolution (`_resolve_template` + `_load_prompt_from_file` with `@` support), bounded-runner wiring (`_run_units`), checkpoint save (`_save_checkpoint`), and the resume runner (`_retry_failed_units`).
+- **`HeadingFormatter.resume_from_checkpoint`** (new) — symmetric with the body side: loads a title checkpoint, re-processes only failed batches, merges by heading ordinal, and re-saves if still failing. Ends the asymmetry where `HeadingFormatter` wrote checkpoints that could never be resumed (review §4.4.6).
+- `TestHeadingResume` regression test.
+
+### Changed
+
+- **`BodyFormatter` and `HeadingFormatter` now extend `ChunkedLLMJob`.** Duplicated init/config-fallback blocks, prompt loading, `run_bounded_with_retries` wiring, and checkpoint construction/saving are deleted from both; only work-unit building, per-unit LLM calls, and result assembly remain in the subclasses. Behavior unchanged on the forward path.
+- `md_body_formatter.py` 450 → 412 LOC; shared skeleton extracted to 182 LOC base.
+
+### Tests
+
+- Full suite: 433 passed, 1 skipped (+1 new).
+
+### Version
+
+- Bumped to 2.17.2 in `pyproject.toml`, `src/ask_llm/__init__.py`, `README.md`.
+
 ## 2.17.1 (2026-07-16)
 
 P3.2 — budget-pluggable `BinarySplitter`; dead char-based splitters deleted (review §4.4.2, item 2).
