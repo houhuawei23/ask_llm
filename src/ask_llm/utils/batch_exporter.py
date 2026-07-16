@@ -10,6 +10,7 @@ import yaml
 from loguru import logger
 
 from ask_llm.core.batch import BatchResult, BatchStatistics, TaskStatus
+from ask_llm.utils.export_formats import detect_export_format
 from ask_llm.utils.file_handler import FileHandler
 
 
@@ -71,17 +72,8 @@ class BatchResultExporter:
 
         # Auto-detect format from file extension if not specified
         if format_type is None:
-            suffix = output_file.suffix.lower()
-            extension_to_format = {
-                ".json": "json",
-                ".yaml": "yaml",
-                ".yml": "yaml",
-                ".csv": "csv",
-                ".md": "markdown",
-                ".markdown": "markdown",
-            }
-            format_type = extension_to_format.get(suffix, "json")
-            logger.debug(f"Auto-detected format '{format_type}' from extension '{suffix}'")
+            format_type = detect_export_format(output_path, default="json")
+            logger.debug(f"Auto-detected format '{format_type}' from extension")
         else:
             format_type = format_type.lower()
 
@@ -356,36 +348,7 @@ class BatchResultExporter:
                 "total_input_tokens": self.statistics.total_input_tokens,
                 "total_output_tokens": self.statistics.total_output_tokens,
             },
-            "results": [
-                {
-                    "task_id": result.task_id,
-                    "prompt": result.prompt,
-                    "content": result.content,
-                    "model_settings": {
-                        "provider": result.model_settings.provider,
-                        "model": result.model_settings.model,
-                        "temperature": result.model_settings.temperature,
-                        "top_p": result.model_settings.top_p,
-                    },
-                    "response": result.response,
-                    "status": result.status.value,
-                    "error": result.error,
-                    "metadata": {
-                        "provider": result.metadata.provider,
-                        "model": result.metadata.model,
-                        "temperature": result.metadata.temperature,
-                        "input_tokens": result.metadata.input_tokens,
-                        "output_tokens": result.metadata.output_tokens,
-                        "latency": result.metadata.latency,
-                        "timestamp": result.metadata.timestamp.isoformat(),
-                    }
-                    if result.metadata
-                    else None,
-                    "timestamp": result.timestamp.isoformat() if result.timestamp else None,
-                    "retry_count": result.retry_count,
-                }
-                for result in self.results
-            ],
+            "results": [result.project() for result in self.results],
         }
 
     @classmethod

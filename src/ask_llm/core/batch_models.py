@@ -147,6 +147,41 @@ class BatchResult(BaseModel):
     timestamp: datetime = Field(default_factory=datetime.now)
     retry_count: int = 0
 
+    def project(self) -> dict[str, Any]:
+        """Single projection of this result for exporters and reports (P4.7).
+
+        The one canonical dict shape for a ``BatchResult``; exporters
+        (``BatchResultExporter._prepare_data``) build on it instead of
+        hand-assembling per-result dicts.
+        """
+        return {
+            "task_id": self.task_id,
+            "prompt": self.prompt,
+            "content": self.content,
+            "model_settings": {
+                "provider": self.model_settings.provider,
+                "model": self.model_settings.model,
+                "temperature": self.model_settings.temperature,
+                "top_p": self.model_settings.top_p,
+            },
+            "response": self.response,
+            "status": self.status.value,
+            "error": self.error,
+            "metadata": {
+                "provider": self.metadata.provider,
+                "model": self.metadata.model,
+                "temperature": self.metadata.temperature,
+                "input_tokens": self.metadata.input_tokens,
+                "output_tokens": self.metadata.output_tokens,
+                "latency": self.metadata.latency,
+                "timestamp": self.metadata.timestamp.isoformat(),
+            }
+            if self.metadata
+            else None,
+            "timestamp": self.timestamp.isoformat() if self.timestamp else None,
+            "retry_count": self.retry_count,
+        }
+
 
 class BatchStatistics(BaseModel):
     """Statistics for batch processing."""

@@ -1,5 +1,27 @@
 # Changelog
 
+## 2.18.5 (2026-07-16)
+
+P4.7 — exporter unification (review §P4 item 7).
+
+### Added
+
+- **`BatchResult.project()`** (`core/batch_models.py`) — the single canonical dict projection of a result; `BatchResultExporter._prepare_data` now builds on it instead of hand-assembling per-result dicts.
+- **New `core/response_parser.py`** — canonical home of `unwrap_translation_payload` (+ its LaTeX-escape JSON fixer), moved out of `translation_exporter` so any consumer shares one implementation. The old static method remains as a thin shim.
+- **New `utils/export_formats.py`** — single extension→format mapping (`detect_export_format`); batch and translation exporters both use it (previously each carried its own copy with drifted defaults).
+
+### Changed
+
+- `TranslationExporter._export_json` now writes via streaming `json.JSONEncoder().iterencode` (no giant in-memory string), matching the batch exporter.
+
+### Tests
+
+- Full suite: 451 passed, 1 skipped.
+
+### Version
+
+- Bumped to 2.18.5 in `pyproject.toml`, `src/ask_llm/__init__.py`, `README.md`.
+
 ## 2.18.4 (2026-07-16)
 
 P4.6 — `EngineAdapter` facade: `llm_engine` is now a single-module private dependency (review §P4 item 6).
