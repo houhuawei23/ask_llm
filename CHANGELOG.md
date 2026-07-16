@@ -1,5 +1,26 @@
 # Changelog
 
+## 2.18.9 (2026-07-16)
+
+P4.4 — unified CLI bootstrap (review §P4 item 4, §4.3.2 duplicated pricing block).
+
+### Added
+
+- **`config/cli_session.load_pricing_with_hint()`** — pricing load + standard CLI hint, replacing the byte-identical 6-line pricing blocks in the batch/trans/paper commands.
+- **`config/cli_session.bootstrap_command()`** — one-call command preamble composing `load_cli_session` + `load_pricing_with_hint` + `resolve_provider_and_model_or_exit`; returns `(load_result, config_manager, pricing_map, pricing_source, provider, model)`.
+
+### Changed
+
+- `trans` and `paper` commands now use `bootstrap_command()`; `batch` uses `load_pricing_with_hint()` (its interactive model selection doesn't fit the standard provider/model resolution).
+
+### Tests
+
+- Full suite: 451 passed, 1 skipped.
+
+### Version
+
+- Bumped to 2.18.9 in `pyproject.toml`, `src/ask_llm/__init__.py`, `README.md`.
+
 ## 2.18.8 (2026-07-16)
 
 P4.2 — `PaperService` no longer exits the process; statuses replace `typer.Exit` (review §P4 item 2).

@@ -62,6 +62,57 @@ def resolve_default_model_or_exit(config_manager: ConfigManager) -> str:
     return default_model
 
 
+def load_pricing_with_hint(
+    explicit_path: str | Path | None = None,
+) -> tuple[dict, Path | None]:
+    """Load providers.yml pricing and print the standard CLI hint (P4.4).
+
+    Single home for the previously byte-identical 6-line pricing block in
+    the batch/trans/paper commands.
+
+    Returns:
+        Tuple of (pricing_map, pricing_source_path_or_None).
+    """
+    from ask_llm.utils.pricing import load_providers_pricing
+
+    pricing_map, pricing_source = load_providers_pricing(explicit_path)
+    if pricing_source:
+        console.print_info(f"API pricing loaded from: {pricing_source}")
+    else:
+        console.print_info(
+            "No providers.yml with pricing found; token counts will still be shown, "
+            "cost estimate unavailable (add pricing_per_million_tokens or use --providers-pricing)"
+        )
+    return pricing_map, pricing_source
+
+
+def bootstrap_command(
+    config_path: str | Path | None = None,
+    *,
+    pricing_path: str | Path | None = None,
+    cli_provider: str | None = None,
+    cli_model: str | None = None,
+) -> tuple[LoadResult, ConfigManager, dict, Path | None, str, str]:
+    """One-call CLI bootstrap (P4.4).
+
+    Composes :func:`load_cli_session` + :func:`load_pricing_with_hint` +
+    :func:`resolve_provider_and_model_or_exit` into the standard command
+    preamble shared by trans/paper (and future commands).
+
+    Returns:
+        ``(load_result, config_manager, pricing_map, pricing_source,
+        provider, model)``.
+    """
+    load_result, config_manager = load_cli_session(config_path)
+    pricing_map, pricing_source = load_pricing_with_hint(pricing_path)
+    provider, model = resolve_provider_and_model_or_exit(
+        config_manager,
+        cli_provider=cli_provider,
+        cli_model=cli_model,
+    )
+    return load_result, config_manager, pricing_map, pricing_source, provider, model
+
+
 def resolve_provider_and_model_or_exit(
     config_manager: ConfigManager,
     *,

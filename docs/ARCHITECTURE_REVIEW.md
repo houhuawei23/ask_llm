@@ -13,7 +13,7 @@
 | **P1** 执行引擎统一 | ✅ 已完成 | v2.16.1–2.16.7 (2026-07-14) |
 | **P2** 配置去全局 + 单一对象 | ✅ 已完成 | v2.16.8–2.16.17 (2026-07-16) |
 | **P3** Markdown 单一管线 | ✅ 已完成 | v2.17.0–2.17.5 (2026-07-16) |
-| P4 服务层/引擎/导出器收尾 | 🔄 进行中 | v2.18.0–2.18.8 (2026-07-16) |
+| P4 服务层/引擎/导出器收尾 | 🔄 进行中 | v2.18.0–2.18.9 (2026-07-16) |
 
 **P1 进度（v2.16.1–2.16.2）**：
 - ✅ P1.2 — 删除死的单模型 `BatchProcessor` 平行层级（~330 LOC，仅 shim 再导出，从未实例化；`GlobalBatchProcessor` 不继承它）。
@@ -57,7 +57,8 @@
 - ✅ P4.7（v2.18.5）— 导出器统一：`BatchResult.project()` 唯一投影；`core/response_parser.py` 收编 `_unwrap_translation_payload`（含 LaTeX 转义修复）；`utils/export_formats.py` 单一 `_detect_format`；翻译 JSON 导出改流式 iterencode。
 - ✅ P4.1（v2.18.7）— `core/command_runner.run_with_checkpoint`：checkpoint 生命周期单一实现（resume 过滤→run→merge→mark failed→save→干净全成功才 unlink），batch/trans 两 service 迁入（删 ~70 LOC 重复 + 漂移）；漂移裁决：早退保留 checkpoint（batch 语义）。paper `max_retries=3` 硬编码清除（新增 `paper.retries` 配置，默认 3）。
 - ✅ P4.2（v2.18.8）— `PaperService` 不再 `raise typer.Exit`：`PaperSessionResult.status`（ok/dry_run/nothing_to_do/failed）+ CLI 翻译退出码；service 层 typer-free。顺带修复潜伏 bug：`typer.Exit` 继承 RuntimeError，被 `except RuntimeError` 吞成 "API error: 0"。
-- ⏳ P4 余项：CLI bootstrap 统一、TranslationService 拆分（TextFileTranslator + NotebookFileTranslator）。
+- ✅ P4.4（v2.18.9）— CLI bootstrap 统一：`cli_session.load_pricing_with_hint()`（收编三处逐字节相同 pricing 块）+ `bootstrap_command()` 一站式 preamble（config+pricing+provider/model）；trans/paper 迁入，batch 用 pricing helper（交互式选模型不适配标准解析）。
+- ⏳ P4 余项：TranslationService 拆分（TextFileTranslator + NotebookFileTranslator）。
 
 **P0 已落地（v2.16.0）**：B2（CJK 令牌近似+安全系数）、B3（`${VAR}` 告警 + gate 覆盖 trans/paper）、B4（splitter 代码栅栏感知）、B6（per-worker 进度条）、B7（`attempt_history` 改为扁平 `AttemptRecord`）、B8（provider-cache 接缝类型化）、B9（限流超时可配置）、密钥轮换清缓存。完整说明见 `CHANGELOG.md` 2.16.0 条目。
 **P0 延后**：完整 `SecretStr` 迁移 → P2（与配置重构 + 引擎接缝收口一同进行）。

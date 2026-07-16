@@ -10,10 +10,9 @@ import typer
 from loguru import logger
 
 from ask_llm.cli.errors import raise_unexpected_cli_error
-from ask_llm.config.cli_session import load_cli_session
+from ask_llm.config.cli_session import load_cli_session, load_pricing_with_hint
 from ask_llm.services.batch_service import BatchService, run_batch_from_config
 from ask_llm.utils.console import console
-from ask_llm.utils.pricing import load_providers_pricing
 
 
 def batch(
@@ -133,14 +132,7 @@ def batch(
 
         load_result, config_manager = load_cli_session(config_path)
         batch_cfg = load_result.unified_config.batch
-        pricing_map, pricing_source = load_providers_pricing(None)
-        if pricing_source:
-            console.print_info(f"API pricing loaded from: {pricing_source}")
-        else:
-            console.print_info(
-                "No providers.yml with pricing found; token counts will still be shown, "
-                "cost estimate unavailable (add pricing_per_million_tokens or use --providers-pricing)"
-            )
+        pricing_map, _pricing_source = load_pricing_with_hint(None)
         effective_threads = threads if threads is not None else batch_cfg.threads
         effective_retries = retries if retries is not None else batch_cfg.retries
 
