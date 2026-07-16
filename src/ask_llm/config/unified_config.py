@@ -5,6 +5,8 @@ from typing import Any
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ask_llm.core.models import ProviderConfig
+
 
 class GeneralConfig(BaseModel):
     """General/global default configuration."""
@@ -401,8 +403,19 @@ class RateLimitConfig(BaseModel):
 
 
 class UnifiedConfig(BaseModel):
-    """Unified configuration loaded from default_config.yml."""
+    """Unified configuration loaded from default_config.yml.
 
+    Single configuration object for the whole application: provider runtime
+    settings (``providers`` / ``default_provider`` / ``default_model``) plus all
+    non-provider feature sections. ``AppConfig`` is derived from this as a
+    provider-facing view (see ``ConfigLoader.load``).
+    """
+
+    default_provider: str = Field(default="", description="Global default provider name")
+    default_model: str | None = Field(default=None, description="Global default model name")
+    providers: dict[str, ProviderConfig] = Field(
+        default_factory=dict, description="Provider runtime configurations"
+    )
     general: GeneralConfig = Field(default_factory=GeneralConfig)
     translation: TranslationConfig = Field(default_factory=TranslationConfig)
     batch: BatchConfig = Field(default_factory=BatchConfig)

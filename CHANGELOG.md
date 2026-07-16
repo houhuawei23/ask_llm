@@ -1,5 +1,23 @@
 # Changelog
 
+## 2.16.14 (2026-07-16)
+
+P2 structural — single configuration object. `UnifiedConfig` now absorbs the provider section; `AppConfig` is derived from it instead of being validated separately from the same YAML dict.
+
+### Changed
+
+- **`UnifiedConfig` gains `default_provider`, `default_model`, and `providers: dict[str, ProviderConfig]`** (`config/unified_config.py`). It is now the single configuration object for the whole application; the provider-facing `AppConfig` is a derived view sharing the same validated `ProviderConfig` values.
+- **`ConfigLoader.load` validates once.** Previously the same raw dict was validated twice — `UnifiedConfig.model_validate(data)` (silently ignoring the provider keys) and `_parse_app_config(_convert_providers_format(data))`. Now `_convert_providers_format` output is merged into the data and a single `UnifiedConfig.model_validate` pass validates everything; `AppConfig` is built by the new `_app_config_from_unified` helper (which keeps the "no default_provider → first provider + warning" fallback). The old `_parse_app_config` double-validation path is removed.
+- Error message on validation failure changed from "Invalid provider configuration" to "Invalid configuration" (it now covers all sections, not just providers).
+
+### Tests
+
+- Full suite: 416 passed, 1 skipped. Smoke-tested the real load path (`ConfigLoader.load()` with package default + `providers.yml`): app and unified views agree on default provider/model.
+
+### Version
+
+- Bumped to 2.16.14 in `pyproject.toml`, `src/ask_llm/__init__.py`, `README.md`.
+
 ## 2.16.13 (2026-07-16)
 
 P2 structural — first step of the config-object merge: `ConfigManager` now carries the unified config alongside `AppConfig`, fixing a production-crashing latent bug (B12).

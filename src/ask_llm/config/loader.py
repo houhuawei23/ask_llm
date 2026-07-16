@@ -18,7 +18,7 @@ import yaml
 from loguru import logger
 
 from ask_llm.config.unified_config import UnifiedConfig
-from ask_llm.core.models import AppConfig, ProviderConfig
+from ask_llm.core.models import AppConfig
 
 # Environment variable to config path mapping. Env vars overlay user config.
 # Format: "ASK_LLM_<SECTION>_<KEY>" -> ("section", "key") or "ASK_LLM_<KEY>" -> ("key",)
@@ -434,20 +434,21 @@ class ConfigLoader:
                 "  3. Run 'ask-llm config init' to generate a template"
             )
 
-        # Parse unified config (with defaults for missing sections)
-        unified_config = UnifiedConfig.model_validate(data)
-
-        # Convert providers to AppConfig format
+        # Convert providers to canonical (api_*) shape, then validate everything
+        # into a single UnifiedConfig in one pass.
         provider_data = cls._convert_providers_format(data)
+        merged_data = {**data, **provider_data}
 
         try:
-            app_config = cls._parse_app_config(provider_data)
+            unified_config = UnifiedConfig.model_validate(merged_data)
         except Exception as e:
             raise ValueError(
-                f"Invalid provider configuration: {e}\n"
+                f"Invalid configuration: {e}\n"
                 f"Please check providers.api_key (use ${{ENV_VAR}} for env vars) "
-                "and providers.api_base in your config"
+                "and providers.base_url in your config"
             ) from e
+
+        app_config = cls._app_config_from_unified(unified_config)
 
         logger.info(f"Configuration loaded successfully from: {user_path}")
         return LoadResult(
@@ -585,28 +586,16 @@ class ConfigLoader:
         }
 
     @classmethod
-    def _parse_app_config(cls, data: dict[str, Any]) -> AppConfig:
-        """Parse provider data into AppConfig."""
-        if "providers" not in data:
-            raise ValueError("Config must contain 'providers' key")
-
-        default_provider = data.get("default_provider")
+    def _app_config_from_unified(cls, unified_config: UnifiedConfig) -> AppConfig:
+        """Derive the provider-facing AppConfig view from a validated UnifiedConfig."""
+        providers = unified_config.providers
+        default_provider = unified_config.default_provider
         if not default_provider:
-            default_provider = next(iter(data["providers"].keys()))
+            default_provider = next(iter(providers.keys()))
             logger.warning(f"No default_provider specified, using: {default_provider}")
 
-        default_model = data.get("default_model")
-
-        providers = {}
-        for name, config_data in data["providers"].items():
-            config_data = {**config_data, "api_provider": name}
-            config_data.pop("api_model", None)
-            try:
-                providers[name] = ProviderConfig.model_validate(config_data)
-            except Exception as e:
-                logger.error(f"Failed to validate config for provider '{name}': {e}")
-                raise ValueError(f"Invalid config for provider '{name}': {e}") from e
-
         return AppConfig(
-            default_provider=default_provider, default_model=default_model, providers=providers
+            default_provider=default_provider,
+            default_model=unified_config.default_model,
+            providers=providers,
         )
