@@ -25,6 +25,8 @@ except ImportError:
     )
     raise
 
+from ask_llm.utils.provider_cache import EngineConfigView
+
 
 def chat(
     input_file: Annotated[
@@ -128,7 +130,9 @@ def chat(
             provider_config = config_manager.get_provider_config()
 
             # Initialize provider using llm_engine factory
-            llm_provider = create_provider_adapter(provider_config, default_model=final_model)
+            llm_provider = create_provider_adapter(
+                EngineConfigView(provider_config), default_model=final_model
+            )
 
             # Load initial context
             initial_context = None

@@ -29,6 +29,8 @@ except ImportError:
     )
     raise
 
+from ask_llm.utils.provider_cache import EngineConfigView
+
 
 def _default_file_workers() -> int:
     """Default parallel file workers for I/O-bound LLM calls."""
@@ -266,7 +268,9 @@ def format_cmd(
             console.print_error("未指定模型。请使用 --model 或在配置中设置默认模型。")
             raise typer.Exit(1)
 
-        llm_provider = create_provider_adapter(provider_config, default_model=default_model)
+        llm_provider = create_provider_adapter(
+            EngineConfigView(provider_config), default_model=default_model
+        )
         processor = RequestProcessor(llm_provider)
         format_service = FormatService(processor=processor, model=default_model)
 

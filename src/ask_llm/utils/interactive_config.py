@@ -18,6 +18,8 @@ except ImportError:
     )
     raise
 
+from ask_llm.utils.provider_cache import EngineConfigView
+
 
 class InteractiveConfigHelper:
     """Helper for interactive configuration of models and API keys."""
@@ -174,7 +176,9 @@ class InteractiveConfigHelper:
 
         try:
             default_model = self.config_manager.get_default_model(provider_name)
-            llm_provider = create_provider_adapter(provider_config, default_model=default_model)
+            llm_provider = create_provider_adapter(
+                EngineConfigView(provider_config), default_model=default_model
+            )
             success, message, latency = llm_provider.test_connection()
 
             if success:

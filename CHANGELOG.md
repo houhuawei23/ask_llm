@@ -1,5 +1,33 @@
 # Changelog
 
+## 2.16.15 (2026-07-16)
+
+P2 security — API keys are now `SecretStr` at rest. Keys stay masked in `repr()`, logs, and `model_dump(mode='json')`; the plain value is unwrapped exactly once at the llm_engine HTTP-client boundary.
+
+### Security
+
+- **`ProviderConfig.api_key` is now `pydantic.SecretStr`** (default `SecretStr("")`). Plain strings are coerced automatically, so YAML loading, CLI overrides, and existing constructors keep working. The unresolved-placeholder/empty-key load-time warnings are unchanged (the validator unwraps the secret for inspection and no longer interpolates the raw value into the warning text).
+
+### Added
+
+- **`ProviderConfig.get_api_key() -> str`** — the one sanctioned way to get the plain key (for provider client construction).
+- **`utils.provider_cache.EngineConfigView`** — plain-attribute view handed to `llm_engine.create_provider_adapter`, which reads `config.api_key` as a plain string via `getattr`. Unwraps the key once and re-masks it in `__repr__`. All six `create_provider_adapter` call sites (`cli/commands/{ask,chat,config,format_cmd}.py`, `utils/interactive_config.py`, and the adapter cache itself) now pass this view instead of the raw `ProviderConfig`.
+- **`api_key_is_missing_or_unresolved` accepts `str | SecretStr | None`** so all existing gate call sites work unchanged.
+- New test `test_api_key_masked_in_repr_and_json_dump`.
+
+### Changed
+
+- `cli/commands/config.py` API-key-not-configured check now uses `api_key_is_missing_or_unresolved` (the old `pc.api_key == "your-api-key-here"` string comparison does not work against `SecretStr`).
+- Tests comparing `config.api_key` to plain strings now compare `get_secret_value()`.
+
+### Tests
+
+- Full suite: 417 passed, 1 skipped. Smoke-tested the real load path: `SecretStr` at rest, masked repr, plain `str` key at the engine boundary.
+
+### Version
+
+- Bumped to 2.16.15 in `pyproject.toml`, `src/ask_llm/__init__.py`, `README.md`.
+
 ## 2.16.14 (2026-07-16)
 
 P2 structural — single configuration object. `UnifiedConfig` now absorbs the provider section; `AppConfig` is derived from it instead of being validated separately from the same YAML dict.

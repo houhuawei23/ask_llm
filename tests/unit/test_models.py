@@ -35,7 +35,7 @@ class TestProviderConfig:
             api_base="https://api.test.com",
             models=["test-model"],
         )
-        assert config.api_key == "your-api-key-here"
+        assert config.api_key.get_secret_value() == "your-api-key-here"
 
     def test_invalid_api_key_empty(self):
         """Test empty API key is allowed (ollama uses no key; gate enforces for others)."""
@@ -45,7 +45,7 @@ class TestProviderConfig:
             api_base="https://api.test.com",
             models=["test-model"],
         )
-        assert config.api_key == ""
+        assert config.api_key.get_secret_value() == ""
 
     def test_unresolved_env_var_placeholder_warns(self):
         """An unresolved ${VAR} placeholder warns loudly (not silent), still loads.
@@ -62,7 +62,7 @@ class TestProviderConfig:
                 api_base="https://api.test.com",
                 models=["test-model"],
             )
-        assert config.api_key == "${DEEPSEEK_API_KEY}"
+        assert config.api_key.get_secret_value() == "${DEEPSEEK_API_KEY}"
         mock_logger.warning.assert_called_once()
         message = mock_logger.warning.call_args[0][0].lower()
         assert "unresolved" in message
@@ -79,9 +79,22 @@ class TestProviderConfig:
                 api_base="https://api.test.com",
                 models=["test-model"],
             )
-        assert config.api_key == "prefix-${MISSING_VAR}-suffix"
+        assert config.api_key.get_secret_value() == "prefix-${MISSING_VAR}-suffix"
         mock_logger.warning.assert_called_once()
         assert "unresolved" in mock_logger.warning.call_args[0][0].lower()
+
+    def test_api_key_masked_in_repr_and_json_dump(self):
+        """SecretStr: key never appears in repr() or model_dump(mode='json')."""
+        config = ProviderConfig(
+            api_provider="test",
+            api_key="sk-super-secret",
+            api_base="https://api.test.com",
+            models=["test-model"],
+        )
+        assert "sk-super-secret" not in repr(config)
+        assert "sk-super-secret" not in str(config.model_dump(mode="json"))
+        # ...but the plain key is still retrievable for client construction.
+        assert config.get_api_key() == "sk-super-secret"
 
     def test_invalid_api_base(self):
         """Test validation rejects invalid API base URL."""

@@ -5,7 +5,7 @@ from enum import Enum
 from typing import Any
 
 from loguru import logger
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, SecretStr, field_validator
 
 
 class MessageRole(str, Enum):
@@ -95,7 +95,10 @@ class ProviderConfig(BaseModel):
     """Configuration for an LLM provider."""
 
     api_provider: str = Field(..., description="Provider identifier")
-    api_key: str = Field(default="", description="API key for authentication")
+    api_key: SecretStr = Field(
+        default=SecretStr(""),
+        description="API key for authentication (SecretStr: masked in repr/dumps)",
+    )
     api_base: str = Field(..., description="API base URL")
     models: list[str] = Field(default_factory=list, description="Available models")
     api_temperature: float = Field(default=0.7, ge=0.0, le=2.0, description="Sampling temperature")
@@ -110,7 +113,7 @@ class ProviderConfig(BaseModel):
 
     @field_validator("api_key")
     @classmethod
-    def validate_api_key(cls, v: str, info) -> str:
+    def validate_api_key(cls, v: SecretStr, info) -> SecretStr:
         """Validate API key: warn loudly if empty or carries an unresolved placeholder.
 
         ``resolve_env_vars`` leaves a literal ``${VAR}`` in place when the referenced
@@ -122,20 +125,29 @@ class ProviderConfig(BaseModel):
         (``ask_llm.utils.api_key_gate``) hard-blocks before any network call.
         """
         provider_name = info.data.get("api_provider", "unknown")
-        if "${" in v and "}" in v:
+        key = v.get_secret_value()
+        if "${" in key and "}" in key:
             logger.warning(
                 f"Provider '{provider_name}' API key has unresolved ${{...}} "
-                f"placeholder: {v!r}. Set ASK_LLM_{provider_name.upper()}_API_KEY "
+                f"placeholder. Set ASK_LLM_{provider_name.upper()}_API_KEY "
                 f"(or the referenced variable) before running; the API-key gate "
                 f"will block calls until it resolves."
             )
-        elif not v or v.strip() == "":
+        elif not key.strip():
             logger.warning(
                 f"Provider '{provider_name}' has empty API key. "
                 f"Set ASK_LLM_{provider_name.upper()}_API_KEY environment variable "
                 f"or configure in default_config.yml"
             )
         return v
+
+    def get_api_key(self) -> str:
+        """Return the plain-text API key for provider client construction.
+
+        Prefer attribute access (``SecretStr``) everywhere else so keys stay
+        masked in logs, reprs, and ``model_dump(mode='json')`` output.
+        """
+        return self.api_key.get_secret_value()
 
     @field_validator("api_base")
     @classmethod

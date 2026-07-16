@@ -25,6 +25,8 @@ except ImportError:
     )
     raise
 
+from ask_llm.utils.provider_cache import EngineConfigView
+
 
 def ask(
     input_source: Annotated[
@@ -210,7 +212,9 @@ def ask(
             require_resolved_api_key(config_manager, config_manager.current_provider_name)
 
         provider_config = config_manager.get_provider_config()
-        llm_provider = create_provider_adapter(provider_config, default_model=final_model)
+        llm_provider = create_provider_adapter(
+            EngineConfigView(provider_config), default_model=final_model
+        )
         processor = RequestProcessor(llm_provider)
         service.set_processor(processor)
 

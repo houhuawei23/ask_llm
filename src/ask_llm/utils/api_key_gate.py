@@ -8,6 +8,7 @@ import sys
 from typing import TYPE_CHECKING
 
 import typer
+from pydantic import SecretStr
 
 from ask_llm.utils.console import console
 
@@ -40,10 +41,14 @@ def provider_env_var_name(provider_name: str) -> str:
     return f"{provider_name.upper().replace('-', '_')}_API_KEY"
 
 
-def api_key_is_missing_or_unresolved(api_key: str) -> bool:
+def api_key_is_missing_or_unresolved(api_key: str | SecretStr | None) -> bool:
     """
     True if key is empty, placeholder, or still contains unresolved ${VAR} after YAML load.
+
+    Accepts plain strings or ``SecretStr`` (``ProviderConfig.api_key``).
     """
+    if isinstance(api_key, SecretStr):
+        api_key = api_key.get_secret_value()
     s = (api_key or "").strip()
     if not s or s.lower() in _INVALID_PLACEHOLDERS:
         return True
@@ -67,9 +72,7 @@ def require_resolved_api_key(config_manager: ConfigManager, provider_name: str) 
         raise typer.Exit(1)
 
 
-def ensure_resolved_provider_keys(
-    config_manager: ConfigManager, provider_names: list[str]
-) -> None:
+def ensure_resolved_provider_keys(config_manager: ConfigManager, provider_names: list[str]) -> None:
     """Raise :class:`UnresolvedAPIKeyError` if any provider key is unresolved.
 
     Service-layer chokepoint (no ``typer.Exit`` / console output): used by

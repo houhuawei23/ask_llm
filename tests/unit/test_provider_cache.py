@@ -95,10 +95,14 @@ def test_dict_config_still_works_but_warns_deprecation():
             result = ProviderAdapterCache.get(config, default_model="gpt-4")
 
     assert mock_create.call_count == 1
-    # The adapter must have been built from a ProviderConfig (object semantics).
+    # The engine receives an EngineConfigView: object semantics preserved and
+    # the SecretStr key unwrapped exactly once at the llm_engine boundary.
+    from ask_llm.utils.provider_cache import EngineConfigView
+
     built_config = mock_create.call_args[0][0]
-    assert isinstance(built_config, ProviderConfig)
+    assert isinstance(built_config, EngineConfigView)
     assert built_config.api_provider == "openai"
+    assert built_config.api_key == "sk-test"  # plain str for the HTTP client
     assert result is mock_provider
 
 

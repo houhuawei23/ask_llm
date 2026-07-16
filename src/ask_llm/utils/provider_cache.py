@@ -41,9 +41,46 @@ def _to_provider_config(config: ProviderConfig | dict[str, Any]) -> ProviderConf
         warnings.warn(_DICT_DEPRECATION_MSG, DeprecationWarning, stacklevel=3)
         return ProviderConfig(**config)
     raise TypeError(
-        "ProviderAdapterCache.get expects a ProviderConfig (or dict), "
-        f"got {type(config).__name__}"
+        f"ProviderAdapterCache.get expects a ProviderConfig (or dict), got {type(config).__name__}"
     )
+
+
+class EngineConfigView:
+    """Plain-attribute view of a ``ProviderConfig`` for the llm_engine boundary.
+
+    llm_engine reads ``config.api_key`` as a plain string (``getattr``) and
+    forwards it to the HTTP client. Our ``ProviderConfig`` stores the key as
+    ``SecretStr``, so this view unwraps it exactly once at the boundary and
+    masks it again in ``repr`` to avoid accidental log leaks.
+    """
+
+    __slots__ = (
+        "api_base",
+        "api_key",
+        "api_provider",
+        "api_temperature",
+        "api_top_p",
+        "max_tokens",
+        "models",
+        "timeout",
+    )
+
+    def __init__(self, pc: ProviderConfig):
+        self.api_provider = pc.api_provider
+        self.api_key = pc.get_api_key()
+        self.api_base = pc.api_base
+        self.models = list(pc.models)
+        self.api_temperature = pc.api_temperature
+        self.api_top_p = pc.api_top_p
+        self.max_tokens = pc.max_tokens
+        self.timeout = pc.timeout
+
+    def __repr__(self) -> str:
+        masked = "***" if self.api_key else ""
+        return (
+            f"EngineConfigView(api_provider={self.api_provider!r}, api_key={masked!r}, "
+            f"api_base={self.api_base!r}, models={self.models!r})"
+        )
 
 
 @lru_cache(maxsize=128)
@@ -75,7 +112,9 @@ def _create_cached_adapter(
         max_tokens=max_tokens,
         timeout=timeout,
     )
-    return create_provider_adapter(provider_config, default_model=default_model or None)
+    return create_provider_adapter(
+        EngineConfigView(provider_config), default_model=default_model or None
+    )
 
 
 class ProviderAdapterCache:
@@ -111,7 +150,7 @@ class ProviderAdapterCache:
         return _create_cached_adapter(
             pc.api_provider,
             pc.api_base,
-            pc.api_key,
+            pc.get_api_key(),
             tuple(pc.models),
             float(pc.api_temperature),
             float(pc.api_top_p) if pc.api_top_p is not None else None,

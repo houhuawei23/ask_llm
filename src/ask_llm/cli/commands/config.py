@@ -10,6 +10,7 @@ import typer
 from ask_llm.cli.errors import cli_errors
 from ask_llm.config.context import set_config
 from ask_llm.config.loader import ConfigLoader
+from ask_llm.utils.api_key_gate import api_key_is_missing_or_unresolved
 from ask_llm.utils.console import console
 
 try:
@@ -21,6 +22,7 @@ except ImportError:
     raise
 
 from ask_llm.cli.common import _config_init
+from ask_llm.utils.provider_cache import EngineConfigView
 
 
 def config(
@@ -115,7 +117,7 @@ def config(
 
                 pc = config.providers[name]
 
-                if name != "ollama" and (not pc.api_key or pc.api_key == "your-api-key-here"):
+                if name != "ollama" and api_key_is_missing_or_unresolved(pc.api_key):
                     console.print_warning(f"[{name}] API key not configured")
                     continue
 
@@ -131,7 +133,9 @@ def config(
                         console.print("  Error: No default model available")
                         continue
 
-                    llm_provider = create_provider_adapter(pc, default_model=test_default_model)
+                    llm_provider = create_provider_adapter(
+                        EngineConfigView(pc), default_model=test_default_model
+                    )
                     success, message, latency = llm_provider.test_connection()
 
                     if success:
