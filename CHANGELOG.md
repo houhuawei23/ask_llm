@@ -1,5 +1,26 @@
 # Changelog
 
+## 2.17.3 (2026-07-16)
+
+P3.4 — position-aware reassembly for body formatting (review §4.4.4, item 4).
+
+### Added
+
+- **`BodyFormatter._join_chunks_position_aware(parts, spans, original_text, types)`** — consumes the splitter's `TextChunk.start_pos/end_pos` bookkeeping (previously dead weight on the body path) and restores the **exact original inter-chunk whitespace** instead of forcing `\n\n` everywhere. Between two hard-split chunks (`character_split` / `hard_token_split` — contiguous artificial cuts) an empty separator rejoins verbatim with no newline stripping, so split list items / compact tables no longer gain spurious blank lines. Returns `None` when spans don't describe a clean ordered partition (callers fall back to the legacy `_join_chunks`).
+- 5 new tests: unit-level join, unclean-span fallback, empty-separator rule, hard-split verbatim rejoin, and an end-to-end `format_body` run asserting no forced blank lines.
+
+### Changed
+
+- `BodyFormatter.format_body` now tries the position-aware join first, falling back to `_join_chunks` (unchanged, still used by `resume_from_checkpoint`, whose checkpoint-rebuilt chunks lack positions).
+
+### Tests
+
+- Full suite: 438 passed, 1 skipped (+5 new).
+
+### Version
+
+- Bumped to 2.17.3 in `pyproject.toml`, `src/ask_llm/__init__.py`, `README.md`.
+
 ## 2.17.2 (2026-07-16)
 
 P3.3 — `ChunkedLLMJob` base class; both formatters demoted to thin subclasses; **title checkpoints can now be resumed** (review §4.4.5, item 3).

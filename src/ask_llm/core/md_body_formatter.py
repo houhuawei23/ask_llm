@@ -213,7 +213,14 @@ class BodyFormatter(ChunkedLLMJob):
             f"in {stats.total_latency:.2f}s"
         )
 
-        formatted_text = self._join_chunks(final_chunks)
+        formatted_text = self._join_chunks_position_aware(
+            final_chunks,
+            [(c.start_pos, c.end_pos) for c in sorted(chunks, key=lambda c: c.chunk_id)],
+            text,
+            types=[c.metadata.get("type", "") for c in sorted(chunks, key=lambda c: c.chunk_id)],
+        )
+        if formatted_text is None:
+            formatted_text = self._join_chunks(final_chunks)
 
         # Save checkpoint if any chunks failed
         successful = [
@@ -285,6 +292,60 @@ class BodyFormatter(ChunkedLLMJob):
         )
         assert result.metadata is not None
         return chunk.chunk_id, result.content.rstrip(), result.metadata
+
+    # Chunk types produced by artificial contiguous cuts (hard splits). Between
+    # two such chunks an empty separator means "cut mid-content": rejoin
+    # verbatim, not with a blank line.
+    _HARD_SPLIT_TYPES = frozenset({"character_split", "hard_token_split"})
+
+    @staticmethod
+    def _join_chunks_position_aware(
+        parts: list[str],
+        spans: list[tuple[int, int]],
+        original_text: str,
+        types: list[str] | None = None,
+    ) -> str | None:
+        """Join formatted chunks using separators recovered from the original text.
+
+        Position-aware reassembly (P3.4, review §4.4.4): the splitter records
+        each chunk's ``start_pos``/``end_pos`` in the original document, so the
+        exact original inter-chunk whitespace (single newline between list
+        items, blank lines, etc.) can be restored instead of forcing ``\\n\\n``
+        everywhere. Between two hard-split chunks (contiguous artificial cut)
+        an empty separator rejoins verbatim.
+
+        Returns ``None`` when the spans do not describe a clean ordered
+        partition of *original_text* (caller falls back to ``_join_chunks``).
+        """
+        if not parts:
+            return ""
+        if len(parts) != len(spans):
+            return None
+        if types is not None and len(types) != len(parts):
+            return None
+        result = parts[0]
+        for i in range(1, len(parts)):
+            prev_end, cur_start = spans[i - 1][1], spans[i][0]
+            if not (0 <= prev_end <= cur_start <= len(original_text)):
+                return None
+            sep = original_text[prev_end:cur_start]
+            if sep.strip():
+                # Non-whitespace between two chunks: positions are not a clean
+                # partition; do not guess.
+                return None
+            if sep == "":
+                both_hard = (
+                    types is not None
+                    and types[i - 1] in BodyFormatter._HARD_SPLIT_TYPES
+                    and types[i] in BodyFormatter._HARD_SPLIT_TYPES
+                )
+                if both_hard:
+                    # Artificial contiguous cut: rejoin verbatim, no stripping.
+                    result = result + parts[i]
+                    continue
+                sep = "\n\n"
+            result = result.rstrip("\n") + sep + parts[i].lstrip("\n")
+        return result
 
     @staticmethod
     def _join_chunks(chunks: list[str]) -> str:

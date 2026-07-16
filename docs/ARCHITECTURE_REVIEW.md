@@ -12,7 +12,7 @@
 | **P0** 承载性 bug 止血 | ✅ 已完成 | v2.16.0 (2026-07-14) |
 | **P1** 执行引擎统一 | ✅ 已完成 | v2.16.1–2.16.7 (2026-07-14) |
 | **P2** 配置去全局 + 单一对象 | ✅ 已完成 | v2.16.8–2.16.17 (2026-07-16) |
-| P3 Markdown 单一管线 | 🔄 进行中 | v2.17.0–2.17.2 (2026-07-16) |
+| P3 Markdown 单一管线 | 🔄 进行中 | v2.17.0–2.17.3 (2026-07-16) |
 | P4 服务层/引擎/导出器收尾 | ⏳ 待开始 | — |
 
 **P1 进度（v2.16.1–2.16.2）**：
@@ -41,7 +41,8 @@
 - ✅ P3.1 — `MarkdownStructure` 单一解析器（`core/markdown_structure.py`）：一次解析产出 fence ranges（未闭合延伸至 EOF）、YAML frontmatter range（仅 offset 0）、带层级 heading spans。`HeadingExtractor` 与 `MarkdownTokenSplitter` 已迁移消费；`HEADING_PATTERN`/`CODE_FENCE_PATTERN` 单一定义，原三处副本改为再导出。**新增 frontmatter 保护**：frontmatter 内的 `# foo` 不再被当标题（§4.4.3）。13 个新单测。
 - ✅ P3.2（v2.17.1）— `BinarySplitter(BudgetPolicy)`（`core/binary_splitter.py`）：算法单份，`TokenBudget(model, max_tokens, prompt_overhead)` 预算 prompt+content（§4.4.4）；`MarkdownTokenSplitter` 降为 64 行兼容包装。删除死代码 `MarkdownSplitter`/`PlainTextSplitter`/`create_splitter`（`text_splitter.py` 629→71 LOC，仅留 `TextChunk`+基类）。splitter pair ~935→564 LOC 且算法唯一。12 新单测；`test_trans.py` 迁移 token 预算。
 - ✅ P3.3（v2.17.2）— `ChunkedLLMJob` 基类（`core/chunked_llm_job.py`，182 LOC）：init 回退、prompt 加载、runner 接线、checkpoint save/resume 骨架单份；`HeadingFormatter`/`BodyFormatter` 降为薄子类。**非对称 resume 消灭**：`HeadingFormatter.resume_from_checkpoint` 新增（此前 title checkpoint 只写不能恢复，§4.4.6），按标题序号合并，回归测试覆盖。
-- ⏳ P3 余项：position-aware 重组（§4.4.4）、`format_service` 分叉合并 + title resume 接线、prompt 外迁、chunk-id 统一。
+- ✅ P3.4（v2.17.3）— position-aware 重组：`BodyFormatter._join_chunks_position_aware` 消费 `TextChunk.start_pos/end_pos`（此前正文侧死重），恢复原块间空白而非强制 `\n\n`；硬切分（character/hard_token_split）邻接空分隔符原样拼接（列表项/紧凑表格不再被插入空行）。spans 不构成干净分区时回退 legacy `_join_chunks`。5 新测试。
+- ⏳ P3 余项：`format_service` 分叉合并 + title resume 接线、prompt 外迁、chunk-id 统一。
 
 **P0 已落地（v2.16.0）**：B2（CJK 令牌近似+安全系数）、B3（`${VAR}` 告警 + gate 覆盖 trans/paper）、B4（splitter 代码栅栏感知）、B6（per-worker 进度条）、B7（`attempt_history` 改为扁平 `AttemptRecord`）、B8（provider-cache 接缝类型化）、B9（限流超时可配置）、密钥轮换清缓存。完整说明见 `CHANGELOG.md` 2.16.0 条目。
 **P0 延后**：完整 `SecretStr` 迁移 → P2（与配置重构 + 引擎接缝收口一同进行）。
