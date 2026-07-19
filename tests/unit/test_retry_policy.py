@@ -3,7 +3,6 @@
 from ask_llm.core.retry_policy import (
     DEFAULT_RETRY_POLICY,
     DEFAULT_TRANSIENT_KEYWORDS,
-    ProviderRetryRegistry,
     RetryPolicy,
 )
 
@@ -48,24 +47,3 @@ class TestRetryPolicy:
         fn = policy.as_callable()
         assert fn("read timeout") is True
         assert fn("auth error") is False
-
-
-class TestProviderRetryRegistry:
-    def test_get_falls_back_to_default(self):
-        registry = ProviderRetryRegistry()
-        assert registry.get("unknown") is registry.default
-        assert registry.get(None) is registry.default
-
-    def test_set_and_get_override(self):
-        registry = ProviderRetryRegistry()
-        custom = RetryPolicy(max_retries=1, transient_keywords=("boom",))
-        registry.set("anthropic", custom)
-        assert registry.get("anthropic") is custom
-        # Other providers still use default
-        assert registry.get("openai") is registry.default
-
-    def test_override_isolation(self):
-        registry = ProviderRetryRegistry()
-        registry.set("provider-a", RetryPolicy(transient_keywords=("aaa",)))
-        policy_b = registry.get("provider-b")
-        assert "aaa" not in policy_b.transient_keywords

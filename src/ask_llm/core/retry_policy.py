@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from ask_llm.core.error_keywords import TRANSIENT_KEYWORDS
 
@@ -61,24 +61,3 @@ class RetryPolicy:
 # Shared default policy; mirrors the historical hardcoded behavior plus a few
 # provider-specific overload signals.
 DEFAULT_RETRY_POLICY = RetryPolicy()
-
-
-@dataclass
-class ProviderRetryRegistry:
-    """Per-provider retry policy registry.
-
-    Falls back to :data:`DEFAULT_RETRY_POLICY` when a provider has no override.
-    """
-
-    default: RetryPolicy = field(default_factory=lambda: DEFAULT_RETRY_POLICY)
-    overrides: dict[str, RetryPolicy] = field(default_factory=dict)
-
-    def get(self, provider: str | None) -> RetryPolicy:
-        """Return the retry policy for *provider*, falling back to default."""
-        if provider and provider in self.overrides:
-            return self.overrides[provider]
-        return self.default
-
-    def set(self, provider: str, policy: RetryPolicy) -> None:
-        """Register a retry policy override for *provider*."""
-        self.overrides[provider] = policy
