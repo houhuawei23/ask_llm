@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from ask_llm.config.manager import ConfigManager
 from ask_llm.core.batch import BatchResult, BatchTask, GlobalBatchProcessor
 from ask_llm.utils.api_key_gate import ensure_resolved_provider_keys
@@ -19,6 +21,7 @@ def run_global_batch_tasks(
     show_progress: bool = True,
     clamp_workers_to_task_count: bool = False,
     stream_api: bool = True,
+    on_result: Callable[[BatchResult], None] | None = None,
 ) -> tuple[list[BatchResult], GlobalBatchProcessor]:
     """
     Create a GlobalBatchProcessor and run process_global_tasks.
@@ -28,6 +31,9 @@ def run_global_batch_tasks(
 
     For translation-style workloads with a fixed thread pool size, pass
     ``clamp_workers_to_task_count=False`` (default); the executor will not use extra threads anyway.
+
+    ``on_result`` (D6) is forwarded to the runner so callers (e.g.
+    ``run_with_checkpoint``) can persist incremental checkpoint progress.
 
     Raises:
         UnresolvedAPIKeyError: if any task's provider has a missing or unresolved
@@ -55,5 +61,7 @@ def run_global_batch_tasks(
         stream_api=stream_api,
         rate_limit_config=rate_limit_config,
     )
-    results = processor.process_global_tasks(tasks, config_manager, show_progress=show_progress)
+    results = processor.process_global_tasks(
+        tasks, config_manager, show_progress=show_progress, on_result=on_result
+    )
     return results, processor

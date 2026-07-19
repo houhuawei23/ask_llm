@@ -25,6 +25,10 @@ from ask_llm.core.batch_checkpoint import BatchCheckpoint
 from ask_llm.core.batch_models import TaskStatus
 from ask_llm.core.global_batch_runner import run_global_batch_tasks
 
+# D6: persist incremental checkpoint progress every N successful results so a
+# hard kill (SIGKILL/OOM) loses at most ~N results instead of the whole run.
+_INCREMENTAL_SAVE_EVERY = 10
+
 
 @dataclass
 class CheckpointRunOutcome:
@@ -98,7 +102,22 @@ def run_with_checkpoint(
             all_previously_completed=True,
         )
 
-    # 3. Run remaining tasks.
+    # 3. Run remaining tasks, merging each success into the checkpoint
+    # incrementally and saving periodically (D6). A hard kill (SIGKILL/OOM)
+    # between saves then loses at most ``save_every`` results instead of the
+    # whole run; the graceful Ctrl-C path (B5) already drains and reaches the
+    # final save below.
+    save_every = max(1, min(_INCREMENTAL_SAVE_EVERY, len(tasks) or 1))
+    inc_state = {"since_save": 0}
+
+    def _on_result(result: BatchResult) -> None:
+        if result.status == TaskStatus.SUCCESS:
+            checkpoint.merge([result])
+            inc_state["since_save"] += 1
+            if inc_state["since_save"] >= save_every:
+                checkpoint.save(checkpoint_path)
+                inc_state["since_save"] = 0
+
     new_results, processor = run_global_batch_tasks(
         tasks,
         config_manager,
@@ -110,12 +129,11 @@ def run_with_checkpoint(
         show_progress=show_progress,
         clamp_workers_to_task_count=clamp_workers_to_task_count,
         stream_api=stream_api,
+        on_result=_on_result,
     )
 
-    # 4. Merge into checkpoint and persist.
-    new_successful = [r for r in new_results if r.status == TaskStatus.SUCCESS]
+    # 4. Final persist: failed tasks + any successes merged since the last save.
     new_failed = [r for r in new_results if r.status == TaskStatus.FAILED]
-    checkpoint.merge(new_successful)
     checkpoint.mark_all_failed_for_retry(new_failed)
     checkpoint.save(checkpoint_path)
 

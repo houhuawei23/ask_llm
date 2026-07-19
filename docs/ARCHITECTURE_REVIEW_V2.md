@@ -544,6 +544,11 @@ class UnifiedConfig(BaseModel):
 
 ### R1 —— 执行引擎真正统一（核心，3–5 天）
 
+> ✅ **D6（增量 checkpoint）已落地（v2.19.3，2026-07-19）**：`BoundedRetryRunner.on_result` 主线程回调，
+> `run_with_checkpoint` 每 10 条成功结果落盘一次。**A9（ProviderRetryRegistry 死代码）已删**。
+> ⏸️ **A1（format 走 TaskExecutor）/ A6（per-(provider,model) 池 sizing）待定**：A1 改变 format 行为
+> （获得限流/回退），A6 涉及并发重构，二者建议单独评估行为影响后实施。
+
 目标：消灭 A1（第二条管线）、A6（池 sizing）、D6（增量 checkpoint）；清死代码。
 
 1. **format 走 TaskExecutor**：`ChunkedLLMJob._run_units` 不再直接调 `run_bounded_with_retries`；

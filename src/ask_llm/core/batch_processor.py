@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING
 
 from rich.progress import Progress, TaskID
@@ -205,6 +205,7 @@ class GlobalBatchProcessor:
         tasks: list[BatchTask],
         config_manager: ConfigManager,
         show_progress: bool = True,
+        on_result: Callable[[BatchResult], None] | None = None,
     ) -> list[BatchResult]:
         """
         Process multiple tasks across different models concurrently.
@@ -213,6 +214,8 @@ class GlobalBatchProcessor:
             tasks: List of batch tasks, each with model_settings
             config_manager: Configuration manager instance
             show_progress: Whether to show progress bars
+            on_result: Optional main-thread callback fired after each result,
+                so callers can persist incremental checkpoint progress (D6).
 
         Returns:
             List of batch results
@@ -331,6 +334,7 @@ class GlobalBatchProcessor:
                 retry_count_from_result=lambda r: r.retry_count,
                 on_worker_exception=_on_worker_exception,
                 on_retry_scheduled=_on_retry_scheduled,
+                on_result=on_result,
                 order_key=lambda r: r.task_id,
             )
 

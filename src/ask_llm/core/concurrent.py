@@ -87,9 +87,15 @@ class BoundedRetryRunner(Generic[TTask, TResult]):
         is_retryable_error: Callable[[str], bool] | None = None,
         on_worker_exception: Callable[[TTask, BaseException], TResult] | None = None,
         on_retry_scheduled: Callable[[TTask, TResult], None] | None = None,
+        on_result: Callable[[TResult], None] | None = None,
         order_key: Callable[[TResult], Any] = lambda r: getattr(r, "task_id", 0),
     ) -> tuple[list[TResult], RunMetrics]:
-        """Run all tasks and return (sorted results, run metrics)."""
+        """Run all tasks and return (sorted results, run metrics).
+
+        ``on_result`` (D6) fires on the runner's main thread after each result
+        is appended, so callers can persist incremental progress and survive a
+        hard kill (SIGKILL/OOM) without losing the whole run.
+        """
         if is_retryable_error is None:
             is_retryable_error = _is_transient_error
 
@@ -146,6 +152,11 @@ class BoundedRetryRunner(Generic[TTask, TResult]):
                     return
 
             results.append(result)
+            if on_result is not None:
+                try:
+                    on_result(result)
+                except BaseException as exc:
+                    logger.warning(f"on_result raised: {exc}")
 
         # B5: graceful interrupt. On Ctrl-C the runner stops scheduling new work
         # and drains in-flight tasks, then returns the partial results instead of
@@ -245,6 +256,7 @@ class BoundedRetryRunner(Generic[TTask, TResult]):
         is_retryable_error: Callable[[str], bool] | None = None,
         on_worker_exception: Callable[[TTask, BaseException], TResult] | None = None,
         on_retry_scheduled: Callable[[TTask, TResult], None] | None = None,
+        on_result: Callable[[TResult], None] | None = None,
         order_key: Callable[[TResult], Any] = lambda r: getattr(r, "task_id", 0),
     ) -> list[TResult]:
         """Run all tasks and return results sorted by ``order_key``."""
@@ -257,6 +269,7 @@ class BoundedRetryRunner(Generic[TTask, TResult]):
             is_retryable_error=is_retryable_error,
             on_worker_exception=on_worker_exception,
             on_retry_scheduled=on_retry_scheduled,
+            on_result=on_result,
             order_key=order_key,
         )
         return results
@@ -276,6 +289,7 @@ def run_bounded_with_retries(
     is_retryable_error: Callable[[str], bool] | None = None,
     on_worker_exception: Callable[[TTask, BaseException], TResult] | None = None,
     on_retry_scheduled: Callable[[TTask, TResult], None] | None = None,
+    on_result: Callable[[TResult], None] | None = None,
     order_key: Callable[[TResult], Any] = lambda r: getattr(r, "task_id", 0),
 ) -> list[TResult]:
     """Convenience wrapper around :class:`BoundedRetryRunner`."""
@@ -294,6 +308,7 @@ def run_bounded_with_retries(
         is_retryable_error=is_retryable_error,
         on_worker_exception=on_worker_exception,
         on_retry_scheduled=on_retry_scheduled,
+        on_result=on_result,
         order_key=order_key,
     )
 

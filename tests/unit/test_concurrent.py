@@ -260,3 +260,49 @@ def test_normal_run_not_marked_interrupted():
         order_key=lambda r: r.task_id,
     )
     assert metrics.interrupted is False
+
+
+def test_on_result_fires_per_result_in_order():
+    """D6: on_result fires once per appended result, on the main thread, in
+    completion order — so callers can persist incremental checkpoint progress."""
+    seen: list[int] = []
+    runner = BoundedRetryRunner(
+        max_workers=2,
+        max_retries=0,
+        retry_delay=0.01,
+        retry_delay_max=0.1,
+    )
+    results, _ = runner.run_with_metrics(
+        list(range(6)),
+        lambda t, rc: _SimpleResult(task_id=t, value=t, retry_count=rc),
+        is_failed=lambda r: False,
+        error_message=lambda r: r.error,
+        retry_count_from_result=lambda r: r.retry_count,
+        on_result=lambda r: seen.append(r.task_id),
+        order_key=lambda r: r.task_id,
+    )
+    assert len(results) == 6
+    assert len(seen) == 6
+    # Callback saw every task exactly once.
+    assert sorted(seen) == list(range(6))
+
+
+def test_on_result_exception_does_not_break_run():
+    """A buggy on_result callback must not abort the run (logged + skipped)."""
+    calls: list[int] = []
+    runner = BoundedRetryRunner(
+        max_workers=1,
+        max_retries=0,
+        retry_delay=0.01,
+        retry_delay_max=0.1,
+    )
+    results, _ = runner.run_with_metrics(
+        list(range(3)),
+        lambda t, rc: _SimpleResult(task_id=t, value=t, retry_count=rc),
+        is_failed=lambda r: False,
+        error_message=lambda r: r.error,
+        retry_count_from_result=lambda r: r.retry_count,
+        on_result=lambda r: calls.append(r.task_id) if r.task_id != 1 else (_ for _ in ()).throw(ValueError("boom")),
+        order_key=lambda r: r.task_id,
+    )
+    assert len(results) == 3  # run completed despite the callback raising

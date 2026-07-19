@@ -1,5 +1,35 @@
 # Changelog
 
+## 2.19.3 (2026-07-19)
+
+D6 — 增量 checkpoint（评审 V2 §8 R1 item 3）。`batch`/`trans` 运行期间周期性落盘，
+硬杀（SIGKILL/OOM）最多丢失 ~10 条结果而非整批。
+
+### Fixed（数据完整性）
+
+- **D6 — `run_with_checkpoint` 运行期间增量 merge + 周期 save**（每 10 条成功结果落盘一次）。
+  此前 checkpoint 仅在运行结束后保存（B5 已覆盖优雅 Ctrl-C），硬杀则丢失自上次 checkpoint 以来的全部
+  进度。`BoundedRetryRunner` 新增 `on_result` 回调（主线程，每条结果追加后触发），`run_with_checkpoint`
+  用它增量 merge 成功结果并节流保存；`merge` 非幂等，故终态不再 bulk re-merge，仅 save 一次。
+
+### Changed
+
+- `core/concurrent.py`：`BoundedRetryRunner.run_with_metrics` / `run` / `run_bounded_with_retries`
+  新增 `on_result` 回调（默认 None，回调异常仅告警不中断）。
+- `core/batch_processor.py`：`process_global_tasks(on_result=...)` 透传。
+- `core/global_batch_runner.py`：`run_global_batch_tasks(on_result=...)` 透传。
+- `core/command_runner.py`：`run_with_checkpoint` 构造增量回调，去掉终态 bulk merge。
+
+### Tests
+
+- 新增：`test_on_result_fires_per_result_in_order`、`test_on_result_exception_does_not_break_run`。
+- 全量：456 passed, 1 skipped。ruff clean。改动文件 mypy 无新增错误（`batch_processor.py:295` 的
+  `release(slot_idx)` 报错为 NullProgressPresenter 联合类型既有 narrowing 缺口，非本次引入）。
+
+### Version
+
+- `pyproject.toml`、`src/ask_llm/__init__.py`、`README.md` 升至 2.19.3。
+
 ## 2.19.2 (2026-07-19)
 
 D5 — resume 无损重组（评审 V2 §8 R0 顺延项）。`ask-llm format --resume` 现在与全新跑产出结构一致，
