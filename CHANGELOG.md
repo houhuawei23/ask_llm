@@ -1,5 +1,33 @@
 # Changelog
 
+## 2.19.2 (2026-07-19)
+
+D5 — resume 无损重组（评审 V2 §8 R0 顺延项）。`ask-llm format --resume` 现在与全新跑产出结构一致，
+不再强制 `\n\n` 重排。
+
+### Fixed（数据正确性）
+
+- **D5 — `BodyFormatter.resume_from_checkpoint` 改用 position-aware 重组**（消费 `start_pos`/`end_pos`
+  与原始块间空白），与全新跑一致。此前 resume 走 legacy `_join_chunks`（强制 `\n\n`），同一输入断点
+  续跑与全新跑产出结构不同（连续列表项/紧凑表格被插入空行）。
+
+### Changed
+
+- `core/format_checkpoint.py`：`FormatCheckpoint` 新增 `original_text` + `chunk_spans`；
+  `CHECKPOINT_VERSION` 1 → 2。`from_dict` 容忍 v1（无 spans → 回退 legacy join）。
+- `core/chunked_llm_job.py`：`_save_checkpoint` 新增可选 `original_text` / `chunk_spans`。
+- `core/md_body_formatter.py`：`format_body` 保存时写入 body 原文与每块 span；`resume_from_checkpoint`
+  优先 position-aware join，缺失时回退 legacy。
+
+### Tests
+
+- 新增：`test_resume_uses_position_aware_join`（v2 checkpoint → 单换行保留，无强制空行）。
+- 全量：457 passed, 1 skipped。ruff / mypy（改动文件）clean。
+
+### Version
+
+- `pyproject.toml`、`src/ask_llm/__init__.py`、`README.md` 升至 2.19.2。
+
 ## 2.19.1 (2026-07-19)
 
 R0 — 数据正确性止血（评审 V2 §8 R0）。把 V1 修了一半的 B2/B4 在"切分-预算-重组"主干上彻底收口：

@@ -8,6 +8,11 @@ import pytest
 
 from ask_llm.config.context import set_config
 from ask_llm.config.loader import ConfigLoader
+from ask_llm.core.format_checkpoint import (
+    FailedChunkInfo,
+    FormatCheckpoint,
+    SuccessfulChunkInfo,
+)
 from ask_llm.core.md_body_formatter import BodyFormatter
 from ask_llm.core.models import ProcessingResult, RequestMetadata
 from ask_llm.core.processor import RequestProcessor
@@ -192,6 +197,46 @@ class TestBodyFormatter:
         r_small = small.format_body(text)
         r_big = big.format_body(text)
         assert r_big.stats.chunks_processed > r_small.stats.chunks_processed
+
+    def test_resume_uses_position_aware_join(self, tmp_path):
+        """D5: resume re-assembles with the lossless position-aware joiner when
+        the checkpoint (v2) carries original_text + chunk_spans. Contiguous
+        hard-split chunks rejoin verbatim (single newlines preserved) instead of
+        gaining the forced ``\\n\\n`` of the legacy fallback."""
+        original_text = "alpha\nbeta\ngamma"
+        spans = [
+            {"chunk_id": 0, "start": 0, "end": 6, "type": "character_split"},
+            {"chunk_id": 1, "start": 6, "end": 11, "type": "character_split"},
+            {"chunk_id": 2, "start": 11, "end": 16, "type": "character_split"},
+        ]
+        ckpt = FormatCheckpoint(
+            version=2,
+            source_file=str(tmp_path / "src.md"),
+            format_type="body",
+            model="gpt-4",
+            prompt_template=_TEST_PROMPT_TEMPLATE,
+            max_chunk_tokens=8,
+            created_at="2026-07-19T00:00:00",
+            failed_chunks=[
+                FailedChunkInfo(1, original_text[6:11], _TEST_PROMPT_TEMPLATE, "boom", 0)
+            ],
+            successful_chunks=[
+                SuccessfulChunkInfo(0, original_text[0:6]),
+                SuccessfulChunkInfo(2, original_text[11:16]),
+            ],
+            original_text=original_text,
+            chunk_spans=spans,
+        )
+        path = str(tmp_path / "ckpt.json")
+        ckpt.save(path)
+
+        processor = self._create_mock_processor()  # echoes each chunk back unchanged
+        result = BodyFormatter.resume_from_checkpoint(path, processor, "gpt-4")
+
+        # Position-aware verbatim rejoin recovers the original single-newline
+        # layout; the legacy "\n\n" fallback would have inserted blank lines.
+        assert "\n\n" not in result.text
+        assert "alpha" in result.text and "beta" in result.text and "gamma" in result.text
 
     def test_format_body_multi_chunk_merge_order(self):
         """Test that multi-chunk results are merged in correct order."""

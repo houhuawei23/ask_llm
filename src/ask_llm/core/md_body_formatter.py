@@ -262,6 +262,11 @@ class BodyFormatter(ChunkedLLMJob):
             max_chunk_tokens=self.max_chunk_tokens,
             failed_chunks=failed_chunks,
             successful_chunks=successful,
+            original_text=body_text,
+            chunk_spans={
+                c.chunk_id: (c.start_pos, c.end_pos, c.metadata.get("type", ""))
+                for c in chunks
+            },
         )
 
         return BodyFormatResult(
@@ -466,10 +471,26 @@ class BodyFormatter(ChunkedLLMJob):
                     f"[BodyFormat] resumed chunk {res.chunk_id + 1} still failed: {res.failed_info.error}"
                 )
 
-        # Merge in order
+        # Merge in order. D5: when the checkpoint carries the original body text
+        # and per-chunk spans (v2+), use the same lossless position-aware joiner
+        # as a fresh run so resume output matches a non-resumed run. v1 files
+        # (no spans) keep the legacy "\n\n" join.
         all_ids = sorted(result_map.keys())
         final_chunks = [result_map[i] for i in all_ids]
-        formatted_text = cls._join_chunks(final_chunks)
+        spans_map = {
+            d["chunk_id"]: (d["start"], d["end"], d.get("type", ""))
+            for d in checkpoint.chunk_spans
+        }
+        formatted_text: str | None = None
+        if checkpoint.original_text and len(spans_map) >= len(all_ids) and all_ids:
+            formatted_text = cls._join_chunks_position_aware(
+                final_chunks,
+                [spans_map[i][:2] for i in all_ids],
+                checkpoint.original_text,
+                types=[spans_map[i][2] for i in all_ids],
+            )
+        if formatted_text is None:
+            formatted_text = cls._join_chunks(final_chunks)
 
         # Save updated checkpoint if still failing
         successful = [
@@ -486,6 +507,11 @@ class BodyFormatter(ChunkedLLMJob):
             failed_chunks=still_failed,
             successful_chunks=successful,
             checkpoint_path=checkpoint_path,
+            original_text=checkpoint.original_text,
+            chunk_spans={
+                d["chunk_id"]: (d["start"], d["end"], d.get("type", ""))
+                for d in checkpoint.chunk_spans
+            },
         )
 
         return BodyFormatResult(

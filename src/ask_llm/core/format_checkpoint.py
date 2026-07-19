@@ -3,19 +3,23 @@
 When a chunk/batch API call fails after all retries, the formatter saves a
 checkpoint file containing the full context needed to retry only the failed
 items later via ``ask-llm format --resume``.
+
+v2 (D5): stores ``original_text`` + per-chunk ``chunk_spans`` so resume can
+re-assemble with the same position-aware joiner as a fresh run, instead of the
+lossy ``\\n\\n`` fallback. v1 files load unchanged (spans absent → legacy join).
 """
 
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from loguru import logger
 
-CHECKPOINT_VERSION = 1
+CHECKPOINT_VERSION = 2
 
 
 @dataclass
@@ -50,6 +54,10 @@ class FormatCheckpoint:
     created_at: str
     failed_chunks: list[FailedChunkInfo]
     successful_chunks: list[SuccessfulChunkInfo]
+    # D5: original body text + per-chunk spans so resume can use the
+    # position-aware joiner (lossless) instead of the "\n\n" fallback.
+    original_text: str = ""
+    chunk_spans: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize checkpoint to dictionary."""
@@ -78,11 +86,17 @@ class FormatCheckpoint:
                 }
                 for sc in self.successful_chunks
             ],
+            "original_text": self.original_text,
+            "chunk_spans": list(self.chunk_spans),
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> FormatCheckpoint:
-        """Deserialize checkpoint from dictionary."""
+        """Deserialize checkpoint from dictionary.
+
+        Tolerates v1 files (no ``original_text`` / ``chunk_spans``): the resume
+        path falls back to the legacy ``\\n\\n`` joiner when spans are absent.
+        """
         return cls(
             version=data.get("version", CHECKPOINT_VERSION),
             source_file=data["source_file"],
@@ -108,6 +122,8 @@ class FormatCheckpoint:
                 )
                 for sc in data.get("successful_chunks", [])
             ],
+            original_text=data.get("original_text", ""),
+            chunk_spans=list(data.get("chunk_spans", [])),
         )
 
     def save(self, path: str | Path) -> None:

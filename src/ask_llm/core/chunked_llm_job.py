@@ -133,14 +133,24 @@ class ChunkedLLMJob:
         failed_chunks: list[FailedChunkInfo],
         successful_chunks: list[SuccessfulChunkInfo],
         checkpoint_path: str | None = None,
+        original_text: str | None = None,
+        chunk_spans: dict[int, tuple[int, int, str]] | None = None,
     ) -> str | None:
         """Save a checkpoint for failed units; returns its path (or None).
 
         No-op when nothing failed or no source file was given.
+
+        ``original_text`` / ``chunk_spans`` (D5) are optional and currently
+        supplied only by the body formatter, so resume can re-assemble with the
+        lossless position-aware joiner instead of the ``\\n\\n`` fallback.
         """
         if not failed_chunks or not source_file:
             return None
         path = checkpoint_path or str(generate_checkpoint_path(source_file, format_type))
+        spans = [
+            {"chunk_id": cid, "start": s, "end": e, "type": t}
+            for cid, (s, e, t) in (chunk_spans or {}).items()
+        ]
         checkpoint = FormatCheckpoint(
             version=CHECKPOINT_VERSION,
             source_file=source_file,
@@ -151,6 +161,8 @@ class ChunkedLLMJob:
             created_at=datetime.now().isoformat(),
             failed_chunks=failed_chunks,
             successful_chunks=successful_chunks,
+            original_text=original_text or "",
+            chunk_spans=spans,
         )
         checkpoint.save(path)
         return path

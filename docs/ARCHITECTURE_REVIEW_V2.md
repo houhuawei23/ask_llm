@@ -525,8 +525,8 @@ class UnifiedConfig(BaseModel):
 
 > ✅ **D1–D4 已落地（v2.19.1，2026-07-19）**。安全系数 / prompt 开销 / frontmatter / 翻译栅栏保护
 > 收敛到 `TokenBudget` + `BinarySplitter` 单一所有者。详见 `CHANGELOG.md` 2.19.1。
-> ⏸️ **D5（resume 无损重组）顺延至 R1**：实现需要 `FormatCheckpoint` schema 变更（存原始文本 + span），
-> 与 R1 的 checkpoint/引擎改动一并做更合适。
+> ✅ **D5（resume 无损重组）已落地（v2.19.2，2026-07-19）**：`FormatCheckpoint` v2 存原文 + 每块 span，
+> resume 改用 position-aware join（v1 回退 legacy）。详见 `CHANGELOG.md` 2.19.2。
 
 目标：不重构架构，先把切分-预算-重组主干上的数据裂缝补齐。每条均可独立 PR。
 
