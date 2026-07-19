@@ -85,3 +85,41 @@ def test_rebalance_each_output_within_max_tokens() -> None:
     )
     for c in out:
         assert TokenCounter.count_tokens(c.content, model) <= cap
+
+
+def test_rebalance_keeps_fenced_block_atomic_when_it_fits() -> None:
+    """D4: a fenced code block that fits the budget is never split mid-fence,
+    even when surrounding text forces the document into multiple chunks. The
+    rebalance path now routes through BinarySplitter, which is fence-aware."""
+    model = "gpt-4"
+    fence = "```python\nx = 1\ny = 2\nprint(x + y)\n```"
+    text = (
+        "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda\n\n"
+        f"{fence}\n\n"
+        + "mu nu xi omicron pi rho sigma tau upsilon phi chi psi omega alpha\n" * 6
+    )
+    chunks = [TextChunk(content=text, chunk_id=0, start_pos=0, end_pos=len(text), metadata={})]
+    out = rebalance_translation_chunks(
+        chunks, model, max_chunk_tokens=40, min_merge_tokens=10, enabled=True
+    )
+    assert len(out) >= 2
+    # The fenced block must appear intact inside exactly one chunk and no chunk
+    # may carry an unbalanced fence marker.
+    assert any(fence in c.content for c in out)
+    for c in out:
+        assert c.content.count("```") % 2 == 0, f"fence split across chunk: {c.content[:40]!r}"
+
+
+def test_rebalance_respects_prompt_overhead() -> None:
+    """D2: prompt_overhead reduces the usable content cap, so the same text
+    splits into more (smaller) chunks when the template is larger."""
+    model = "gpt-4"
+    text = "alpha beta gamma delta epsilon zeta eta theta iota kappa\n" * 4
+    chunks = [TextChunk(content=text, chunk_id=0, start_pos=0, end_pos=len(text), metadata={})]
+    small = rebalance_translation_chunks(
+        chunks, model, max_chunk_tokens=60, enabled=True, prompt_overhead=2
+    )
+    big = rebalance_translation_chunks(
+        chunks, model, max_chunk_tokens=60, enabled=True, prompt_overhead=40
+    )
+    assert len(big) > len(small)

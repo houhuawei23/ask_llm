@@ -20,10 +20,12 @@ from ask_llm.core.format_checkpoint import (
     FormatCheckpoint,
     SuccessfulChunkInfo,
 )
+from ask_llm.core.markdown_structure import MarkdownStructure
 from ask_llm.core.markdown_token_splitter import MarkdownTokenSplitter
 from ask_llm.core.models import RequestMetadata
 from ask_llm.core.processor import RequestProcessor
 from ask_llm.core.text_splitter import TextChunk
+from ask_llm.utils.token_counter import TokenCounter
 
 
 @dataclass(frozen=True)
@@ -150,11 +152,29 @@ class BodyFormatter(ChunkedLLMJob):
             "Set format_body.default_prompt_file in default_config.yml."
         )
 
+        # D3: carve YAML frontmatter out so the body LLM never reformats
+        # document metadata (title/date/tags). It is reattached verbatim after
+        # the body is formatted. Position-aware reassembly operates on
+        # ``body_text`` so chunk spans stay correct.
+        structure = MarkdownStructure.parse(text)
+        fm = structure.frontmatter_range
+        if fm is not None:
+            frontmatter = text[fm[0] : fm[1]]
+            body_text = text[fm[1] :]
+        else:
+            frontmatter = ""
+            body_text = text
+
+        # D2: reserve tokens for the prompt template so the per-chunk budget
+        # covers prompt + content. With a content-only budget, a large template
+        # plus a near-full context window could overflow (review V2 D2).
+        prompt_overhead = TokenCounter.count_tokens(template, self.model)
         splitter = MarkdownTokenSplitter(
             model=self.model,
             max_chunk_tokens=self.max_chunk_tokens,
+            prompt_overhead_tokens=prompt_overhead,
         )
-        chunks = splitter.split(text)
+        chunks = splitter.split(body_text)
 
         if not chunks:
             return BodyFormatResult(text=text, stats=stats, failed_chunks=[])
@@ -213,14 +233,17 @@ class BodyFormatter(ChunkedLLMJob):
             f"in {stats.total_latency:.2f}s"
         )
 
-        formatted_text = self._join_chunks_position_aware(
+        formatted_body = self._join_chunks_position_aware(
             final_chunks,
             [(c.start_pos, c.end_pos) for c in sorted(chunks, key=lambda c: c.chunk_id)],
-            text,
+            body_text,
             types=[c.metadata.get("type", "") for c in sorted(chunks, key=lambda c: c.chunk_id)],
         )
-        if formatted_text is None:
-            formatted_text = self._join_chunks(final_chunks)
+        if formatted_body is None:
+            formatted_body = self._join_chunks(final_chunks)
+
+        # Reattach the untouched frontmatter (D3).
+        formatted_text = frontmatter + formatted_body
 
         # Save checkpoint if any chunks failed
         successful = [

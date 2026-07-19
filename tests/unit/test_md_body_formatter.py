@@ -13,6 +13,7 @@ from ask_llm.core.models import ProcessingResult, RequestMetadata
 from ask_llm.core.processor import RequestProcessor
 from ask_llm.core.protocols import LLMProviderProtocol
 from ask_llm.core.text_splitter import TextChunk
+from ask_llm.utils.token_counter import TokenCounter
 
 _TEST_PROMPT_TEMPLATE = "Format body:\n\n{content}"
 
@@ -92,6 +93,105 @@ class TestBodyFormatter:
         body_result = formatter.format_body("   \n\n  ")
         assert body_result.text == ""
         assert body_result.stats.chunks_processed == 0
+
+    def test_format_body_frontmatter_preserved_and_not_sent_to_llm(self):
+        """D3: YAML frontmatter is carved out, never sent to the body LLM, and
+        reattached verbatim (the body LLM must not rewrite document metadata)."""
+        frontmatter = "---\ntitle: Test\ntags: [a, b]\n---\n\n"
+        body = "# Heading\n\nsome body text here for testing.\n"
+        text = frontmatter + body
+
+        seen: list[str] = []
+        mock_provider = MagicMock(spec=LLMProviderProtocol)
+        mock_provider.name = "mock"
+        mock_provider.default_model = "mock-model"
+        mock_provider.config = MagicMock()
+        mock_provider.config.api_temperature = 0.7
+        processor = RequestProcessor(mock_provider)
+
+        def echo(*args, **kwargs):
+            content = kwargs.get("content", args[0] if args else "")
+            seen.append(content)
+            return ProcessingResult(
+                content=content,
+                metadata=RequestMetadata(
+                    provider="mock",
+                    model="mock-model",
+                    temperature=0.7,
+                    input_words=10,
+                    input_tokens=20,
+                    output_words=10,
+                    output_tokens=20,
+                    latency=0.1,
+                ),
+            )
+
+        processor.process_with_metadata = echo
+        overhead = TokenCounter.count_tokens(_TEST_PROMPT_TEMPLATE, "gpt-4")
+        formatter = BodyFormatter(
+            processor=processor,
+            model="gpt-4",
+            prompt_template=_TEST_PROMPT_TEMPLATE,
+            max_chunk_tokens=200 + overhead,
+        )
+        result = formatter.format_body(text)
+
+        # Frontmatter reattached verbatim at the top; body formatted.
+        assert result.text.startswith("---\ntitle: Test\ntags: [a, b]\n---")
+        assert "# Heading" in result.text
+        # Frontmatter content never reached the LLM.
+        assert seen, "expected at least one LLM call"
+        assert all("tags: [a, b]" not in c for c in seen)
+
+    def test_format_body_prompt_overhead_wired(self):
+        """D2: a larger prompt template shrinks the content budget, so the same
+        text and max_chunk_tokens yields more chunks (overhead is now measured
+        from the template and reserved)."""
+        text = "alpha beta gamma delta epsilon zeta eta theta iota kappa\n" * 6
+
+        def make_processor() -> RequestProcessor:
+            mp = MagicMock(spec=LLMProviderProtocol)
+            mp.name = "mock"
+            mp.default_model = "mock-model"
+            mp.config = MagicMock()
+            mp.config.api_temperature = 0.7
+            proc = RequestProcessor(mp)
+
+            def echo(*args, **kwargs):
+                content = kwargs.get("content", args[0] if args else "")
+                return ProcessingResult(
+                    content=content,
+                    metadata=RequestMetadata(
+                        provider="mock",
+                        model="mock-model",
+                        temperature=0.7,
+                        input_words=10,
+                        input_tokens=20,
+                        output_words=10,
+                        output_tokens=20,
+                        latency=0.1,
+                    ),
+                )
+
+            proc.process_with_metadata = echo
+            return proc
+
+        cap = 60
+        small = BodyFormatter(
+            processor=make_processor(),
+            model="gpt-4",
+            prompt_template="F:\n{content}",
+            max_chunk_tokens=cap,
+        )
+        big = BodyFormatter(
+            processor=make_processor(),
+            model="gpt-4",
+            prompt_template=("X " * 80) + "\n{content}",
+            max_chunk_tokens=cap,
+        )
+        r_small = small.format_body(text)
+        r_big = big.format_body(text)
+        assert r_big.stats.chunks_processed > r_small.stats.chunks_processed
 
     def test_format_body_multi_chunk_merge_order(self):
         """Test that multi-chunk results are merged in correct order."""
@@ -403,11 +503,15 @@ class TestPositionAwareJoin:
             )
 
         processor.process_with_metadata = echo
+        # BodyFormatter now reserves the prompt-template tokens as overhead
+        # (D2), so add them to keep the per-chunk content cap at 8 and force a
+        # multi-chunk split at the same granularity the test was written for.
+        overhead = TokenCounter.count_tokens(_TEST_PROMPT_TEMPLATE, "gpt-4")
         formatter = BodyFormatter(
             processor=processor,
             model="gpt-4",
             prompt_template=_TEST_PROMPT_TEMPLATE,
-            max_chunk_tokens=8,  # force splitting into multiple chunks
+            max_chunk_tokens=8 + overhead,  # content cap stays at 8 tokens
         )
         result = formatter.format_body(text)
         if result.stats.chunks_processed > 1:

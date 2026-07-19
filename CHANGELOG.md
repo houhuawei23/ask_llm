@@ -1,5 +1,52 @@
 # Changelog
 
+## 2.19.1 (2026-07-19)
+
+R0 — 数据正确性止血（评审 V2 §8 R0）。把 V1 修了一半的 B2/B4 在"切分-预算-重组"主干上彻底收口：
+安全系数、prompt 开销、frontmatter/栅栏保护现在收敛到唯一所有者（`TokenBudget` + `BinarySplitter`）。
+**D5（resume 无损重组）顺延至 R1**（需要 checkpoint schema 变更）。
+
+### Fixed（数据正确性）
+
+- **D1 — `TokenBudget.fits()` 对近似模型（DeepSeek/Qwen）施加 `APPROX_TOKEN_SAFETY_FACTOR`**。
+  此前只有 hard-split 路径削减预算，快路径"整块放得下"按原始 cl100k 计数放行，中文块真实 token 数溢出
+  provider 上下文窗口。安全系数现在是单点所有者（`content_max_tokens`），`fits()` 与 `hard_split()` 一致、
+  不重复施加。
+- **D2 — `prompt_overhead` 从 prompt 模板实测并预留**，覆盖所有切分点（`BodyFormatter.format_body`、
+  `TextFileTranslator.prepare`、`NotebookTranslator.translate_notebook`、`chunk_balance`）。每块预算现在覆盖
+  prompt + content，关闭 content-only 溢出（评审 §4.4.4）。`chunk_balance` 的
+  `plain_text_chunks_by_tokens` / `rebalance_translation_chunks` / `_split_by_token_budget` /
+  `_merge_adjacent_greedy` 新增 `prompt_overhead` 参数。
+- **D3 — 正文格式化前剥离 YAML frontmatter，结束后原样回贴**。正文 LLM 不再改写文档元数据
+  （title/date/tags）。position-aware 重组在剥离 frontmatter 的正文上运算，chunk span 保持正确。
+- **D4 — 翻译 rebalance 不再从栅栏中间切断代码块**。`chunk_balance._split_by_token_budget` 改为委托
+  `BinarySplitter`（栅栏感知），删除 ~40 行重复切分实现；merge 步骤改走 `TokenBudget.fits`，合并块同样
+  遵守安全系数 + 开销。
+
+### Changed
+
+- `core/binary_splitter.py`：`TokenBudget` 新增 `_raw_content_cap`；`content_max_tokens` 对近似模型施加安全
+  系数；`hard_split` 传原始 cap（系数在 `split_hard_by_max_tokens` 内部只施加一次）。
+- `utils/chunk_balance.py`：`_split_by_token_budget` 主体替换为 `BinarySplitter` 委托；栅栏保护 + 安全系数 +
+  开销由唯一 splitter 继承。
+- `core/md_body_formatter.py`：`format_body` 剥离 frontmatter、实测模板开销、对正文重组、回贴 frontmatter。
+- `services/text_file_translator.py`、`utils/notebook_translator.py`：先构造 translator、实测
+  `prompt_template_for_batch()` token、把 `prompt_overhead` 贯穿 split + rebalance。
+
+### Tests
+
+- 新增：`test_approximate_model_applies_safety_factor`（D1）、
+  `test_format_body_frontmatter_preserved_and_not_sent_to_llm`（D3）、
+  `test_format_body_prompt_overhead_wired`（D2）、
+  `test_rebalance_keeps_fenced_block_atomic_when_it_fits` + `test_rebalance_respects_prompt_overhead`（D4/D2）。
+- 调整：`test_prompt_overhead_*` 改用 gpt-4 隔离开销与安全因子；`test_format_body_preserves_single_newlines`
+  补偿现已实测的 prompt 开销。
+- 全量：456 passed, 1 skipped。ruff clean。
+
+### Version
+
+- `pyproject.toml`、`src/ask_llm/__init__.py`、`README.md` 升至 2.19.1。
+
 ## 2.19.0 (2026-07-16)
 
 P4.5 — `TranslationService` split into per-file collaborators; cross-thread mutable accumulator removed. **P4 (服务层/引擎/导出器收尾) complete.**

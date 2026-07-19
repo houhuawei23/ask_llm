@@ -20,6 +20,7 @@ from typing import Protocol
 
 from loguru import logger
 
+from ask_llm.core.constants import APPROX_TOKEN_SAFETY_FACTOR
 from ask_llm.core.markdown_structure import MarkdownStructure
 from ask_llm.core.text_splitter import TextChunk
 from ask_llm.utils.token_counter import TokenCounter
@@ -39,12 +40,22 @@ class BudgetPolicy(Protocol):
 class TokenBudget:
     """Token-count budget backed by ``TokenCounter``.
 
+    The single owner of chunk-sizing correctness. Three concerns converge here:
+
+    - ``prompt_overhead`` reserves tokens for the prompt template accompanying
+      each chunk, so the budget covers ``prompt + content`` (review §4.4.4).
+    - ``APPROX_TOKEN_SAFETY_FACTOR`` is applied for models whose real BPE is
+      approximated by cl100k_base (DeepSeek/Qwen undercount CJK). Applying it
+      in ``content_max_tokens`` — not just in the hard-split path — closes the
+      fast-path overflow: a chunk that "fits" by raw cl100k count no longer
+      admits content that overflows the provider's real context window
+      (review V2 D1 / V1 B2).
+
     Attributes:
         model: Model name used for the tokenizer.
         max_tokens: Maximum total tokens per chunk, including prompt overhead.
         prompt_overhead: Tokens reserved for the prompt template that will
-            accompany each chunk. Budget per chunk content is
-            ``max_tokens - prompt_overhead``.
+            accompany each chunk.
     """
 
     model: str
@@ -52,9 +63,17 @@ class TokenBudget:
     prompt_overhead: int = 0
 
     @property
-    def content_max_tokens(self) -> int:
-        """Token cap for chunk content after reserving prompt overhead."""
+    def _raw_content_cap(self) -> int:
+        """Content cap before the approximate-model safety reduction."""
         return max(1, self.max_tokens - self.prompt_overhead)
+
+    @property
+    def content_max_tokens(self) -> int:
+        """Effective per-chunk content cap (prompt overhead + safety factor)."""
+        cap = self._raw_content_cap
+        if TokenCounter.is_approximate_model(self.model):
+            return max(1, int(cap * APPROX_TOKEN_SAFETY_FACTOR))
+        return cap
 
     def count(self, text: str) -> int:
         return TokenCounter.count_tokens(text, self.model)
@@ -65,7 +84,10 @@ class TokenBudget:
         return self.count(text) <= self.content_max_tokens
 
     def hard_split(self, text: str) -> list[str]:
-        return TokenCounter.split_hard_by_max_tokens(text, self.content_max_tokens, self.model)
+        # Pass the raw cap; ``split_hard_by_max_tokens`` applies the safety
+        # factor internally for approximate models, so the effective budget
+        # matches ``content_max_tokens`` without double-applying it.
+        return TokenCounter.split_hard_by_max_tokens(text, self._raw_content_cap, self.model)
 
 
 # Matches a display-math block: $$ ... $$ potentially spanning multiple lines.

@@ -2,79 +2,55 @@
 
 from __future__ import annotations
 
-import re
-
 from loguru import logger
 
+from ask_llm.core.binary_splitter import BinarySplitter, TokenBudget
 from ask_llm.core.text_splitter import TextChunk
-from ask_llm.utils.token_counter import TokenCounter
 
 _Meta = dict
 
 
-def _split_by_token_budget(text: str, model: str, max_tokens: int) -> list[str]:
-    """Split text into pieces each with at most max_tokens (tiktoken estimate)."""
+def _split_by_token_budget(
+    text: str, model: str, max_tokens: int, prompt_overhead: int = 0
+) -> list[str]:
+    """Split *text* into pieces that each fit the token budget.
+
+    Delegates to :class:`BinarySplitter` with a :class:`TokenBudget` so the
+    translation rebalance path shares the single split algorithm and its
+    correctness guarantees: fence-aware splitting (no cut mid-code-block,
+    review V2 D4 / V1 B4), the approximate-model safety factor, and the
+    prompt-overhead reservation (review V2 D1/D2). The previous local
+    implementation duplicated the splitter and protected neither fences nor
+    CJK undercount.
+    """
     text = text.strip()
     if not text:
         return []
-    if TokenCounter.count_tokens(text, model) <= max_tokens:
-        return [text]
-
-    paras = re.split(r"\n\s*\n", text)
-    paras = [p.strip() for p in paras if p.strip()]
-
-    # Merge display-math blocks ($$...$$) with their preceding paragraph so that
-    # a $$ block never starts a chunk on its own (which causes LLMs to drop or
-    # garble the equation).
-    merged: list[str] = []
-    for p in paras:
-        if p.startswith("$$") and merged:
-            merged[-1] = merged[-1] + "\n\n" + p
-        else:
-            merged.append(p)
-    paras = merged
-
-    if len(paras) > 1:
-        result: list[str] = []
-        buf = ""
-        for p in paras:
-            cand = f"{buf}\n\n{p}" if buf else p
-            if TokenCounter.count_tokens(cand, model) <= max_tokens:
-                buf = cand
-            else:
-                if buf:
-                    result.extend(_split_by_token_budget(buf, model, max_tokens))
-                if TokenCounter.count_tokens(p, model) <= max_tokens:
-                    buf = p
-                else:
-                    result.extend(TokenCounter.split_hard_by_max_tokens(p, max_tokens, model))
-                    buf = ""
-        if buf:
-            result.extend(_split_by_token_budget(buf, model, max_tokens))
-        return result
-
-    return TokenCounter.split_hard_by_max_tokens(text, max_tokens, model)
+    budget = TokenBudget(model=model, max_tokens=max_tokens, prompt_overhead=prompt_overhead)
+    return [c.content for c in BinarySplitter(budget).split(text)]
 
 
 def _merge_adjacent_greedy(
     items: list[tuple[str, _Meta]],
     model: str,
     max_tokens: int,
+    prompt_overhead: int = 0,
 ) -> list[tuple[str, _Meta]]:
-    """
-    Merge adjacent translation bodies left-to-right while combined tiktoken count ≤ max_tokens.
+    """Merge adjacent translation bodies left-to-right while the combined body fits the budget.
 
     Chunks are merged as raw markdown/text only; the translation prompt is applied later per
-    merged chunk (see ``Translator.generate_prompt``).
+    merged chunk (see ``Translator.generate_prompt``). The fit test goes through
+    :class:`TokenBudget` so merged chunks respect the safety factor and prompt
+    overhead, keeping the merge consistent with the split.
     """
     if not items:
         return []
+    budget = TokenBudget(model=model, max_tokens=max_tokens, prompt_overhead=prompt_overhead)
     merged: list[tuple[str, _Meta]] = []
     buf_s, buf_m = items[0]
     sep = "\n\n"
     for nxt_s, nxt_m in items[1:]:
-        tc = TokenCounter.count_tokens(buf_s + sep + nxt_s, model)
-        if tc <= max_tokens:
+        if budget.fits(buf_s + sep + nxt_s):
             buf_s = buf_s + sep + nxt_s
             buf_m = {**buf_m, **nxt_m, "rebalanced": True}
         else:
@@ -84,9 +60,11 @@ def _merge_adjacent_greedy(
     return merged
 
 
-def plain_text_chunks_by_tokens(text: str, model: str, max_chunk_tokens: int) -> list[TextChunk]:
-    """Split plain text into TextChunks; each piece is at most max_chunk_tokens (before merge pass)."""
-    parts = _split_by_token_budget(text, model, max_chunk_tokens)
+def plain_text_chunks_by_tokens(
+    text: str, model: str, max_chunk_tokens: int, prompt_overhead: int = 0
+) -> list[TextChunk]:
+    """Split plain text into TextChunks; each piece fits the token budget (before merge pass)."""
+    parts = _split_by_token_budget(text, model, max_chunk_tokens, prompt_overhead)
     out: list[TextChunk] = []
     start = 0
     for i, content in enumerate(parts):
@@ -111,9 +89,9 @@ def rebalance_translation_chunks(
     max_chunk_tokens: int = 2400,
     min_merge_tokens: int = 400,
     enabled: bool = True,
+    prompt_overhead: int = 0,
 ) -> list[TextChunk]:
-    """
-    Split oversized chunks and merge tiny neighbors so estimated input tokens are more uniform.
+    """Split oversized chunks and merge tiny neighbors so estimated input tokens are more uniform.
 
     Reduces long-tail API latency when many chunks are translated in parallel (wall-clock is
     dominated by the slowest request).
@@ -124,6 +102,7 @@ def rebalance_translation_chunks(
         max_chunk_tokens: Max body tokens per chunk after split+merge (prompt is added per chunk)
         min_merge_tokens: Unused; kept for call-site compatibility
         enabled: When False, return chunks unchanged
+        prompt_overhead: Tokens reserved for the per-chunk translation prompt template (review V2 D2)
 
     Returns:
         New list of TextChunk with sequential chunk_id 0..n-1
@@ -136,10 +115,10 @@ def rebalance_translation_chunks(
     pieces: list[tuple[str, _Meta]] = []
     for c in sorted(chunks, key=lambda x: x.chunk_id):
         base_meta = dict(c.metadata)
-        for part in _split_by_token_budget(c.content, model, max_chunk_tokens):
+        for part in _split_by_token_budget(c.content, model, max_chunk_tokens, prompt_overhead):
             pieces.append((part, {**base_meta, "rebalanced": True}))
 
-    pieces = _merge_adjacent_greedy(pieces, model, max_chunk_tokens)
+    pieces = _merge_adjacent_greedy(pieces, model, max_chunk_tokens, prompt_overhead)
 
     out: list[TextChunk] = []
     start = 0

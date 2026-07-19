@@ -33,6 +33,7 @@ from ask_llm.utils.console import console
 from ask_llm.utils.fallback_chain import build_fallback_chain
 from ask_llm.utils.file_handler import FileHandler
 from ask_llm.utils.pricing import format_cost_estimate
+from ask_llm.utils.token_counter import TokenCounter
 from ask_llm.utils.translation_exporter import TranslationExporter
 
 PricingMap = dict[tuple[str, str], dict[str, float]]
@@ -102,10 +103,29 @@ class TextFileTranslator:
             console.print_warning(f"File {file_path} is empty. Skipping.")
             return None
 
+        # Build the translator first so its prompt template can size the chunk
+        # budget (D2): reserving the prompt tokens keeps a large translation
+        # template + near-full window from overflowing.
+        translator = Translator(
+            target_language=options.target_language,
+            source_language=options.source_language,
+            style=options.style,
+            custom_prompt_template=None,
+            prompt_file=options.prompt_file,
+            glossary_pairs=glossary_pairs,
+        )
+        prompt_overhead = TokenCounter.count_tokens(
+            translator.prompt_template_for_batch(), self.model
+        )
+
         if file_type == "markdown":
-            chunks = MarkdownTokenSplitter(self.model, options.max_chunk_tokens).split(content)
+            chunks = MarkdownTokenSplitter(
+                self.model, options.max_chunk_tokens, prompt_overhead_tokens=prompt_overhead
+            ).split(content)
         else:
-            chunks = plain_text_chunks_by_tokens(content, self.model, options.max_chunk_tokens)
+            chunks = plain_text_chunks_by_tokens(
+                content, self.model, options.max_chunk_tokens, prompt_overhead
+            )
 
         if not chunks:
             console.print_warning(f"No chunks created from {file_path}. Skipping.")
@@ -118,6 +138,7 @@ class TextFileTranslator:
             max_chunk_tokens=options.max_chunk_tokens,
             min_merge_tokens=options.min_chunk_merge_tokens,
             enabled=options.balance_translation_chunks,
+            prompt_overhead=prompt_overhead,
         )
         if len(chunks) != n_before:
             console.print_info(
@@ -126,15 +147,6 @@ class TextFileTranslator:
             )
         else:
             console.print_info(f"Split into {len(chunks)} chunk(s)")
-
-        translator = Translator(
-            target_language=options.target_language,
-            source_language=options.source_language,
-            style=options.style,
-            custom_prompt_template=None,
-            prompt_file=options.prompt_file,
-            glossary_pairs=glossary_pairs,
-        )
 
         model_config = ModelConfig(
             provider=self.provider,

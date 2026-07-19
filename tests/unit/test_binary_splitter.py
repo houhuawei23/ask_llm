@@ -13,19 +13,36 @@ def _split(text: str, max_tokens: int, overhead: int = 0):
 
 class TestTokenBudget:
     def test_prompt_overhead_shrinks_content_budget(self):
-        budget = TokenBudget(model=MODEL, max_tokens=100, prompt_overhead=30)
+        # Use an exact-model (gpt-4) to isolate overhead from the approximate-
+        # model safety factor (see test_approximate_model_applies_safety_factor).
+        budget = TokenBudget(model="gpt-4", max_tokens=100, prompt_overhead=30)
         assert budget.content_max_tokens == 70
 
     def test_prompt_overhead_clamped_to_one(self):
-        budget = TokenBudget(model=MODEL, max_tokens=10, prompt_overhead=50)
+        budget = TokenBudget(model="gpt-4", max_tokens=10, prompt_overhead=50)
         assert budget.content_max_tokens == 1
 
     def test_fits_respects_overhead(self):
         text = "word " * 60  # ~60+ tokens
-        no_overhead = TokenBudget(model=MODEL, max_tokens=100)
-        with_overhead = TokenBudget(model=MODEL, max_tokens=100, prompt_overhead=50)
+        no_overhead = TokenBudget(model="gpt-4", max_tokens=100)
+        with_overhead = TokenBudget(model="gpt-4", max_tokens=100, prompt_overhead=50)
         assert no_overhead.fits(text)
         assert not with_overhead.fits(text)
+
+    def test_approximate_model_applies_safety_factor(self):
+        """D1: approximate models (DeepSeek/Qwen) get a reduced content cap and
+        a stricter ``fits()`` so the fast-path "whole input fits" no longer
+        admits chunks that overflow the real context window."""
+        from ask_llm.core.constants import APPROX_TOKEN_SAFETY_FACTOR
+
+        approx = TokenBudget(model=MODEL, max_tokens=100)  # MODEL = deepseek-chat
+        exact = TokenBudget(model="gpt-4", max_tokens=100)
+        assert approx.content_max_tokens == int(100 * APPROX_TOKEN_SAFETY_FACTOR)
+        assert exact.content_max_tokens == 100
+
+        text = "word " * 90  # ~90 tokens: fits the exact cap, exceeds the reduced one
+        assert exact.fits(text)
+        assert not approx.fits(text)
 
 
 class TestBinarySplitter:

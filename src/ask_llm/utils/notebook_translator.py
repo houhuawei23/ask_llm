@@ -12,13 +12,16 @@ from ask_llm.core.markdown_token_splitter import MarkdownTokenSplitter
 from ask_llm.core.text_splitter import TextChunk
 from ask_llm.core.translator import Translator
 from ask_llm.utils.chunk_balance import rebalance_translation_chunks
+from ask_llm.utils.token_counter import TokenCounter
 
 
-def _split_markdown_cell_tokens(text: str, model: str, max_chunk_tokens: int) -> list[str]:
+def _split_markdown_cell_tokens(
+    text: str, model: str, max_chunk_tokens: int, prompt_overhead: int = 0
+) -> list[str]:
     """Split long markdown cell text by token budget (structure-aware)."""
     if not text.strip():
         return []
-    splitter = MarkdownTokenSplitter(model, max_chunk_tokens)
+    splitter = MarkdownTokenSplitter(model, max_chunk_tokens, prompt_overhead_tokens=prompt_overhead)
     return [c.content for c in splitter.split(text)]
 
 
@@ -90,6 +93,11 @@ class NotebookTranslator:
         # Build translation tasks: (cell_index, chunk_content) for markdown cells
         tasks_data: list[tuple[int, str]] = []
         model = self.model_config.model
+        # Measure the per-chunk prompt template once (D2) so chunk sizing
+        # reserves room for prompt + content across all cells. The same template
+        # is reused for BatchTask construction below.
+        prompt_template = self.translator.prompt_template_for_batch()
+        prompt_overhead = TokenCounter.count_tokens(prompt_template, model)
         for i, cell in enumerate(notebook.cells):
             if not _is_markdown_cell(cell):
                 continue
@@ -99,7 +107,9 @@ class NotebookTranslator:
             if not original_text.strip():
                 continue
 
-            raw_chunks = _split_markdown_cell_tokens(original_text, model, max_chunk_tokens)
+            raw_chunks = _split_markdown_cell_tokens(
+                original_text, model, max_chunk_tokens, prompt_overhead
+            )
             tmp_chunks = [
                 TextChunk(content=s, chunk_id=j, start_pos=0, end_pos=len(s), metadata={})
                 for j, s in enumerate(raw_chunks)
@@ -110,6 +120,7 @@ class NotebookTranslator:
                 max_chunk_tokens=max_chunk_tokens,
                 min_merge_tokens=min_chunk_merge_tokens,
                 enabled=balance_chunks,
+                prompt_overhead=prompt_overhead,
             )
             for part in balanced:
                 tasks_data.append((i, part.content))
@@ -122,8 +133,8 @@ class NotebookTranslator:
                 nbformat.write(notebook, f)
             return 0, 0, 0, 0
 
-        # Create BatchTasks (template keeps {content}; processor merges once)
-        prompt_template = self.translator.prompt_template_for_batch()
+        # Create BatchTasks (template keeps {content}; processor merges once).
+        # ``prompt_template`` was measured above for chunk sizing (D2).
         tasks: list[BatchTask] = []
         for task_id, (_, chunk_content) in enumerate(tasks_data):
             tasks.append(
