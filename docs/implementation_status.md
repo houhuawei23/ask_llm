@@ -1,5 +1,10 @@
 # 功能实现完成情况
 
+> ⚠️ **已过时（历史归档，2024-12-24）**：本文档记录的是项目极早期的功能（命令行配置检查、chat 元指令），
+> 引用的 `ask_llm.py`（单文件入口）、`utils/config_checker.py` 等早已不存在（项目已重构为
+> `src/ask_llm/` 包，CLI 基于 Typer）。保留仅作历史记录。当前架构与模块请见
+> [`../AGENTS.md`](../AGENTS.md) 与 [`ARCHITECTURE_REVIEW_V2.md`](./ARCHITECTURE_REVIEW_V2.md)。
+
 ## 实现日期
 2024-12-24
 

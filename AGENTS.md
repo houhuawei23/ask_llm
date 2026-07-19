@@ -4,7 +4,7 @@
 
 ## Project Overview
 
-**Ask LLM v2.0** is a modern command-line tool for calling multiple LLM APIs (DeepSeek, Qwen, etc.) with an elegant interface. It is built with:
+**Ask LLM** is a modern command-line tool for calling multiple LLM APIs (DeepSeek, Qwen, etc.) with an elegant interface. It is built with:
 
 - **Typer** - Modern CLI framework with type hints
 - **Pydantic** - Data validation and serialization
@@ -21,74 +21,94 @@ ask_llm/
 │   ├── __main__.py           # python -m entry point
 │   ├── cli/                  # Typer CLI package
 │   │   ├── app.py            # Typer app assembly and global callback
-│   │   ├── commands/         # Per-command modules
-│   │   │   ├── ask.py
-│   │   │   ├── chat.py
-│   │   │   ├── batch.py
-│   │   │   ├── trans.py
-│   │   │   ├── format_cmd.py
-│   │   │   ├── paper.py
-│   │   │   ├── diagnose.py
-│   │   │   └── config.py
+│   │   ├── commands/         # Per-command modules (ask, chat, batch, trans, paper, format_cmd, config, diagnose)
 │   │   ├── common.py         # Shared CLI helpers
-│   │   └── errors.py         # CLI error mapping
+│   │   └── errors.py         # CLI error mapping (cli_errors context manager, raise_unexpected_cli_error)
 │   ├── core/                 # Core business logic
-│   │   ├── models.py         # Pydantic data models
-│   │   ├── processor.py      # Request processing
-│   │   ├── chat.py           # Interactive chat session
-│   │   ├── concurrent.py     # Bounded single-queue retry runner
-│   │   ├── batch_models.py   # Batch data models (TaskStatus, BatchTask, etc.)
-│   │   ├── batch.py          # Backward-compatible re-exports
-│   │   ├── checkpoint.py     # Generic checkpoint base class
-│   │   ├── batch_checkpoint.py # Concrete checkpoint for batch/translation tasks
-│   │   ├── batch_processor.py # Batch execution engine
-│   │   ├── global_batch_runner.py # Global batch runner
-│   │   ├── telemetry.py      # Observability: LogContext, error classification
-│   │   └── execution_report.py # Structured execution reports
-│   │   ├── translator.py     # Translation utilities
-│   │   ├── text_splitter.py  # Text splitting logic
-│   │   ├── markdown_token_splitter.py # Markdown-aware token splitting
-│   │   ├── md_heading_formatter.py  # Markdown heading formatting
-│   │   ├── md_body_formatter.py     # Markdown body formatting
-│   │   ├── format_checkpoint.py     # Checkpoint persistence for resume
-│   │   ├── format_markdown_file.py  # Single-file format workflow
-│   │   └── paper_explain.py  # Paper explanation pipeline
-│   ├── services/             # Use-case / orchestration services
-│   │   ├── __init__.py
-│   │   ├── ask_service.py    # Single-request orchestration (moved from ask command)
-│   │   ├── format_service.py # Format orchestration (moved from format_cmd)
-│   │   ├── batch_service.py  # Batch orchestration (moved from batch command)
-│   │   ├── translation_service.py # Translation orchestration (moved from trans command)
-│   │   └── paper_service.py  # Paper explain orchestration (moved from paper command)
-│   ├── config/               # Configuration management
-│   │   ├── loader.py         # Loads default_config.yml
-│   │   ├── unified_config.py # UnifiedConfig model
-│   │   ├── context.py        # Config context for current command
-│   │   ├── manager.py        # Config management
-│   │   ├── cli_session.py    # CLI bootstrap helper
-│   │   └── paper_explain_pipeline.py # Paper pipeline config
-│   └── utils/                # Utility modules
-│       ├── console.py        # Rich console wrapper
-│       ├── file_handler.py   # File I/O with progress bars
-│       ├── token_counter.py  # Token counting
-│       ├── batch_exporter.py # Batch result export
-│       ├── batch_loader.py   # Batch config loading
-│       ├── notebook_translator.py  # Jupyter notebook support
-│       ├── translation_exporter.py # Translation export
-│       ├── pricing.py        # Pricing lookup
-│       ├── provider_specs.py # Provider model limits
-│       ├── provider_cache.py # Process-wide provider adapter cache
-│       ├── rate_limiter.py   # Global API rate limiter
-│       └── api_key_gate.py   # API key validation
-├── tests/                    # Tests
-│   ├── unit/                 # Unit tests
-│   ├── integration/          # Integration tests
-│   └── conftest.py           # Pytest fixtures
-├── docs/                     # Documentation
-├── pyproject.toml            # Modern Python project config
-├── requirements.txt          # Dependencies
-├── providers.yml             # Provider runtime catalog
-└── default_config.yml       # Unified configuration (providers, translation, batch, etc.)
+│   │   ├── models.py                  # Pydantic data models (ProviderConfig/SecretStr, AppConfig, RequestMetadata)
+│   │   ├── processor.py               # RequestProcessor (prompt format + LLM call)
+│   │   ├── chat.py                    # Interactive chat session
+│   │   ├── batch_models.py            # BatchTask, BatchResult, AttemptRecord, BatchStatistics, TaskStatus
+│   │   ├── batch.py                   # Backward-compatible re-exports (compat shim)
+│   │   ├── batch_processor.py         # GlobalBatchProcessor (thin orchestrator: escalation + pool sizing)
+│   │   ├── task_executor.py           # Single-config attempt: rate-limit + adapter + stream + metadata
+│   │   ├── stream_collector.py        # Streaming + token collection (pure)
+│   │   ├── progress_presenter.py      # Per-worker Rich progress bars
+│   │   ├── provider_manager.py        # Build provider adapter cache for a batch
+│   │   ├── global_batch_runner.py     # run_global_batch_tasks entry point
+│   │   ├── command_runner.py          # run_with_checkpoint (shared checkpoint lifecycle for batch/trans)
+│   │   ├── concurrent.py              # BoundedRetryRunner (single-queue scheduler + retry heap + SIGINT)
+│   │   ├── retry_policy.py            # RetryPolicy / DEFAULT_RETRY_POLICY (transient-error classification)
+│   │   ├── checkpoint.py              # Generic atomic checkpoint base (tmp + os.replace)
+│   │   ├── batch_checkpoint.py        # Concrete checkpoint for batch/translation tasks
+│   │   ├── telemetry.py               # LogContext, bind_context, classify_error, should_fallback_for_error
+│   │   ├── execution_report.py        # Structured execution reports (AttemptRecord projection)
+│   │   ├── error_keywords.py          # Single (keyword -> category, transient) rule table
+│   │   ├── response_parser.py         # unwrap_translation_payload (JSON / LaTeX-escape repair)
+│   │   ├── translator.py              # Translation prompt assembly
+│   │   ├── text_splitter.py           # TextChunk + base splitter (thin after P3.2)
+│   │   ├── markdown_structure.py      # Single-pass parser: fences, frontmatter, heading spans
+│   │   ├── binary_splitter.py         # Budget-pluggable splitter (TokenBudget: safety factor + prompt_overhead)
+│   │   ├── markdown_token_splitter.py # Thin compat wrapper over BinarySplitter
+│   │   ├── chunked_llm_job.py         # Shared orchestration base for Heading/Body formatters
+│   │   ├── md_heading_formatter.py    # Heading format pipeline
+│   │   ├── md_body_formatter.py       # Body format pipeline (frontmatter carve + position-aware reassembly)
+│   │   ├── format_checkpoint.py       # Format checkpoint v2 (original_text + chunk_spans for lossless resume)
+│   │   ├── format_markdown_file.py    # Single-file format workflow (title/body dispatch)
+│   │   ├── paper_explain.py           # Paper explanation pipeline
+│   │   ├── paper_explain_pipeline.py  # Paper pipeline domain model + YAML loader (moved from config/ in P2.6)
+│   │   ├── protocols.py               # LLMProviderProtocol
+│   │   ├── constants.py               # APPROX_TOKEN_SAFETY_FACTOR, TaskKind, defaults
+│   │   └── tasks/builders.py          # BatchTask factories (e.g. build_paper_explain_task)
+│   ├── services/            # Use-case / orchestration services
+│   │   ├── ask_service.py              # Single-request (clean reference: 0 print, 0 typer, returns dataclass)
+│   │   ├── batch_service.py            # Batch orchestration (run_batch_from_config + BatchService print/export)
+│   │   ├── translation_service.py      # Translation aggregator (delegates to text/notebook collaborators)
+│   │   ├── text_file_translator.py     # Per-file text/markdown translation (P4.5)
+│   │   ├── notebook_file_translator.py # Per-notebook translation (P4.5)
+│   │   ├── translation_options.py      # TranslationOptions / *JobResult / *SessionResult
+│   │   ├── paper_service.py            # Paper explain orchestration (returns PaperSessionResult)
+│   │   └── format_service.py           # Format orchestration
+│   ├── config/              # Configuration management
+│   │   ├── loader.py                   # ConfigLoader (single model_validate pass)
+│   │   ├── env.py                      # ${VAR} + ASK_LLM_* overrides
+│   │   ├── merge.py                    # _deep_merge + provenance (record_leaves)
+│   │   ├── providers_catalog.py        # providers.yml runtime-field loader
+│   │   ├── unified_config.py           # UnifiedConfig (single source: providers + behavior sections)
+│   │   ├── context.py                  # service-locator: get_config / get_config_or_none (13 callers)
+│   │   ├── manager.py                  # ConfigManager (provider/model overrides)
+│   │   └── cli_session.py              # CLI bootstrap (bootstrap_command, load_pricing_with_hint)
+│   └── utils/              # Utility modules
+│       ├── engine_facade.py            # SINGLE llm_engine import point (create_engine_adapter, EngineConfigView)
+│       ├── provider_cache.py           # ProviderAdapterCache (process-wide LRU)
+│       ├── fallback_chain.py           # build_fallback_chain (renamed from provider_router, P4.6b)
+│       ├── model_limits.py             # DeepSeek max_tokens caps + ModelLimits (renamed from provider_specs, P4.6b)
+│       ├── api_key_gate.py             # Pre-flight key checks + UnresolvedAPIKeyError
+│       ├── rate_limiter.py             # GlobalRateLimiter (per-(provider,model) token bucket)
+│       ├── token_counter.py            # TokenCounter (cl100k_base approximation for DeepSeek/Qwen)
+│       ├── chunk_balance.py            # rebalance_translation_chunks (routes through BinarySplitter)
+│       ├── console.py                  # Rich + loguru console wrapper
+│       ├── file_handler.py             # File I/O with on_chunk progress callbacks
+│       ├── batch_loader.py             # Batch YAML config loading (strict validation)
+│       ├── batch_exporter.py           # Batch result export (streaming iterencode)
+│       ├── translation_exporter.py     # Translation export
+│       ├── export_formats.py           # detect_export_format (single extension table)
+│       ├── pricing.py                  # Pricing lookup
+│       ├── notebook_translator.py      # Jupyter notebook markdown-cell translation
+│       ├── path_resolver.py            # _resolve_trans_input_paths / _is_directory_output (P4.3)
+│       ├── prompt_resolver.py          # Prompt template loading (@ prefix)
+│       ├── md_path_discovery.py        # Markdown path discovery for format
+│       └── interactive_config.py       # Interactive provider/key configuration
+├── tests/                  # Tests
+│   ├── unit/               # Unit tests
+│   ├── integration/        # Integration tests
+│   └── conftest.py         # Pytest fixtures
+├── docs/                   # Documentation
+├── prompts/                # Prompt templates (paper/, md-*-format, trans, ...) — symlinked into src/ask_llm/prompts
+├── pyproject.toml          # Modern Python project config
+├── requirements.txt        # Dependencies
+├── providers.yml           # Provider runtime catalog (base_url, models, pricing, specs)
+└── default_config.yml      # Unified configuration (run `ask-llm config init` to create)
 ```
 
 ## Coding Conventions

@@ -1,6 +1,6 @@
 # Ask LLM 重构计划
 
-> ⚠️ **已过时（历史归档）**：本文档为 v1→v2（argparse→typer）迁移时期的早期重构计划，引用的 `ask_llm.py`（524 行）、`chat_mode.py` 等单文件结构早已不存在。当前的架构评审与分阶段重构方案见 [`ARCHITECTURE_REVIEW.md`](./ARCHITECTURE_REVIEW.md)。本文件保留仅作历史记录，请勿据此实施。
+> ⚠️ **已过时（历史归档）**：本文档为 v1→v2（argparse→typer）迁移时期的早期重构计划，引用的 `ask_llm.py`（524 行）、`chat_mode.py` 等单文件结构早已不存在。当前的架构评审与分阶段重构方案见 [`ARCHITECTURE_REVIEW_V2.md`](./ARCHITECTURE_REVIEW_V2.md)（双重视角，R0–R4 计划；V1 [`ARCHITECTURE_REVIEW.md`](./ARCHITECTURE_REVIEW.md) 的 P0–P4 已全部落地）。本文件保留仅作历史记录，请勿据此实施。
 
 ## 1. 现有代码分析
 
