@@ -9,6 +9,7 @@ from typing import Annotated
 import typer
 
 from ask_llm.cli.errors import raise_unexpected_cli_error
+from ask_llm.core.batch_models import TaskStatus
 from ask_llm.core.execution_report import ExecutionReport
 from ask_llm.core.telemetry import ErrorCategory
 from ask_llm.utils.console import console
@@ -79,7 +80,7 @@ def diagnose(
             for attempt in task.attempts:
                 key = f"{attempt.provider}/{attempt.model}"
                 model_stats[key]["attempts"] += 1
-                if attempt.status.value == "success":
+                if attempt.status == TaskStatus.SUCCESS:
                     model_stats[key]["success"] += 1
                     model_stats[key]["tokens"] += (attempt.input_tokens or 0) + (
                         attempt.output_tokens or 0
@@ -155,7 +156,7 @@ def diagnose(
                 )
 
         # Failed task details
-        failed_tasks = [t for t in report.tasks if t.final_status.value == "failed"]
+        failed_tasks = [t for t in report.tasks if t.final_status == TaskStatus.FAILED]
         if failed_tasks:
             console.print()
             console.print(f"[bold]Failed Tasks ({len(failed_tasks)})[/bold]")

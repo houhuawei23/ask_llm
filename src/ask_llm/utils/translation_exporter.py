@@ -10,7 +10,7 @@ from typing import Any
 
 from loguru import logger
 
-from ask_llm.core.batch import BatchResult
+from ask_llm.core.batch import BatchResult, TaskStatus
 from ask_llm.core.response_parser import unwrap_translation_payload
 from ask_llm.core.text_splitter import TextChunk
 from ask_llm.utils.export_formats import detect_export_format
@@ -179,9 +179,9 @@ class TranslationExporter:
             "statistics": {
                 "total_chunks": len(self.chunks),
                 "successful_translations": sum(
-                    1 for r in self.results if r.status.value == "success" and r.response
+                    1 for r in self.results if r.status == TaskStatus.SUCCESS and r.response
                 ),
-                "failed_translations": sum(1 for r in self.results if r.status.value == "failed"),
+                "failed_translations": sum(1 for r in self.results if r.status == TaskStatus.FAILED),
             },
         }
 

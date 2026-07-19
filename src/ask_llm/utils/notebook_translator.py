@@ -7,7 +7,7 @@ import nbformat
 from loguru import logger
 from nbformat import NotebookNode
 
-from ask_llm.core.batch import BatchResult, BatchTask, GlobalBatchProcessor, ModelConfig
+from ask_llm.core.batch import BatchResult, BatchTask, GlobalBatchProcessor, ModelConfig, TaskStatus
 from ask_llm.core.markdown_token_splitter import MarkdownTokenSplitter
 from ask_llm.core.text_splitter import TextChunk
 from ask_llm.core.translator import Translator
@@ -160,7 +160,7 @@ class NotebookTranslator:
         results = processor.process_global_tasks(tasks, config_manager, show_progress=show_progress)
         self.last_results = list(results)
 
-        successful = sum(1 for r in results if r.status.value == "success")
+        successful = sum(1 for r in results if r.status == TaskStatus.SUCCESS)
         failed = len(results) - successful
         if successful == 0 and failed > 0 and getattr(processor, "_auth_error_logged", False):
             raise RuntimeError("API authentication failed; no translated output.")
@@ -170,7 +170,7 @@ class NotebookTranslator:
         cell_translations: dict[int, list[str]] = {}
         for task_id, (cell_idx, _) in enumerate(tasks_data):
             result = result_map.get(task_id)
-            if result and result.response and result.status.value == "success":
+            if result and result.response and result.status == TaskStatus.SUCCESS:
                 translated = result.response.strip()
             else:
                 translated = tasks_data[task_id][1]
@@ -209,7 +209,7 @@ class NotebookTranslator:
         with open(output_path, "w", encoding="utf-8") as f:
             nbformat.write(translated_notebook, f)
 
-        ok = [r for r in results if r.status.value == "success" and r.metadata]
+        ok = [r for r in results if r.status == TaskStatus.SUCCESS and r.metadata]
         total_in = sum(r.metadata.input_tokens for r in ok if r.metadata)
         total_out = sum(r.metadata.output_tokens for r in ok if r.metadata)
         logger.info(f"Translated notebook saved to: {output_path}")

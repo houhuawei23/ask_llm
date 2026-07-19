@@ -18,7 +18,7 @@ from pathlib import Path
 from loguru import logger
 
 from ask_llm.config.manager import ConfigManager
-from ask_llm.core.batch import BatchResult, BatchTask, ModelConfig
+from ask_llm.core.batch import BatchResult, BatchTask, ModelConfig, TaskStatus
 from ask_llm.core.command_runner import run_with_checkpoint
 from ask_llm.core.markdown_token_splitter import MarkdownTokenSplitter
 from ask_llm.core.models import AppConfig
@@ -255,8 +255,8 @@ class TextFileTranslator:
         processor = outcome.processor
         results = sorted(outcome.results, key=lambda r: r.task_id)
 
-        failed_count = sum(1 for r in results if r.status.value == "failed")
-        successful_chunks = sum(1 for r in results if r.status.value == "success")
+        failed_count = sum(1 for r in results if r.status == TaskStatus.FAILED)
+        successful_chunks = sum(1 for r in results if r.status == TaskStatus.SUCCESS)
         if failed_count > 0:
             console.print_warning(f"{failed_count} chunk(s) failed to translate")
         if (
@@ -305,8 +305,8 @@ class TextFileTranslator:
         retries: int = 0,
     ) -> TranslationJobResult:
         """Export translated chunks for a single text/markdown file."""
-        failed_count = sum(1 for r in results if r.status.value == "failed")
-        successful_chunks = sum(1 for r in results if r.status.value == "success")
+        failed_count = sum(1 for r in results if r.status == TaskStatus.FAILED)
+        successful_chunks = sum(1 for r in results if r.status == TaskStatus.SUCCESS)
 
         if failed_count > 0:
             console.print_warning(f"{failed_count} chunk(s) failed to translate")
@@ -352,12 +352,12 @@ class TextFileTranslator:
             total_in = sum(
                 r.metadata.input_tokens
                 for r in results
-                if r.metadata and r.status.value == "success"
+                if r.metadata and r.status == TaskStatus.SUCCESS
             )
             total_out = sum(
                 r.metadata.output_tokens
                 for r in results
-                if r.metadata and r.status.value == "success"
+                if r.metadata and r.status == TaskStatus.SUCCESS
             )
             console.print(
                 format_cost_estimate(
