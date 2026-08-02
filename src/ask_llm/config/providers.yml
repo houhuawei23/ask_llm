@@ -3,9 +3,10 @@ providers:
     base_url: "https://api.deepseek.com/v1"
     api_key: ${DEEPSEEK_API_KEY}
     # default_model: "deepseek-v4-flash"
-    default_model: "deepseek-chat"
+    default_model: "deepseek-v4-flash"
     models:
       - name: "deepseek-v4-flash"
+        reasoning: false # thinking 模型: 翻译/格式化流水线需关 CoT, 否则先输出 30-170s+ reasoning_content, 烧光 max_tokens 出空正文
         context_length: 1_000_000 # 1M
         max_output:
           default: 384_000
