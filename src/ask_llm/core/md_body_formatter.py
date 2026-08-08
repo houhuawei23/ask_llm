@@ -317,6 +317,7 @@ class BodyFormatter(ChunkedLLMJob):
         result = self.processor.process_with_metadata(
             content=chunk.content,
             prompt_template=template,
+            max_tokens=get_config().unified_config.format_body.max_output_tokens,
         )
         assert result.metadata is not None
         return chunk.chunk_id, result.content.rstrip(), result.metadata

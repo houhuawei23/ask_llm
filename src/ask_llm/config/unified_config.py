@@ -254,6 +254,14 @@ class FormatBodyConfig(BaseModel):
         le=128000,
         description="Target max tokens per chunk for body formatting (tiktoken estimate)",
     )
+    max_output_tokens: int = Field(
+        default=8192,
+        ge=256,
+        le=128000,
+        description="Completion max_tokens per body chunk API call. Must cover reasoning "
+        "models whose reasoning_tokens count against max_tokens; the llm_engine "
+        "default of 2000 truncates reasoning_content and yields empty output.",
+    )
     concurrency: int = Field(
         default=4,
         gt=0,

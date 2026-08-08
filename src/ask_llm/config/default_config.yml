@@ -74,6 +74,7 @@ format_heading:
 format_body:
   default_prompt_file: "@prompts/md-body-format.md"
   max_chunk_tokens: 2400
+  max_output_tokens: 8192          # completion cap per chunk; covers reasoning models (llm_engine default 2000 truncates reasoning_content → empty output)
   concurrency: 32
   retries: 3
   retry_delay: 1.0
