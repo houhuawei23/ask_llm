@@ -5,6 +5,8 @@ from typing import Any
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ask_llm.core.models import ProviderConfig
+
 
 class GeneralConfig(BaseModel):
     """General/global default configuration."""
@@ -332,6 +334,11 @@ class PaperConfig(BaseModel):
         le=64,
         description="Max parallel LLM calls for ask-llm paper (ThreadPoolExecutor)",
     )
+    retries: int = Field(
+        default=3,
+        ge=0,
+        description="Max retry attempts per paper-explain job (was hardcoded 3 before v2.18.7)",
+    )
     max_output_tokens: int = Field(
         default=65536,
         ge=1,
@@ -368,6 +375,15 @@ class ProviderRateLimitConfig(BaseModel):
         ge=1,
         description="Maximum concurrent requests allowed in a burst",
     )
+    acquire_timeout_seconds: float = Field(
+        default=60.0,
+        gt=0,
+        description=(
+            "Seconds a worker waits for a rate-limit token before failing the task. "
+            "Raise this for tight providers (low RPM/burst) under heavy load to avoid "
+            "spurious rate-limit timeouts."
+        ),
+    )
 
 
 class RateLimitConfig(BaseModel):
@@ -400,8 +416,19 @@ class RateLimitConfig(BaseModel):
 
 
 class UnifiedConfig(BaseModel):
-    """Unified configuration loaded from default_config.yml."""
+    """Unified configuration loaded from default_config.yml.
 
+    Single configuration object for the whole application: provider runtime
+    settings (``providers`` / ``default_provider`` / ``default_model``) plus all
+    non-provider feature sections. ``AppConfig`` is derived from this as a
+    provider-facing view (see ``ConfigLoader.load``).
+    """
+
+    default_provider: str = Field(default="", description="Global default provider name")
+    default_model: str | None = Field(default=None, description="Global default model name")
+    providers: dict[str, ProviderConfig] = Field(
+        default_factory=dict, description="Provider runtime configurations"
+    )
     general: GeneralConfig = Field(default_factory=GeneralConfig)
     translation: TranslationConfig = Field(default_factory=TranslationConfig)
     batch: BatchConfig = Field(default_factory=BatchConfig)

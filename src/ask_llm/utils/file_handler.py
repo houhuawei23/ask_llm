@@ -1,11 +1,26 @@
-"""File handling utilities with progress bars."""
+"""File handling utilities with progress bars.
 
+I/O loops are decoupled from progress rendering (P4.10): chunked readers and
+writers accept an ``on_chunk(bytes)`` callback; tqdm progress bars are just
+one consumer of that callback.
+"""
+
+from collections.abc import Callable
 from pathlib import Path
 
 from loguru import logger
 from tqdm import tqdm
 
-from ask_llm.config.context import get_config
+from ask_llm.config.context import get_config_or_none
+
+# Built-in defaults matching default_config.yml so FileHandler can be used
+# without an active CLI config (e.g. library / embedded use).
+_DEFAULT_CHUNK_SIZE = 8192
+_DEFAULT_TQDM_NCOLS = 80
+_DEFAULT_OUTPUT_SUFFIX = "_output"
+
+# Callback invoked after each chunk with the number of bytes just processed.
+OnChunk = Callable[[int], None]
 
 
 class FileHandler:
@@ -14,12 +29,18 @@ class FileHandler:
     @classmethod
     def _get_chunk_size(cls) -> int:
         """Get chunk size from config."""
-        return get_config().unified_config.file.chunk_size
+        lr = get_config_or_none()
+        if lr is not None:
+            return lr.unified_config.file.chunk_size
+        return _DEFAULT_CHUNK_SIZE
 
     @classmethod
     def _get_tqdm_ncols(cls) -> int:
         """Get progress bar width from config."""
-        return get_config().unified_config.file.tqdm_ncols
+        lr = get_config_or_none()
+        if lr is not None:
+            return lr.unified_config.file.tqdm_ncols
+        return _DEFAULT_TQDM_NCOLS
 
     @classmethod
     def read(cls, path: str | Path, show_progress: bool = False) -> str:
@@ -62,28 +83,45 @@ class FileHandler:
             raise OSError(f"Failed to read file {path}: {e}") from e
 
     @classmethod
-    def _read_with_progress(cls, path: Path, total_size: int) -> str:
-        """Read file with progress bar."""
-        content_parts = []
+    def read_chunked(cls, path: str | Path, on_chunk: OnChunk | None = None) -> str:
+        """Read a file in chunks, invoking *on_chunk* with bytes read per chunk.
 
-        with (
-            open(path, encoding="utf-8") as f,
-            tqdm(
-                total=total_size,
-                unit="B",
-                unit_scale=True,
-                desc=f"Reading {path.name}",
-                ncols=cls._get_tqdm_ncols(),
-            ) as pbar,
-        ):
-            while True:
-                chunk = f.read(cls._get_chunk_size())
-                if not chunk:
-                    break
-                content_parts.append(chunk)
-                pbar.update(len(chunk.encode("utf-8")))
-
+        Progress-free I/O core (P4.10): callers wanting a progress bar pass a
+        tqdm-backed callback; library callers can meter or ignore progress.
+        """
+        file_path = Path(path)
+        if not file_path.exists():
+            raise FileNotFoundError(f"Input file not found: {path}")
+        if not file_path.is_file():
+            raise ValueError(f"Path is not a file: {path}")
+        content_parts: list[str] = []
+        chunk_size = cls._get_chunk_size()
+        try:
+            with open(file_path, encoding="utf-8") as f:
+                while True:
+                    chunk = f.read(chunk_size)
+                    if not chunk:
+                        break
+                    content_parts.append(chunk)
+                    if on_chunk is not None:
+                        on_chunk(len(chunk.encode("utf-8")))
+        except UnicodeDecodeError as e:
+            raise OSError(f"File {path} is not valid UTF-8 text: {e}") from e
+        except Exception as e:
+            raise OSError(f"Failed to read file {path}: {e}") from e
         return "".join(content_parts)
+
+    @classmethod
+    def _read_with_progress(cls, path: Path, total_size: int) -> str:
+        """Read file with progress bar (tqdm consumer of the on_chunk callback)."""
+        with tqdm(
+            total=total_size,
+            unit="B",
+            unit_scale=True,
+            desc=f"Reading {path.name}",
+            ncols=cls._get_tqdm_ncols(),
+        ) as pbar:
+            return cls.read_chunked(path, on_chunk=pbar.update)
 
     @classmethod
     def write(
@@ -115,7 +153,7 @@ class FileHandler:
             raise OSError(f"Failed to create directory for {path}: {e}") from e
 
         try:
-            if show_progress and len(content) > cls._get_chunk_size():
+            if show_progress and len(content.encode("utf-8")) > cls._get_chunk_size():
                 cls._write_with_progress(file_path, content)
             else:
                 file_path.write_text(content, encoding="utf-8")
@@ -126,26 +164,51 @@ class FileHandler:
             raise OSError(f"Failed to write file {path}: {e}") from e
 
     @classmethod
-    def _write_with_progress(cls, path: Path, content: str) -> None:
-        """Write file with progress bar."""
-        total = len(content)
-        written = 0
+    def write_chunked(
+        cls, path: str | Path, content: str, on_chunk: OnChunk | None = None
+    ) -> None:
+        """Write content in chunks, invoking *on_chunk* with bytes written.
 
-        with (
-            open(path, "w", encoding="utf-8") as f,
-            tqdm(
-                total=total,
-                unit="B",
-                unit_scale=True,
-                desc=f"Writing {path.name}",
-                ncols=cls._get_tqdm_ncols(),
-            ) as pbar,
-        ):
-            while written < total:
-                chunk = content[written : written + cls._get_chunk_size()]
-                f.write(chunk)
-                written += len(chunk)
-                pbar.update(len(chunk.encode("utf-8")))
+        Progress-free I/O core (P4.10). Slices by characters (UTF-8 sequences
+        are never split mid-character) while reporting byte counts (B10).
+        """
+        file_path = Path(path)
+        try:
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            total_bytes = len(content.encode("utf-8"))
+            char_written = 0
+            byte_written = 0
+            chunk_size = cls._get_chunk_size()
+            with open(file_path, "w", encoding="utf-8") as f:
+                while byte_written < total_bytes:
+                    chunk = content[char_written : char_written + chunk_size]
+                    if not chunk:
+                        break
+                    chunk_bytes = chunk.encode("utf-8")
+                    f.write(chunk)
+                    char_written += len(chunk)
+                    byte_written += len(chunk_bytes)
+                    if on_chunk is not None:
+                        on_chunk(len(chunk_bytes))
+        except Exception as e:
+            raise OSError(f"Failed to write file {path}: {e}") from e
+
+    @classmethod
+    def _write_with_progress(cls, path: Path, content: str) -> None:
+        """Write file with progress bar (tqdm consumer of the on_chunk callback).
+
+        B10: total and increments are in bytes so multibyte text (CJK) does
+        not overshoot 100%.
+        """
+        total_bytes = len(content.encode("utf-8"))
+        with tqdm(
+            total=total_bytes,
+            unit="B",
+            unit_scale=True,
+            desc=f"Writing {path.name}",
+            ncols=cls._get_tqdm_ncols(),
+        ) as pbar:
+            cls.write_chunked(path, content, on_chunk=pbar.update)
 
     @classmethod
     def generate_output_path(
@@ -169,7 +232,11 @@ class FileHandler:
             return str(custom_path)
 
         if suffix is None:
-            suffix = get_config().unified_config.file.default_output_suffix
+            lr = get_config_or_none()
+            if lr is not None:
+                suffix = lr.unified_config.file.default_output_suffix
+            else:
+                suffix = _DEFAULT_OUTPUT_SUFFIX
 
         input_file = Path(input_path)
         ext = input_file.suffix

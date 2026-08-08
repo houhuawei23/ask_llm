@@ -2,24 +2,18 @@
 
 from __future__ import annotations
 
+import os
 from typing import Annotated
 
 import typer
 
+from ask_llm.cli.common import _config_init
 from ask_llm.cli.errors import cli_errors
 from ask_llm.config.context import set_config
 from ask_llm.config.loader import ConfigLoader
+from ask_llm.utils.api_key_gate import api_key_is_missing_or_unresolved
 from ask_llm.utils.console import console
-
-try:
-    from llm_engine import create_provider_adapter
-except ImportError:
-    console.print_error(
-        "llm_engine is required but not installed. Please install it with: pip install llm-engine"
-    )
-    raise
-
-from ask_llm.cli.common import _config_init
+from ask_llm.utils.engine_facade import create_engine_adapter
 
 
 def config(
@@ -41,6 +35,13 @@ def config(
             help="Output path for init (default: ~/.config/ask_llm/default_config.yml)",
         ),
     ] = None,
+    debug_config: Annotated[
+        bool,
+        typer.Option(
+            "--debug-config",
+            help="Show configuration provenance: loaded file path and active env-var overrides",
+        ),
+    ] = False,
 ) -> None:
     """
     Manage configuration.
@@ -51,6 +52,7 @@ def config(
         ask-llm config test -p deepseek
         ask-llm config init
         ask-llm config init -o ./my_config.yml
+        ask-llm config show --debug-config
     """
     with cli_errors("config"):
         if action == "init":
@@ -61,6 +63,32 @@ def config(
         load_result = ConfigLoader.load(config_path)
         set_config(load_result)
         config = load_result.app_config
+
+        if debug_config:
+            console.print("")
+            console.print("[bold]Configuration Provenance:[/bold]")
+            console.print(f"  Loaded config file: {load_result.config_path}")
+            active_env = [k for k in os.environ if k.startswith("ASK_LLM_") and os.environ[k]]
+            if active_env:
+                console.print("  Active ASK_LLM_* env overrides:")
+                for key in sorted(active_env):
+                    masked = "***" if "KEY" in key or "SECRET" in key else os.environ[key]
+                    console.print(f"    {key} = {masked}")
+            else:
+                console.print("  Active ASK_LLM_* env overrides: (none)")
+
+            # Per-key provenance: which layer supplied each final value.
+            if load_result.provenance:
+                by_source: dict[str, list[str]] = {}
+                for key_path, source in load_result.provenance.items():
+                    by_source.setdefault(source, []).append(key_path)
+                console.print("  Value sources (per key, raw config-file naming):")
+                for source in sorted(by_source):
+                    keys = sorted(by_source[source])
+                    console.print(f"    {source} ({len(keys)} keys):")
+                    for key_path in keys:
+                        console.print(f"      {key_path}")
+            console.print("")
 
         if action == "show":
             console.print("")
@@ -92,7 +120,7 @@ def config(
 
                 pc = config.providers[name]
 
-                if name != "ollama" and (not pc.api_key or pc.api_key == "your-api-key-here"):
+                if name != "ollama" and api_key_is_missing_or_unresolved(pc.api_key):
                     console.print_warning(f"[{name}] API key not configured")
                     continue
 
@@ -108,7 +136,7 @@ def config(
                         console.print("  Error: No default model available")
                         continue
 
-                    llm_provider = create_provider_adapter(pc, default_model=test_default_model)
+                    llm_provider = create_engine_adapter(pc, default_model=test_default_model)
                     success, message, latency = llm_provider.test_connection()
 
                     if success:

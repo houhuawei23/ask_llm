@@ -426,3 +426,74 @@ Content 3.
         assert result.count("# First") == 1
         assert result.count("## Second") == 1
         assert result.count("### Third") == 1
+
+
+class TestHeadingResume:
+    """P3.3: title checkpoints can now be resumed (symmetric with body)."""
+
+    @pytest.fixture(autouse=True)
+    def _init_app_config(self, sample_config_file: Path) -> None:
+        load_result = ConfigLoader.load(sample_config_file)
+        set_config(load_result)
+
+    def test_resume_from_checkpoint_merges_results(self, tmp_path):
+        from ask_llm.core.format_checkpoint import (
+            FailedChunkInfo,
+            FormatCheckpoint,
+            SuccessfulChunkInfo,
+        )
+
+        checkpoint_path = tmp_path / "title_checkpoint.json"
+        checkpoint = FormatCheckpoint(
+            version=1,
+            source_file="doc.md",
+            format_type="title",
+            model="",
+            prompt_template=_TEST_PROMPT_TEMPLATE,
+            max_chunk_tokens=None,
+            created_at="2026-07-16T00:00:00",
+            failed_chunks=[
+                FailedChunkInfo(
+                    chunk_id=1,
+                    content="# Second\n# Third",
+                    prompt_template=_TEST_PROMPT_TEMPLATE,
+                    error="boom",
+                    retry_count=3,
+                )
+            ],
+            successful_chunks=[
+                SuccessfulChunkInfo(chunk_id=0, formatted_content="# First"),
+            ],
+        )
+        checkpoint.save(str(checkpoint_path))
+
+        mock_provider = MagicMock(spec=LLMProviderProtocol)
+        mock_provider.name = "mock"
+        mock_provider.default_model = "mock-model"
+        mock_provider.config = MagicMock()
+        mock_provider.config.api_temperature = 0.7
+        processor = RequestProcessor(mock_provider)
+
+        def mock_process_with_metadata(*args, **kwargs):
+            return ProcessingResult(
+                content="## Second\n## Third",
+                metadata=RequestMetadata(
+                    provider="mock",
+                    model="mock-model",
+                    temperature=0.7,
+                    input_words=10,
+                    input_tokens=20,
+                    output_words=10,
+                    output_tokens=20,
+                    latency=0.1,
+                ),
+            )
+
+        processor.process_with_metadata = mock_process_with_metadata
+
+        result = HeadingFormatter.resume_from_checkpoint(str(checkpoint_path), processor)
+
+        assert result.formatted_headings == ["# First", "## Second", "## Third"]
+        assert result.failed_batches == []
+        assert result.stats.batches_processed == 1
+        assert result.stats.batches_failed == 0

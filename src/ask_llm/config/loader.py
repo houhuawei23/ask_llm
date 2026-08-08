@@ -1,4 +1,4 @@
-"""Configuration loading utilities.
+"""Configuration loading orchestration.
 
 Parameter priority: CLI args > environment variables > user config > package default.
 
@@ -6,291 +6,43 @@ Provider configuration priority:
   1. default_config.yml (user layer) — providers defined here override everything
   2. providers.yml (provider specs) — auto-loaded as fallback for provider base_url/api_key/models
   3. Package built-in default_config.yml — general defaults only, no built-in providers
+
+Supporting modules:
+  - ``ask_llm.config.env`` — ``${VAR}`` expansion and ``ASK_LLM_*`` overrides
+  - ``ask_llm.config.merge`` — layered deep-merge
+  - ``ask_llm.config.providers_catalog`` — ``providers.yml`` runtime extraction
 """
 
-import copy
-import os
-import re
 from pathlib import Path
 from typing import Any, ClassVar
 
 import yaml
 from loguru import logger
 
+from ask_llm.config.env import _apply_env_overrides, resolve_env_vars
+from ask_llm.config.merge import _deep_merge, record_leaves
+from ask_llm.config.providers_catalog import _load_providers_yml
 from ask_llm.config.unified_config import UnifiedConfig
-from ask_llm.core.models import AppConfig, ProviderConfig
-
-# Environment variable to config path mapping. Env vars overlay user config.
-# Format: "ASK_LLM_<SECTION>_<KEY>" -> ("section", "key") or "ASK_LLM_<KEY>" -> ("key",)
-# Log each missing ${VAR} at most once per process (avoid duplicate warnings).
-_WARNED_UNSET_ENV_VARS: set[str] = set()
-
-ENV_TO_CONFIG: dict[str, tuple[str, ...]] = {
-    "ASK_LLM_DEFAULT_PROVIDER": ("default_provider",),
-    "ASK_LLM_DEFAULT_MODEL": ("default_model",),
-    "ASK_LLM_TRANSLATION_TARGET_LANGUAGE": ("translation", "target_language"),
-    "ASK_LLM_TRANSLATION_SOURCE_LANGUAGE": ("translation", "source_language"),
-    "ASK_LLM_TRANSLATION_STYLE": ("translation", "style"),
-    # ASK_LLM_TRANSLATION_THREADS controls the per-file chunk concurrency used by trans.
-    # It maps to the active field max_concurrent_api_calls; "threads" is a legacy alias.
-    "ASK_LLM_TRANSLATION_THREADS": ("translation", "max_concurrent_api_calls"),
-    "ASK_LLM_TRANSLATION_MAX_PARALLEL_FILES": ("translation", "max_parallel_files"),
-    "ASK_LLM_TRANSLATION_MAX_CONCURRENT_API_CALLS": (
-        "translation",
-        "max_concurrent_api_calls",
-    ),
-    "ASK_LLM_TRANSLATION_RETRIES": ("translation", "retries"),
-    "ASK_LLM_TRANSLATION_BALANCE_CHUNK_TOKENS": ("translation", "balance_translation_chunks"),
-    "ASK_LLM_TRANSLATION_MAX_CHUNK_TOKENS": ("translation", "max_chunk_tokens"),
-    "ASK_LLM_TRANSLATION_MAX_OUTPUT_TOKENS": ("translation", "max_output_tokens"),
-    "ASK_LLM_TRANSLATION_MIN_CHUNK_MERGE_TOKENS": ("translation", "min_chunk_merge_tokens"),
-    "ASK_LLM_TRANSLATION_PRESERVE_FORMAT": ("translation", "preserve_format"),
-    "ASK_LLM_TRANSLATION_INCLUDE_ORIGINAL": ("translation", "include_original"),
-    "ASK_LLM_TRANSLATION_TEMPERATURE": ("translation", "temperature"),
-    "ASK_LLM_TRANSLATION_DEFAULT_PROMPT_FILE": ("translation", "default_prompt_file"),
-    "ASK_LLM_TRANSLATION_RECURSIVE_DIR": ("translation", "recursive_dir"),
-    "ASK_LLM_BATCH_THREADS": ("batch", "threads"),
-    "ASK_LLM_BATCH_RETRIES": ("batch", "retries"),
-    "ASK_LLM_BATCH_RETRY_DELAY": ("batch", "retry_delay"),
-    "ASK_LLM_BATCH_RETRY_DELAY_MAX": ("batch", "retry_delay_max"),
-}
-
-
-def _parse_env_value(value: str, key_path: tuple[str, ...]) -> Any:
-    """Parse env var string to appropriate type for the config key."""
-    if value.lower() in ("null", "none", ""):
-        return None
-    last_key = key_path[-1].lower()
-    if (
-        "threads" in last_key
-        or "retries" in last_key
-        or "max_chunk_size" in last_key
-        or "max_chunk_tokens" in last_key
-        or "max_output_tokens" in last_key
-        or "min_chunk_merge_tokens" in last_key
-    ):
-        return int(value)
-    if "retry_delay" in last_key or "temperature" in last_key:
-        return float(value)
-    if (
-        "preserve_format" in last_key
-        or "include_original" in last_key
-        or "recursive" in last_key
-        or "balance_translation_chunks" in last_key
-    ):
-        return value.lower() in ("true", "1", "yes")
-    return value
-
-
-def _deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
-    """Deep merge overlay into base. Overlay values take precedence.
-    For 'providers', individual provider settings are deep-merged instead of
-    replacing the entire providers dictionary.
-    """
-    result = copy.deepcopy(base)
-    for key, overlay_val in overlay.items():
-        if (
-            key == "providers"
-            and isinstance(overlay_val, dict)
-            and isinstance(result.get(key), dict)
-        ):
-            if not overlay_val:
-                # Explicitly empty providers dict clears everything
-                result[key] = {}
-            else:
-                # Deep merge per-provider settings instead of replacing the whole dict
-                for provider_name, provider_overlay in overlay_val.items():
-                    if (
-                        provider_name in result[key]
-                        and isinstance(result[key][provider_name], dict)
-                        and isinstance(provider_overlay, dict)
-                    ):
-                        result[key][provider_name] = _deep_merge(
-                            result[key][provider_name], provider_overlay
-                        )
-                    else:
-                        result[key][provider_name] = copy.deepcopy(provider_overlay)
-        elif key in result and isinstance(result[key], dict) and isinstance(overlay_val, dict):
-            result[key] = _deep_merge(result[key], overlay_val)
-        else:
-            result[key] = copy.deepcopy(overlay_val)
-    return result
-
-
-def _set_nested(data: dict[str, Any], path: tuple[str, ...], value: Any) -> None:
-    """Set a nested key in data. Creates intermediate dicts as needed."""
-    current = data
-    for part in path[:-1]:
-        if part not in current:
-            current[part] = {}
-        current = current[part]
-    current[path[-1]] = value
-
-
-def _apply_env_overrides(data: dict[str, Any]) -> dict[str, Any]:
-    """Apply ASK_LLM_* environment variable overrides to config data."""
-    result = copy.deepcopy(data)
-    legacy_chunk = os.getenv("ASK_LLM_TRANSLATION_MAX_CHUNK_SIZE")
-    if legacy_chunk is not None and legacy_chunk != "":
-        logger.warning(
-            "ASK_LLM_TRANSLATION_MAX_CHUNK_SIZE is deprecated and ignored; use "
-            "ASK_LLM_TRANSLATION_MAX_CHUNK_TOKENS for token-based chunking."
-        )
-    for env_var, key_path in ENV_TO_CONFIG.items():
-        env_val = os.getenv(env_var)
-        if env_val is not None and env_val != "":
-            try:
-                parsed = _parse_env_value(env_val, key_path)
-                _set_nested(result, key_path, parsed)
-                logger.debug(f"Config override from {env_var}")
-            except (ValueError, TypeError) as e:
-                logger.warning(f"Invalid env {env_var}={env_val!r}: {e}")
-    return result
-
-
-def resolve_env_vars(value: Any) -> Any:
-    """
-    Resolve environment variable references.
-
-    Supports ${VAR_NAME} format environment variable references.
-
-    Args:
-        value: Value that may contain environment variable references
-
-    Returns:
-        Resolved value
-    """
-    if isinstance(value, str):
-        # Match ${VAR_NAME} format
-        pattern = r"\$\{([^}]+)\}"
-        matches = re.findall(pattern, value)
-
-        if matches:
-            for var_name in matches:
-                env_value = os.getenv(var_name)
-                if env_value:
-                    value = value.replace(f"${{{var_name}}}", env_value)
-                else:
-                    if var_name not in _WARNED_UNSET_ENV_VARS:
-                        _WARNED_UNSET_ENV_VARS.add(var_name)
-                        logger.debug(f"Environment variable {var_name} not set")
-
-        return value
-    elif isinstance(value, dict):
-        return {k: resolve_env_vars(v) for k, v in value.items()}
-    elif isinstance(value, list):
-        return [resolve_env_vars(item) for item in value]
-    else:
-        return value
+from ask_llm.core.models import AppConfig
+from ask_llm.utils.engine_facade import load_engine_providers_config
 
 
 class LoadResult:
     """Result of loading default_config.yml, containing both provider and unified config."""
 
-    def __init__(self, app_config: AppConfig, unified_config: UnifiedConfig, config_path: Path):
+    def __init__(
+        self,
+        app_config: AppConfig,
+        unified_config: UnifiedConfig,
+        config_path: Path,
+        provenance: dict[str, str] | None = None,
+    ):
         self.app_config = app_config
         self.unified_config = unified_config
         self.config_path = config_path
-
-
-def _candidate_providers_yml_paths() -> list[Path]:
-    """Return candidate paths for providers.yml (provider specs / pricing catalog)."""
-    paths: list[Path] = []
-    env_path = os.getenv("ASK_LLM_PROVIDERS_YML")
-    if env_path:
-        paths.append(Path(env_path).expanduser())
-    paths.append(Path.cwd() / "providers.yml")
-    # Package: .../ask_llm/config/loader.py -> ask_llm repo root often 3 levels up
-    pkg_root = Path(__file__).resolve().parent.parent.parent.parent
-    paths.append(pkg_root / "providers.yml")
-    paths.append(Path.home() / ".config" / "ask_llm" / "providers.yml")
-    return paths
-
-
-def _load_providers_yml() -> dict[str, Any]:
-    """
-    Load provider runtime config from the first existing providers.yml.
-
-    Extracts fields needed for API calls: base_url, api_key, default_model, models,
-    api_temperature, api_top_p, max_tokens, timeout. Ignores pricing/spec fields
-    (context_length, max_output, pricing_per_million_tokens, etc.).
-
-    Returns:
-        Dict with shape {"providers": {...}, "default_provider": ..., "default_model": ...}
-        or empty dict if no providers.yml found.
-    """
-    runtime_fields = {
-        "base_url",
-        "api_key",
-        "default_model",
-        "models",
-        "api_temperature",
-        "api_top_p",
-        "max_tokens",
-        "timeout",
-    }
-    for p in _candidate_providers_yml_paths():
-        if not p.is_file():
-            continue
-        try:
-            with open(p, encoding="utf-8") as f:
-                data = yaml.safe_load(f)
-            if not data or not isinstance(data, dict):
-                continue
-            data = resolve_env_vars(data)
-            providers = data.get("providers") or {}
-            if not providers:
-                continue
-
-            cleaned_providers: dict[str, Any] = {}
-            for prov_id, prov_cfg in providers.items():
-                if not isinstance(prov_cfg, dict):
-                    continue
-                cleaned = {k: v for k, v in prov_cfg.items() if k in runtime_fields}
-                # Normalize models list: extract "name" from dict entries
-                models = cleaned.get("models")
-                if isinstance(models, list):
-                    model_names = []
-                    for m in models:
-                        if isinstance(m, dict):
-                            name = m.get("name")
-                            if name:
-                                model_names.append(name)
-                        elif isinstance(m, str):
-                            model_names.append(m)
-                    cleaned["models"] = model_names
-                if cleaned.get("base_url"):
-                    cleaned_providers[prov_id] = cleaned
-
-            if not cleaned_providers:
-                continue
-
-            # Determine default_provider / default_model from providers.yml
-            default_provider = data.get("default_provider")
-            default_model = data.get("default_model")
-            if not default_provider:
-                default_provider = next(iter(cleaned_providers.keys()))
-            if not default_model:
-                first_cfg = cleaned_providers[default_provider]
-                default_model = first_cfg.get("default_model")
-                if not default_model and first_cfg.get("models"):
-                    default_model = first_cfg["models"][0]
-
-            logger.debug(
-                f"Loaded provider runtime config from {p.resolve()} "
-                f"({len(cleaned_providers)} providers)"
-            )
-            return {
-                "providers": cleaned_providers,
-                "default_provider": default_provider,
-                "default_model": default_model,
-            }
-        except OSError as e:
-            logger.warning(f"Could not read providers.yml at {p}: {e}")
-        except (yaml.YAMLError, TypeError, ValueError) as e:
-            logger.warning(f"Invalid YAML in providers.yml at {p}: {e}")
-
-    return {}
+        # Per-leaf dotted key -> source label (file path or "env:<VAR>") naming
+        # the layer that supplied the final value. See config/merge.record_leaves.
+        self.provenance: dict[str, str] = provenance or {}
 
 
 class ConfigLoader:
@@ -363,6 +115,11 @@ class ConfigLoader:
             )
         base_data = cls._load_yaml(pkg_path)
 
+        # Provenance: record layers from lowest to highest precedence so the
+        # last label written for each leaf names the layer that actually won.
+        provenance: dict[str, str] = {}
+        record_leaves(base_data, f"package default ({pkg_path})", provenance)
+
         # 2. Merge user config over base (if user config is different from package)
         if user_path != pkg_path:
             logger.debug(f"Loading user config from: {user_path}")
@@ -373,14 +130,17 @@ class ConfigLoader:
 
         # 3. Merge providers.yml as fallback for provider runtime config.
         #    Priority: default_config.yml (user) > providers.yml > package built-in.
-        providers_yml_data = _load_providers_yml()
+        providers_yml_data, providers_yml_path = _load_providers_yml()
         if providers_yml_data:
             # providers.yml fills in missing providers but does NOT override
             # providers already defined in default_config.yml.
             data = _deep_merge(providers_yml_data, data)
+            record_leaves(providers_yml_data, f"providers.yml ({providers_yml_path})", provenance)
+        if user_path != pkg_path:
+            record_leaves(user_data, str(user_path), provenance)
 
         # 4. Apply environment variable overrides
-        data = _apply_env_overrides(data)
+        data = _apply_env_overrides(data, provenance)
 
         # 5. Validate required sections
         if "providers" not in data:
@@ -402,24 +162,28 @@ class ConfigLoader:
                 "  3. Run 'ask-llm config init' to generate a template"
             )
 
-        # Parse unified config (with defaults for missing sections)
-        unified_config = UnifiedConfig.model_validate(data)
-
-        # Convert providers to AppConfig format
+        # Convert providers to canonical (api_*) shape, then validate everything
+        # into a single UnifiedConfig in one pass.
         provider_data = cls._convert_providers_format(data)
+        merged_data = {**data, **provider_data}
 
         try:
-            app_config = cls._parse_app_config(provider_data)
+            unified_config = UnifiedConfig.model_validate(merged_data)
         except Exception as e:
             raise ValueError(
-                f"Invalid provider configuration: {e}\n"
+                f"Invalid configuration: {e}\n"
                 f"Please check providers.api_key (use ${{ENV_VAR}} for env vars) "
-                "and providers.api_base in your config"
+                "and providers.base_url in your config"
             ) from e
+
+        app_config = cls._app_config_from_unified(unified_config)
 
         logger.info(f"Configuration loaded successfully from: {user_path}")
         return LoadResult(
-            app_config=app_config, unified_config=unified_config, config_path=user_path
+            app_config=app_config,
+            unified_config=unified_config,
+            config_path=user_path,
+            provenance=provenance,
         )
 
     @classmethod
@@ -460,7 +224,7 @@ class ConfigLoader:
     @classmethod
     def _convert_providers_format(cls, data: dict[str, Any]) -> dict[str, Any]:
         """
-        Convert providers section to AppConfig format.
+        Convert providers section to canonical (api_*) shape.
 
         Supports models as list of dicts {"name": "..."} or list of strings.
         """
@@ -481,14 +245,10 @@ class ConfigLoader:
 
             base_url = provider_config.get("base_url", "")
             if not base_url:
-                try:
-                    from llm_engine.config_loader import load_providers_config
-
-                    providers_config = load_providers_config()
-                    if providers_config and name in providers_config.get("providers", {}):
-                        base_url = providers_config["providers"][name].get("base_url", "")
-                except Exception:
-                    pass
+                # Engine catalog fallback (via the engine facade seam, P4.6).
+                providers_config = load_engine_providers_config()
+                if name in providers_config.get("providers", {}):
+                    base_url = providers_config["providers"][name].get("base_url", "")
 
             if not base_url:
                 raise ValueError(
@@ -553,28 +313,16 @@ class ConfigLoader:
         }
 
     @classmethod
-    def _parse_app_config(cls, data: dict[str, Any]) -> AppConfig:
-        """Parse provider data into AppConfig."""
-        if "providers" not in data:
-            raise ValueError("Config must contain 'providers' key")
-
-        default_provider = data.get("default_provider")
+    def _app_config_from_unified(cls, unified_config: UnifiedConfig) -> AppConfig:
+        """Derive the provider-facing AppConfig view from a validated UnifiedConfig."""
+        providers = unified_config.providers
+        default_provider = unified_config.default_provider
         if not default_provider:
-            default_provider = next(iter(data["providers"].keys()))
+            default_provider = next(iter(providers.keys()))
             logger.warning(f"No default_provider specified, using: {default_provider}")
 
-        default_model = data.get("default_model")
-
-        providers = {}
-        for name, config_data in data["providers"].items():
-            config_data = {**config_data, "api_provider": name}
-            config_data.pop("api_model", None)
-            try:
-                providers[name] = ProviderConfig.model_validate(config_data)
-            except Exception as e:
-                logger.error(f"Failed to validate config for provider '{name}': {e}")
-                raise ValueError(f"Invalid config for provider '{name}': {e}") from e
-
         return AppConfig(
-            default_provider=default_provider, default_model=default_model, providers=providers
+            default_provider=default_provider,
+            default_model=unified_config.default_model,
+            providers=providers,
         )

@@ -104,6 +104,16 @@ class GlobalRateLimiter:
         """Return the configured burst size for provider/model."""
         return self._get_limit(provider, model)[1]
 
+    def acquire_timeout(self, provider: str, model: str | None = None) -> float:
+        """Return the configured acquire timeout (seconds) for provider/model.
+
+        Falls back to 60s when no ``RateLimitConfig`` is set, preserving prior
+        behavior. See ARCHITECTURE_REVIEW.md bug B9.
+        """
+        if self._config is not None:
+            return self._config.get_limits(provider, model).acquire_timeout_seconds
+        return 60.0
+
     def acquire(
         self,
         provider: str,

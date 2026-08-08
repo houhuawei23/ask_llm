@@ -5,7 +5,7 @@ from collections.abc import Iterator
 
 from loguru import logger
 
-from ask_llm.config.context import get_config
+from ask_llm.config.context import get_config_or_none
 from ask_llm.core.models import (
     ChatHistory,
     MessageRole,
@@ -14,6 +14,10 @@ from ask_llm.core.models import (
 )
 from ask_llm.core.protocols import LLMProviderProtocol, ReasoningChunk
 from ask_llm.utils.token_counter import TokenCounter
+
+# Built-in default matching default_config.yml so RequestProcessor works
+# without an active CLI config (e.g. library / embedded use).
+_DEFAULT_PROMPT_TEMPLATE = "Please process the following text:\n\n{content}"
 
 
 class RequestProcessor:
@@ -39,7 +43,10 @@ class RequestProcessor:
         """Get default prompt template from config."""
         if self._default_prompt_template is not None:
             return self._default_prompt_template
-        return get_config().unified_config.general.default_prompt_template
+        lr = get_config_or_none()
+        if lr is not None:
+            return lr.unified_config.general.default_prompt_template
+        return _DEFAULT_PROMPT_TEMPLATE
 
     def _format_prompt(self, content: str, prompt_template: str | None = None) -> str:
         """
@@ -250,14 +257,12 @@ class RequestProcessor:
         resolved_model = model or self.provider.default_model
 
         # Create metadata
-        metadata = RequestMetadata(
-            provider=self.provider.name,
+        metadata = RequestMetadata.from_execution(
+            provider_name=self.provider.name,
             model=resolved_model,
-            temperature=temperature
-            if temperature is not None
-            else self.provider.config.api_temperature,
-            input_words=input_stats["word_count"],
-            input_tokens=input_stats["token_count"],
+            temperature=temperature,
+            default_temperature=self.provider.config.api_temperature,
+            input_stats=input_stats,
             output_words=output_stats["word_count"],
             output_tokens=output_stats["token_count"],
             latency=latency,

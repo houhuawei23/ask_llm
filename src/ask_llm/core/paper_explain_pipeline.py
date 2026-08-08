@@ -11,6 +11,15 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 _DEFAULTS_FILENAME = "paper-explain-pipeline.defaults.yml"
 
+# Built-in default matching default_config.yml so @-path resolution works
+# without an active CLI config (e.g. library / embedded use).
+_DEFAULT_PROJECT_ROOT_MARKERS = (
+    "pyproject.toml",
+    "setup.py",
+    ".git",
+    "default_config.yml",
+)
+
 
 def _defaults_yaml_path() -> Path:
     """
@@ -393,10 +402,15 @@ def resolve_pipeline_yaml_path(pipeline_config: str, project_root: Path | None =
         root = project_root
         if root is None:
             try:
-                from ask_llm.config.context import get_config
+                from ask_llm.config.context import get_config_or_none
 
                 cwd = Path.cwd()
-                markers = get_config().unified_config.project_root_markers
+                lr = get_config_or_none()
+                markers = (
+                    lr.unified_config.project_root_markers
+                    if lr is not None
+                    else _DEFAULT_PROJECT_ROOT_MARKERS
+                )
                 for marker in markers:
                     for parent in [cwd, *list(cwd.parents)]:
                         if (parent / marker).exists():

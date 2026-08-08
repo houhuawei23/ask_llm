@@ -12,10 +12,9 @@ from ask_llm.core.batch_models import (
     TaskStatus,
     sort_batch_tasks_by_estimated_input,
 )
-from ask_llm.core.batch_processor import BatchProcessor, GlobalBatchProcessor
+from ask_llm.core.batch_processor import GlobalBatchProcessor
 
 __all__ = [
-    "BatchProcessor",
     "BatchResult",
     "BatchStatistics",
     "BatchTask",

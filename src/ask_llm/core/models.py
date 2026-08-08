@@ -4,7 +4,8 @@ from datetime import datetime
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from loguru import logger
+from pydantic import BaseModel, Field, SecretStr, field_validator
 
 
 class MessageRole(str, Enum):
@@ -94,7 +95,10 @@ class ProviderConfig(BaseModel):
     """Configuration for an LLM provider."""
 
     api_provider: str = Field(..., description="Provider identifier")
-    api_key: str = Field(default="", description="API key for authentication")
+    api_key: SecretStr = Field(
+        default=SecretStr(""),
+        description="API key for authentication (SecretStr: masked in repr/dumps)",
+    )
     api_base: str = Field(..., description="API base URL")
     models: list[str] = Field(default_factory=list, description="Available models")
     api_temperature: float = Field(default=0.7, ge=0.0, le=2.0, description="Sampling temperature")
@@ -106,6 +110,44 @@ class ProviderConfig(BaseModel):
     fallback_to: list[FallbackConfig] = Field(
         default_factory=list, description="Ordered fallback provider/model chain"
     )
+
+    @field_validator("api_key")
+    @classmethod
+    def validate_api_key(cls, v: SecretStr, info) -> SecretStr:
+        """Validate API key: warn loudly if empty or carries an unresolved placeholder.
+
+        ``resolve_env_vars`` leaves a literal ``${VAR}`` in place when the referenced
+        environment variable is unset (it only logs at DEBUG). Such a placeholder
+        must never ship as a real key. We cannot hard-reject at load time because
+        config tooling (``config show``/``config test``) and tests legitimately load
+        ``providers.yml`` with env vars unset; instead we warn loudly here so the
+        problem is never silent, and the run-boundary gate
+        (``ask_llm.utils.api_key_gate``) hard-blocks before any network call.
+        """
+        provider_name = info.data.get("api_provider", "unknown")
+        key = v.get_secret_value()
+        if "${" in key and "}" in key:
+            logger.warning(
+                f"Provider '{provider_name}' API key has unresolved ${{...}} "
+                f"placeholder. Set ASK_LLM_{provider_name.upper()}_API_KEY "
+                f"(or the referenced variable) before running; the API-key gate "
+                f"will block calls until it resolves."
+            )
+        elif not key.strip():
+            logger.warning(
+                f"Provider '{provider_name}' has empty API key. "
+                f"Set ASK_LLM_{provider_name.upper()}_API_KEY environment variable "
+                f"or configure in default_config.yml"
+            )
+        return v
+
+    def get_api_key(self) -> str:
+        """Return the plain-text API key for provider client construction.
+
+        Prefer attribute access (``SecretStr``) everywhere else so keys stay
+        masked in logs, reprs, and ``model_dump(mode='json')`` output.
+        """
+        return self.api_key.get_secret_value()
 
     @field_validator("api_base")
     @classmethod
@@ -152,6 +194,38 @@ class RequestMetadata(BaseModel):
     output_tokens: int = Field(default=0, description="Output token count")
     latency: float = Field(..., description="Request latency in seconds")
     timestamp: datetime = Field(default_factory=datetime.now)
+
+    @classmethod
+    def from_execution(
+        cls,
+        *,
+        provider_name: str,
+        model: str,
+        temperature: float | None,
+        default_temperature: float,
+        input_stats: dict[str, int],
+        output_words: int,
+        output_tokens: int,
+        latency: float,
+    ) -> "RequestMetadata":
+        """Build metadata for a completed request from its execution stats.
+
+        Centralizes the temperature resolution (per-request override falling
+        back to the provider default) that was previously triplicated across
+        ``batch_processor`` and ``processor`` — the same code path that caused
+        the v2.15.1 adapter dict-vs-object crash (B8 root cause;
+        ARCHITECTURE_REVIEW.md §4.1.2 / P1.6).
+        """
+        return cls(
+            provider=provider_name,
+            model=model,
+            temperature=temperature if temperature is not None else default_temperature,
+            input_words=input_stats["word_count"],
+            input_tokens=input_stats["token_count"],
+            output_words=output_words,
+            output_tokens=output_tokens,
+            latency=latency,
+        )
 
     def format(self) -> str:
         """Format metadata as a string."""

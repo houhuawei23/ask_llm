@@ -9,7 +9,7 @@ from pathlib import Path
 import yaml
 from loguru import logger
 
-from ask_llm.config.loader import resolve_env_vars
+from ask_llm.config.env import resolve_env_vars
 from ask_llm.utils.pricing import _candidate_providers_yml_paths
 
 # DeepSeek ``/chat/completions`` per-model ``max_tokens`` caps (HTTP API), applied after

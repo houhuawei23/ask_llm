@@ -1,5 +1,756 @@
 # Changelog
 
+## 2.19.0 (2026-07-16)
+
+P4.5 — `TranslationService` split into per-file collaborators; cross-thread mutable accumulator removed. **P4 (服务层/引擎/导出器收尾) complete.**
+
+### Added
+
+- **`services/text_file_translator.py`** — `TextFileTranslator` owns the text/markdown per-file flow (prepare → split → tasks → checkpointed translate → export). `TextTranslationJob` lives here (alias `_TextTranslationJob` kept on the service for compatibility).
+- **`services/notebook_file_translator.py`** — `NotebookFileTranslator` owns the single-notebook flow.
+- **`services/translation_options.py`** — shared value types (`TranslationOptions`, `TranslationJobResult`, `TranslationSessionResult`). `TranslationJobResult.results` (new field) carries per-chunk `BatchResult`s.
+- RUF001/RUF002 exemptions for the two new modules (Chinese user-facing strings).
+
+### Changed
+
+- **`TranslationService` 824 → 375 LOC**, now an aggregator: resolves inputs, delegates per-file work to the collaborators, and aggregates session results. Presentation helpers, `_accumulate`, and `export_report` behavior preserved byte-for-byte.
+- **Cross-thread mutable accumulator removed**: per-chunk results travel inside `TranslationJobResult.results` and are folded into `self._batch_results` only on the main thread (`_accumulate`). Previously worker threads called `list.extend` on shared state (GIL-atomic but semantically racy ordering).
+- Compat delegates kept: `service._prepare_text_file`, `service._translate_and_export_text_file`, `_TextTranslationJob`.
+- Test patches retargeted to the collaborator modules.
+
+### Tests
+
+- Full suite: 451 passed, 1 skipped.
+
+### Version
+
+- Bumped to 2.19.0 in `pyproject.toml`, `src/ask_llm/__init__.py`, `README.md`.
+
+## 2.18.9 (2026-07-16)
+
+P4.4 — unified CLI bootstrap (review §P4 item 4, §4.3.2 duplicated pricing block).
+
+### Added
+
+- **`config/cli_session.load_pricing_with_hint()`** — pricing load + standard CLI hint, replacing the byte-identical 6-line pricing blocks in the batch/trans/paper commands.
+- **`config/cli_session.bootstrap_command()`** — one-call command preamble composing `load_cli_session` + `load_pricing_with_hint` + `resolve_provider_and_model_or_exit`; returns `(load_result, config_manager, pricing_map, pricing_source, provider, model)`.
+
+### Changed
+
+- `trans` and `paper` commands now use `bootstrap_command()`; `batch` uses `load_pricing_with_hint()` (its interactive model selection doesn't fit the standard provider/model resolution).
+
+### Tests
+
+- Full suite: 451 passed, 1 skipped.
+
+### Version
+
+- Bumped to 2.18.9 in `pyproject.toml`, `src/ask_llm/__init__.py`, `README.md`.
+
+## 2.18.8 (2026-07-16)
+
+P4.2 — `PaperService` no longer exits the process; statuses replace `typer.Exit` (review §P4 item 2).
+
+### Changed
+
+- **`PaperSessionResult.status`** (new field): `"ok" | "dry_run" | "nothing_to_do" | "failed"` (+ `error`). `PaperService.explain_paper` returns it instead of raising `typer.Exit` on dry-run completion, nothing-to-do, and job failures. The service layer is now typer-free (only docstring mentions remain).
+- **`cli/commands/paper.py`** translates statuses to exit codes (`failed` → 1, `dry_run`/`nothing_to_do` → 0).
+- **Latent bug fixed**: `typer.Exit` subclasses `RuntimeError` (via click), so the command's `except RuntimeError` handler was swallowing `typer.Exit(0)` and misreporting it as "API error: 0". An `except typer.Exit: raise` guard now precedes it.
+
+### Tests
+
+- Full suite: 451 passed, 1 skipped. Smoke-tested `paper --dry-run` exit code (0, no spurious error output).
+
+### Version
+
+- Bumped to 2.18.8 in `pyproject.toml`, `src/ask_llm/__init__.py`, `README.md`.
+
+## 2.18.7 (2026-07-16)
+
+P4.1 — shared checkpoint lifecycle in `core/command_runner.py`; batch and translation services migrated; paper retry hardcode removed (review §P4 item 1).
+
+### Added
+
+- **New `core/command_runner.py`** — `run_with_checkpoint(...)`: the single canonical implementation of the create → optional resume load → filter completed → run → merge → mark failed → save → unlink-on-full-success flow, previously copied (with drift) into `batch_service` and `translation_service`. Returns a `CheckpointRunOutcome` (merged results, this-run results, failures, `interrupted` / `all_previously_completed` / `checkpoint_deleted` flags, processor handle).
+- **`PaperConfig.retries: int = 3`** (new config field, in `default_config.yml` too) — the paper service's hardcoded `max_retries=3` is gone.
+
+### Changed
+
+- **`batch_service.run_batch_from_config`** and **`translation_service._translate_and_export_text_file`** now delegate to `run_with_checkpoint` (~70 LOC of duplicated lifecycle deleted across both).
+- **Drift resolution (canonical choices):**
+  - Early return with everything already completed: checkpoint is **kept** (batch behavior); translation previously unlinked it.
+  - Unlink happens only on a non-interrupted run with zero failures (both services already agreed).
+  - `interrupted` detection uses `getattr(processor, "last_metrics", None)` (fixes a latent AttributeError with light processor fakes).
+- Test patches retargeted from `*_service.run_global_batch_tasks` to `core.command_runner.run_global_batch_tasks`.
+
+### Tests
+
+- Full suite: 451 passed, 1 skipped.
+
+### Version
+
+- Bumped to 2.18.7 in `pyproject.toml`, `src/ask_llm/__init__.py`, `README.md`.
+
+## 2.18.6 (2026-07-16)
+
+P4.6 follow-up — naming corrections from the review (§P4 item 6): `provider_router` → `fallback_chain`, `provider_specs` → `model_limits`.
+
+### Changed
+
+- `utils/provider_router.py` renamed to `utils/fallback_chain.py` (it builds fallback chains; it never routed anything).
+- `utils/provider_specs.py` renamed to `utils/model_limits.py` (it loads per-model context/max_output limits).
+- Imports updated in `batch_service`, `translation_service`, `paper_service`; `tests/unit/test_provider_specs.py` renamed to `test_model_limits.py`.
+
+### Tests
+
+- Full suite: 451 passed, 1 skipped.
+
+### Version
+
+- Bumped to 2.18.6 in `pyproject.toml`, `src/ask_llm/__init__.py`, `README.md`.
+
+## 2.18.5 (2026-07-16)
+
+P4.7 — exporter unification (review §P4 item 7).
+
+### Added
+
+- **`BatchResult.project()`** (`core/batch_models.py`) — the single canonical dict projection of a result; `BatchResultExporter._prepare_data` now builds on it instead of hand-assembling per-result dicts.
+- **New `core/response_parser.py`** — canonical home of `unwrap_translation_payload` (+ its LaTeX-escape JSON fixer), moved out of `translation_exporter` so any consumer shares one implementation. The old static method remains as a thin shim.
+- **New `utils/export_formats.py`** — single extension→format mapping (`detect_export_format`); batch and translation exporters both use it (previously each carried its own copy with drifted defaults).
+
+### Changed
+
+- `TranslationExporter._export_json` now writes via streaming `json.JSONEncoder().iterencode` (no giant in-memory string), matching the batch exporter.
+
+### Tests
+
+- Full suite: 451 passed, 1 skipped.
+
+### Version
+
+- Bumped to 2.18.5 in `pyproject.toml`, `src/ask_llm/__init__.py`, `README.md`.
+
+## 2.18.4 (2026-07-16)
+
+P4.6 — `EngineAdapter` facade: `llm_engine` is now a single-module private dependency (review §P4 item 6).
+
+### Added
+
+- **New `utils/engine_facade.py`** — the only module importing `llm_engine` (grep invariant verified: `import llm_engine` / `from llm_engine` appears nowhere else in `src/ask_llm`). Exports:
+  - `EngineConfigView` (moved from `provider_cache`; re-exported there for backward compatibility) — unwraps the `SecretStr` key exactly once at the HTTP-client boundary.
+  - `create_engine_adapter(config, default_model=None)` — fresh adapter creation; accepts `ProviderConfig` or a pre-built view.
+  - `load_engine_providers_config()` — the engine's providers.yml catalog (base_url fallback), returning `{}` on any failure instead of the old bare `except Exception: pass` in the loader's hot path.
+
+### Changed
+
+- All six direct `create_provider_adapter` call sites (`cli/commands/{ask,chat,config,format_cmd}.py`, `utils/interactive_config.py`, `utils/provider_cache.py`) now go through the facade.
+- `cli/commands/{paper,trans}.py` fail-fast engine presence checks import the facade instead of `llm_engine` directly.
+- `config/loader.py` `_convert_providers_format` uses `load_engine_providers_config()` (no more function-local engine import with a silent bare except, review §4.2.4).
+- Tests patching `provider_cache.create_provider_adapter` retargeted to `create_engine_adapter`.
+
+### Tests
+
+- Full suite: 451 passed, 1 skipped.
+
+### Version
+
+- Bumped to 2.18.4 in `pyproject.toml`, `src/ask_llm/__init__.py`, `README.md`.
+
+## 2.18.3 (2026-07-16)
+
+P4.10 — file I/O decoupled from progress rendering (review §P4 item 10).
+
+### Added
+
+- **`FileHandler.read_chunked(path, on_chunk=None)`** and **`FileHandler.write_chunked(path, content, on_chunk=None)`** — progress-free I/O cores taking an `on_chunk(bytes)` callback. tqdm bars (`_read_with_progress` / `_write_with_progress`) are now just one consumer of that callback (`pbar.update`); library/embedded callers can meter progress themselves or ignore it. Byte-accurate accounting (B10) preserved: character-based slicing, byte-based reporting.
+- `tests/unit/test_file_handler.py` — 4 tests: byte sums match payload, callbacks optional.
+
+### Tests
+
+- Full suite: 451 passed, 1 skipped (+4 new).
+
+### Version
+
+- Bumped to 2.18.3 in `pyproject.toml`, `src/ask_llm/__init__.py`, `README.md`.
+
+## 2.18.2 (2026-07-16)
+
+P4.3 — path resolution moved out of the CLI layer (review §P4 item 3).
+
+### Changed
+
+- **New `utils/path_resolver.py`** — `_resolve_trans_input_paths` and `_is_directory_output` now live here. `TranslationService` imports them from `utils` instead of `cli.common` (a service→CLI layer violation). `cli/common.py` re-exports both for backward compatibility (`ask_llm.cli` public surface unchanged).
+
+### Tests
+
+- Full suite: 447 passed, 1 skipped.
+
+### Version
+
+- Bumped to 2.18.2 in `pyproject.toml`, `src/ask_llm/__init__.py`, `README.md`.
+
+## 2.18.1 (2026-07-16)
+
+P4.9 — console singleton cleanup + non-destructive embedded setup (review §P4 item 9).
+
+### Changed
+
+- **`Console` is a plain class now** — the `__new__`/`_initialized` singleton dance is deleted; the module-level `console = Console()` remains the shared instance (it always was the effective one).
+- **`Console.setup(append=False)`** — new `append` parameter. With `append=True` (embedded/library use), existing loguru sinks and the global `extra` config are **kept** (no `logger.remove()`, no `logger.configure(extra=...)`) so the host application's logging is not wiped. Append mode also uses a component-free log format (`_LOGURU_PLAIN_FORMAT`) because host records may not carry `extra["component"]`. Default `append=False` keeps CLI behavior unchanged (reset sinks, set `ask-llm` component).
+
+### Tests
+
+- Full suite: 447 passed, 1 skipped. Smoke-tested append mode: host sink preserved, ask-llm sink added alongside.
+
+### Version
+
+- Bumped to 2.18.1 in `pyproject.toml`, `src/ask_llm/__init__.py`, `README.md`.
+
+## 2.18.0 (2026-07-16)
+
+P4 start — unified error-keyword table (review §P4 item 8). Minor version bump per the review's release plan (P1–P3 each shipped a minor; P4 continues).
+
+### Added
+
+- **New `core/error_keywords.py`** — single canonical rule table `ERROR_KEYWORD_RULES: (keyword → ErrorCategory, transient)`. `ErrorCategory` now lives here (re-exported from `telemetry` for backward compatibility). Rule order preserves the historical classification precedence (auth → rate limit → timeout → content filter → model error → network → validation; transient-but-uncategorized server errors last).
+- `tests/unit/test_error_keywords.py` — 7 tests: precedence, per-category classification, UNKNOWN fallback, retry-table derivation, historical-keyword parity, terminal-category invariant.
+
+### Changed
+
+- **`telemetry.classify_error`** delegates to the rule table (`classify_error_message`); the six hand-maintained keyword tuples are deleted.
+- **`retry_policy.DEFAULT_TRANSIENT_KEYWORDS`** is derived from the table (`TRANSIENT_KEYWORDS`). It is a superset of the old hardcoded list: rate-limit variants (`rate_limit`, `too many requests`, `throttled`, `quota exceeded`, `insufficient_quota`), timeout variants (`timed out`, `time out`, `deadline exceeded`), and network variants (`connect`, `dns`, `unreachable`, `refused`) are now also retryable. TLS/proxy signatures (`ssl`, `certificate`, `proxy`) stay non-transient (usually misconfiguration). All pre-existing transient keywords remain retryable (parity test).
+
+### Tests
+
+- Full suite: 440 passed, 1 skipped.
+
+### Version
+
+- Bumped to 2.18.0 in `pyproject.toml`, `src/ask_llm/__init__.py`, `README.md`.
+
+## 2.17.5 (2026-07-16)
+
+P3.6 + P3.7 — prompt text externalized; chunk-id convention unified and tested. **P3 (Markdown 单一管线) complete.**
+
+### Added
+
+- **New prompt file `prompts/md-heading-context-batch.md`** — canonical home of the heading context-batch instruction (review §4.4.6 "提示词字符串混进类体"). `HeadingFormatter.context_batch_instruction()` loads it from the package `prompts/` tree (cached); the embedded string remains only as a defensive fallback. Trailing blank line preserved for byte-identical prompts.
+- **Chunk-id convention documented on `TextChunk`** (P3.7): every producer — `BinarySplitter`, `plain_text_chunks_by_tokens`, `rebalance_translation_chunks` — emits dense zero-based ids in document order (`0..n-1`); rebalancing may renumber but only to another dense zero-based sequence, so `chunk_id` always indexes the list it came from.
+- `TestChunkIdConvention` tests for both producers.
+
+### Tests
+
+- Full suite: 440 passed, 1 skipped (+2 new).
+
+### Version
+
+- Bumped to 2.17.5 in `pyproject.toml`, `src/ask_llm/__init__.py`, `README.md`.
+
+## 2.17.4 (2026-07-16)
+
+P3.5 — `format_service` branch merge + title resume wired end-to-end (review §4.4.6, item 5).
+
+### Added
+
+- **`format_service.format_one(file, format_type=..., **opts)`** — single per-file formatting dispatcher. The title/body branch now lives here exactly once; `run_sequential_format` and `run_parallel_format` both call it (previously the same if/else was copied into both runners, review §4.4.6).
+- **Title checkpoint resume in `FormatService.resume_from_checkpoint`** — previously raised `ValueError("标题格式化暂不支持 checkpoint 恢复")`. Now it resumes failed heading batches via `HeadingFormatter.resume_from_checkpoint` (P3.3), re-extracts headings from the source file, merges with `HeadingApplier`, and writes output through the same path as body resume. A heading-count mismatch (source file changed since the checkpoint) raises a clear `RuntimeError` advising a fresh run.
+
+### Changed
+
+- Replaced the outdated `test_resume_title_checkpoint_raises` with `test_resume_title_checkpoint_supported`.
+- `run_sequential_format` / `run_parallel_format` lost ~30 LOC of duplicated branching each.
+
+### Tests
+
+- Full suite: 438 passed, 1 skipped.
+
+### Version
+
+- Bumped to 2.17.4 in `pyproject.toml`, `src/ask_llm/__init__.py`, `README.md`.
+
+## 2.17.3 (2026-07-16)
+
+P3.4 — position-aware reassembly for body formatting (review §4.4.4, item 4).
+
+### Added
+
+- **`BodyFormatter._join_chunks_position_aware(parts, spans, original_text, types)`** — consumes the splitter's `TextChunk.start_pos/end_pos` bookkeeping (previously dead weight on the body path) and restores the **exact original inter-chunk whitespace** instead of forcing `\n\n` everywhere. Between two hard-split chunks (`character_split` / `hard_token_split` — contiguous artificial cuts) an empty separator rejoins verbatim with no newline stripping, so split list items / compact tables no longer gain spurious blank lines. Returns `None` when spans don't describe a clean ordered partition (callers fall back to the legacy `_join_chunks`).
+- 5 new tests: unit-level join, unclean-span fallback, empty-separator rule, hard-split verbatim rejoin, and an end-to-end `format_body` run asserting no forced blank lines.
+
+### Changed
+
+- `BodyFormatter.format_body` now tries the position-aware join first, falling back to `_join_chunks` (unchanged, still used by `resume_from_checkpoint`, whose checkpoint-rebuilt chunks lack positions).
+
+### Tests
+
+- Full suite: 438 passed, 1 skipped (+5 new).
+
+### Version
+
+- Bumped to 2.17.3 in `pyproject.toml`, `src/ask_llm/__init__.py`, `README.md`.
+
+## 2.17.2 (2026-07-16)
+
+P3.3 — `ChunkedLLMJob` base class; both formatters demoted to thin subclasses; **title checkpoints can now be resumed** (review §4.4.5, item 3).
+
+### Added
+
+- **New `core/chunked_llm_job.py`** — shared orchestration skeleton for chunked LLM jobs: config-fallback helper (`_pick`), prompt resolution (`_resolve_template` + `_load_prompt_from_file` with `@` support), bounded-runner wiring (`_run_units`), checkpoint save (`_save_checkpoint`), and the resume runner (`_retry_failed_units`).
+- **`HeadingFormatter.resume_from_checkpoint`** (new) — symmetric with the body side: loads a title checkpoint, re-processes only failed batches, merges by heading ordinal, and re-saves if still failing. Ends the asymmetry where `HeadingFormatter` wrote checkpoints that could never be resumed (review §4.4.6).
+- `TestHeadingResume` regression test.
+
+### Changed
+
+- **`BodyFormatter` and `HeadingFormatter` now extend `ChunkedLLMJob`.** Duplicated init/config-fallback blocks, prompt loading, `run_bounded_with_retries` wiring, and checkpoint construction/saving are deleted from both; only work-unit building, per-unit LLM calls, and result assembly remain in the subclasses. Behavior unchanged on the forward path.
+- `md_body_formatter.py` 450 → 412 LOC; shared skeleton extracted to 182 LOC base.
+
+### Tests
+
+- Full suite: 433 passed, 1 skipped (+1 new).
+
+### Version
+
+- Bumped to 2.17.2 in `pyproject.toml`, `src/ask_llm/__init__.py`, `README.md`.
+
+## 2.17.1 (2026-07-16)
+
+P3.2 — budget-pluggable `BinarySplitter`; dead char-based splitters deleted (review §4.4.2, item 2).
+
+### Added
+
+- **New `core/binary_splitter.py`** — the single split algorithm (heading/paragraph binary strategy, fence-aware, display-math merge) now takes a `BudgetPolicy`. `TokenBudget(model, max_tokens, prompt_overhead=0)` budgets **prompt + content**: per-chunk content cap is `max_tokens - prompt_overhead` (review §4.4.4: large template + near-full context could overflow with a content-only budget).
+- `MarkdownTokenSplitter(model, max_chunk_tokens, prompt_overhead_tokens=0)` — new optional overhead parameter; the class is now a thin compat wrapper delegating to `BinarySplitter(TokenBudget(...))`. Existing two-arg callers unchanged.
+- `tests/unit/test_binary_splitter.py` — 12 tests: overhead budget math, fence integrity (intact when it fits, hard-split as documented last resort), budget compliance of every chunk, wrapper/impl parity.
+
+### Removed
+
+- **Char-based splitters (dead in production)**: `MarkdownSplitter`, `PlainTextSplitter`, and `TextSplitter.create_splitter` from `core/text_splitter.py` (629 → 71 LOC; kept `TextChunk` + `TextSplitter` base with `detect_file_type`). Production used only the token splitter; the char classes lived only in tests and re-exports.
+- `core/__init__.py` no longer exports the deleted classes; exports `BinarySplitter`, `BudgetPolicy`, `TokenBudget` instead.
+
+### Changed
+
+- `tests/unit/test_text_splitter.py` rewritten to cover the remaining primitives (`TextChunk`, `detect_file_type`).
+- `tests/integration/test_trans.py` splitting flows migrated from `create_splitter` (char budget) to `MarkdownTokenSplitter` (token budget).
+
+### Metrics
+
+- Splitter-pair LOC: ~935 (two ~80%-duplicate implementations) → 564 total, of which the algorithm exists exactly once (`binary_splitter.py`); `text_splitter.py` and `markdown_token_splitter.py` are now primitives + a 64-line compat wrapper.
+
+### Tests
+
+- Full suite: 432 passed, 1 skipped (+13 new, −12 removed).
+
+### Version
+
+- Bumped to 2.17.1 in `pyproject.toml`, `src/ask_llm/__init__.py`, `README.md`.
+
+## 2.17.0 (2026-07-16)
+
+P3 start — single Markdown structure parser (review §4.4, item 1). Minor version bump per the review's release plan (P1–P3 each ship a minor).
+
+### Added
+
+- **New `core/markdown_structure.py`** — `MarkdownStructure.parse(text)` produces, in one pass: code-fence ranges (unclosed fence extends to EOF), YAML frontmatter range (only a `---` block at offset 0), and heading spans with levels. Headings inside fences **or frontmatter** are never real headings. Canonical `HEADING_PATTERN` / `CODE_FENCE_PATTERN` now live here (previously defined identically in three modules).
+- **Frontmatter protection (new)** — a `# foo` inside YAML frontmatter is no longer treated as a heading by the heading formatter or the token splitter.
+- `tests/unit/test_markdown_structure.py` — 13 tests: fence pairing/unclosed/tildes, frontmatter detection/exclusion, heading levels/positions, `is_protected`, and consumer-equivalence checks.
+
+### Changed
+
+- **`HeadingExtractor`** (`md_heading_formatter.py`) delegates fence-range and heading scanning to `MarkdownStructure`; `_find_code_block_ranges` kept as a thin compatibility shim. `HeadingMatch` output unchanged.
+- **`MarkdownTokenSplitter`** (`markdown_token_splitter.py`) consumes `MarkdownStructure` in `split()`; `_find_code_fence_ranges` kept as a thin compatibility shim. Split algorithm unchanged.
+- Both modules re-export `HEADING_PATTERN` / `CODE_FENCE_PATTERN` from the canonical module for backward compatibility.
+
+### Tests
+
+- Full suite: 431 passed, 1 skipped (+13 new).
+
+### Version
+
+- Bumped to 2.17.0 in `pyproject.toml`, `src/ask_llm/__init__.py`, `README.md`.
+
+## 2.16.17 (2026-07-16)
+
+P2 final — config provenance. Every config leaf now records which layer supplied its final value; `ask-llm config show --debug-config` reports it per key (review §4.2.4 "provenance 误导").
+
+### Added
+
+- **`LoadResult.provenance: dict[str, str]`** — dotted key path → source label (`package default (<path>)`, `providers.yml (<path>)`, `<user config path>`, or `env:<VAR_NAME>`). Layers are recorded lowest-to-highest precedence, so each label names the layer that actually won the key. Key paths use raw config-file naming (e.g. `providers.deepseek.base_url`, before the `api_*` conversion).
+- **`config/merge.record_leaves`** — provenance recording helper.
+- **`--debug-config` per-key value-source report**, grouped by source with key counts.
+- `_load_providers_yml` now also returns the source path it loaded from.
+- New test `test_provenance_records_winning_layer`.
+
+### Changed
+
+- `_apply_env_overrides(data, provenance=None)` records applied overrides as `env:<VAR_NAME>` entries.
+
+### Tests
+
+- Full suite: 418 passed, 1 skipped. CLI smoke-tested `config show --debug-config` with an env override.
+
+### Version
+
+- Bumped to 2.16.17 in `pyproject.toml`, `src/ask_llm/__init__.py`, `README.md`.
+
+## 2.16.16 (2026-07-16)
+
+P2 structural — `config/loader.py` split by responsibility (review §4.2.4). No behavior change.
+
+### Changed
+
+- **`config/loader.py` 613 → 311 LOC**, now only orchestration: path resolution, YAML I/O, layer merge order, provider format conversion, single-pass validation.
+- **New `config/env.py`** (177 LOC) — `resolve_env_vars` (`${VAR}` expansion), `ENV_TO_CONFIG` mapping, `_apply_env_overrides`, `_parse_env_value`, and the P2.7 conflicting-env warnings.
+- **New `config/merge.py`** (45 LOC) — `_deep_merge` layered merge.
+- **New `config/providers_catalog.py`** (120 LOC) — `providers.yml` candidate paths + runtime-field extraction (`_load_providers_yml`).
+- `utils/pricing.py` and `utils/provider_specs.py` now import `resolve_env_vars` from `ask_llm.config.env` (its real home) instead of `ask_llm.config.loader`.
+- Tests that patched `ask_llm.config.loader.logger` for env-conflict warnings now patch `ask_llm.config.env.logger`.
+
+### Tests
+
+- Full suite: 417 passed, 1 skipped.
+
+### Version
+
+- Bumped to 2.16.16 in `pyproject.toml`, `src/ask_llm/__init__.py`, `README.md`.
+
+## 2.16.15 (2026-07-16)
+
+P2 security — API keys are now `SecretStr` at rest. Keys stay masked in `repr()`, logs, and `model_dump(mode='json')`; the plain value is unwrapped exactly once at the llm_engine HTTP-client boundary.
+
+### Security
+
+- **`ProviderConfig.api_key` is now `pydantic.SecretStr`** (default `SecretStr("")`). Plain strings are coerced automatically, so YAML loading, CLI overrides, and existing constructors keep working. The unresolved-placeholder/empty-key load-time warnings are unchanged (the validator unwraps the secret for inspection and no longer interpolates the raw value into the warning text).
+
+### Added
+
+- **`ProviderConfig.get_api_key() -> str`** — the one sanctioned way to get the plain key (for provider client construction).
+- **`utils.provider_cache.EngineConfigView`** — plain-attribute view handed to `llm_engine.create_provider_adapter`, which reads `config.api_key` as a plain string via `getattr`. Unwraps the key once and re-masks it in `__repr__`. All six `create_provider_adapter` call sites (`cli/commands/{ask,chat,config,format_cmd}.py`, `utils/interactive_config.py`, and the adapter cache itself) now pass this view instead of the raw `ProviderConfig`.
+- **`api_key_is_missing_or_unresolved` accepts `str | SecretStr | None`** so all existing gate call sites work unchanged.
+- New test `test_api_key_masked_in_repr_and_json_dump`.
+
+### Changed
+
+- `cli/commands/config.py` API-key-not-configured check now uses `api_key_is_missing_or_unresolved` (the old `pc.api_key == "your-api-key-here"` string comparison does not work against `SecretStr`).
+- Tests comparing `config.api_key` to plain strings now compare `get_secret_value()`.
+
+### Tests
+
+- Full suite: 417 passed, 1 skipped. Smoke-tested the real load path: `SecretStr` at rest, masked repr, plain `str` key at the engine boundary.
+
+### Version
+
+- Bumped to 2.16.15 in `pyproject.toml`, `src/ask_llm/__init__.py`, `README.md`.
+
+## 2.16.14 (2026-07-16)
+
+P2 structural — single configuration object. `UnifiedConfig` now absorbs the provider section; `AppConfig` is derived from it instead of being validated separately from the same YAML dict.
+
+### Changed
+
+- **`UnifiedConfig` gains `default_provider`, `default_model`, and `providers: dict[str, ProviderConfig]`** (`config/unified_config.py`). It is now the single configuration object for the whole application; the provider-facing `AppConfig` is a derived view sharing the same validated `ProviderConfig` values.
+- **`ConfigLoader.load` validates once.** Previously the same raw dict was validated twice — `UnifiedConfig.model_validate(data)` (silently ignoring the provider keys) and `_parse_app_config(_convert_providers_format(data))`. Now `_convert_providers_format` output is merged into the data and a single `UnifiedConfig.model_validate` pass validates everything; `AppConfig` is built by the new `_app_config_from_unified` helper (which keeps the "no default_provider → first provider + warning" fallback). The old `_parse_app_config` double-validation path is removed.
+- Error message on validation failure changed from "Invalid provider configuration" to "Invalid configuration" (it now covers all sections, not just providers).
+
+### Tests
+
+- Full suite: 416 passed, 1 skipped. Smoke-tested the real load path (`ConfigLoader.load()` with package default + `providers.yml`): app and unified views agree on default provider/model.
+
+### Version
+
+- Bumped to 2.16.14 in `pyproject.toml`, `src/ask_llm/__init__.py`, `README.md`.
+
+## 2.16.13 (2026-07-16)
+
+P2 structural — first step of the config-object merge: `ConfigManager` now carries the unified config alongside `AppConfig`, fixing a production-crashing latent bug (B12).
+
+### Fixed
+
+- **B12 — `ConfigManager.unified_config` did not exist (AttributeError).** `core/global_batch_runner.py` and `utils/notebook_translator.py` read `config_manager.unified_config.rate_limits` on the trans/paper/batch hot path, but `ConfigManager` never defined the attribute — any real (non-mocked) run would crash with `AttributeError: 'ConfigManager' object has no attribute 'unified_config'`. Tests passed only because they used `MagicMock` or monkeypatched the attribute.
+
+### Changed
+
+- **`ConfigManager(app_config, unified_config=None)`** — new optional constructor arg and read-only `unified_config` property. Both production construction sites (`config/cli_session.py`, `cli/commands/format_cmd.py`) now pass `load_result.unified_config`, so rate limits actually reach `GlobalBatchProcessor`. Single-arg constructions (tests, tooling) remain valid.
+
+### Tests
+
+- New `test_unified_config_wiring` regression test in `tests/unit/test_config.py`. Full suite: 416 passed, 1 skipped.
+
+### Version
+
+- Bumped to 2.16.13 in `pyproject.toml`, `src/ask_llm/__init__.py`, `README.md`.
+
+## 2.16.12 (2026-07-15)
+
+P2 continuation — complete `get_config()` de-globalization. All remaining raising `get_config()` call sites now fall back to built-in defaults, so the core library can be used without an active CLI config. Also fixed a latent B10 infinite-loop bug exposed by the fallback tests.
+
+### Changed
+
+- **P2 — remaining `get_config()` sites migrated to `get_config_or_none()` with defaults.** Replaced raising calls in:
+  - `utils.file_handler` (`chunk_size`, `tqdm_ncols`, `default_output_suffix`)
+  - `core.format_markdown_file` (`formatted_suffix`)
+  - `core.md_heading_formatter` (`format_heading` defaults)
+  - `core.processor` (`default_prompt_template`)
+  - `core.md_body_formatter` (`format_body` defaults)
+  - `core.text_splitter` (`max_chunk_size`)
+  - `services.format_service` (`formatted_suffix`)
+  - `core.paper_explain_pipeline`, `core.paper_explain`, `utils.prompt_resolver` (`project_root_markers`)
+  Each module now carries private `_DEFAULT_*` constants matching `default_config.yml`, so the code works as a library even when `set_config()` was never called. `config.context.get_config()` is retained for callers that truly require an active config.
+
+### Fixed
+
+- **B10 — latent infinite loop in `_write_with_progress` for multibyte text.** The previous byte-total / char-increment mismatch could make `written` (chars) lag `total` (bytes) and slice an empty chunk forever. The writer now slices by characters (preserving UTF-8 boundaries) while advancing a separate byte counter, so the loop always terminates and the progress bar stays accurate. Added safety `break` on empty chunk.
+- **Pre-existing RUF012 in `text_splitter.py`** — `HEADING_LEVELS` is now annotated `ClassVar[list[int]]`.
+
+### Tests
+
+- Updated `tests/unit/test_format_service.py` patch targets from `get_config` to `get_config_or_none`. Full suite: 415 passed, 1 skipped.
+
+### Version
+
+- 2.16.11 → 2.16.12
+
+## 2.16.11 (2026-07-14)
+
+B10 + B11 — last two correctness bugs from ARCHITECTURE_REVIEW.md §5. **All 11 load-bearing bugs are now fixed.**
+
+### Fixed
+
+- **B10 — write-progress bar overshot 100% on multibyte text.** `FileHandler._write_with_progress` set the bar `total` to the *character* count but incremented by UTF-8 *byte* length, so CJK text drove the bar past 100%. Total is now the byte length (`len(content.encode("utf-8"))`), matching the increments. (The read path was already correct — byte total from `stat().st_size`.) §4.5.7 / B10.
+- **B11 — silent checkpoint residue on full success.** `format_service.resume_from_checkpoint` wrapped `os.remove(checkpoint)` in `except OSError: pass`, so a failed removal was invisible while the user saw "全部完成". It now emits a warning naming the leftover checkpoint path (and that it can be deleted manually). §5 / B11.
+
+### Tests
+
+- Added `test_write_progress_total_is_bytes_for_multibyte` (B10) and `test_resume_body_checkpoint_remove_failure_warns` (B11). 415 passed, 1 skipped.
+
+### Version
+
+- 2.16.10 → 2.16.11
+
+## 2.16.10 (2026-07-14)
+
+P2.6 — relocate `paper_explain_pipeline` out of `config/`. Internal module move; no CLI surface change.
+
+### Changed
+
+- **P2.6 — `paper_explain_pipeline.py` moved `config/` → `core/`.** The 453-LOC module is paper-explain domain logic (7 nested pydantic models, pipeline parsing), not configuration — it lived in `config/` only because it reads a YAML at startup. Now at `ask_llm.core.paper_explain_pipeline`. Its lazy `get_config()` read is unchanged. Importers (`core/paper_explain`, `services/paper_service`, two tests) retargeted. ARCHITECTURE_REVIEW.md §4.2.6.
+
+### Version
+
+- 2.16.9 → 2.16.10
+
+## 2.16.9 (2026-07-14)
+
+P2 (config de-globalization, incremental) — `TokenCounter` no longer requires a loaded config. Library/embedding hardening.
+
+### Fixed
+
+- **`TokenCounter._get_encoding` no longer crashes without a config.** The hot path called `get_config()` (which raises `RuntimeError` when no config is loaded) for empty / unknown model names. It now uses `get_config_or_none()` and falls back to `cl100k_base` (the project's common default across `ENCODING_MAP`), so token counting is usable in programmatic contexts that never call `set_config`. ARCHITECTURE_REVIEW.md §4.2.3.
+
+### Tests
+
+- Added `test_get_encoding_falls_back_when_no_config`. Fixed a pre-existing `C416` lint in the B2 approximate-token test. 413 passed, 1 skipped.
+
+### Version
+
+- 2.16.8 → 2.16.9
+
+## 2.16.8 (2026-07-14)
+
+P2.7 — surface silent duplicate env-var mappings. First P2 (config) step. No CLI surface change.
+
+### Fixed
+
+- **P2.7 — conflicting env overrides now warn.** Two env vars can map to the same config key (e.g. `ASK_LLM_TRANSLATION_THREADS` and `ASK_LLM_TRANSLATION_MAX_CONCURRENT_API_CALLS` both → `translation.max_concurrent_api_calls`). Previously the apply loop overwrote silently in dict-iteration order, so which one won was accidental. `_apply_env_overrides` now detects when multiple *set* env vars target the same key and logs a warning naming the winner (last in `ENV_TO_CONFIG` order). Behaviour is otherwise unchanged (last still wins); the warning just makes it visible.
+
+### Added
+
+- `ask_llm.config.loader._duplicate_env_targets` and `_warn_conflicting_env_overrides`.
+
+### Tests
+
+- Added `test_conflicting_env_overrides_warns_and_last_wins` and `test_single_env_override_does_not_warn_conflict`. 412 passed, 1 skipped.
+
+### Version
+
+- 2.16.7 → 2.16.8
+
+## 2.16.7 (2026-07-14)
+
+P1.3 (substantial) — extract `TaskExecutor`. Internal refactor; no CLI surface change. Third and largest step of the `GlobalBatchProcessor` god-class split.
+
+### Added
+
+- `ask_llm.core.task_executor.TaskExecutor` — executes a single provider/model attempt: rate-limit acquire, adapter lookup, streaming collection (via `stream_and_collect`), `RequestMetadata` construction, progress updates, and the batch-wide auth-error log de-duplication. Holds the `verbose` / `stream_api` / auth-error state previously on the god class.
+- `paper_request_timeout_seconds` and `update_global_task_progress_failed` moved into `task_executor` (consumed there; the former is also used by the provider cache) to avoid a circular import.
+
+### Changed
+
+- `GlobalBatchProcessor` shrank to a lean coordinator: 720 → 347 LOC (834 → 347 across all three P1.3 steps). `_process_single_global_task` (the B1 escalation) now delegates one-config attempts to `self._task_executor.try_run_with_config`. A pass-through `_auth_error_logged` property preserves the `translation_service` inspection.
+- `provider_manager` now lazy-imports `paper_request_timeout_seconds` from `task_executor`.
+
+### Tests
+
+- Added `test_task_executor.py` (rate-limit-timeout failure, auth-error dedup flag, missing-provider failure). Retargeted `test_batch_processor` patches to `ask_llm.core.task_executor` (the moved code). 410 passed, 1 skipped.
+
+### Version
+
+- 2.16.6 → 2.16.7
+
+## 2.16.6 (2026-07-14)
+
+P1.3 (partial) — extract `ProgressPresenter`. Internal refactor; no CLI surface change. Second step of the `GlobalBatchProcessor` god-class split.
+
+### Added
+
+- `ask_llm.core.progress_presenter.ProgressPresenter` (+ `NullProgressPresenter`) — owns the `rich.Progress` instance, the per-task display metadata, and the per-worker-slot bar pool (B6). The worker acquires a slot (relabels the bar), runs, and releases it. `NullProgressPresenter` is a no-op used when progress display is disabled.
+
+### Changed
+
+- `GlobalBatchProcessor.process_global_tasks` no longer builds the `Progress` / slot pool inline; it constructs a presenter and calls `acquire`/`release`/`start`/`stop`. God class shrank 771 → 720 LOC (834 → 720 across both P1.3 steps). Dropped now-unused imports (`queue`, the inline `rich.progress`/`rich.console` lazy imports).
+
+### Tests
+
+- Added `test_progress_presenter.py` (one bar per slot, acquire relabels + release returns slot, null presenter no-op). Updated the B6 + B1 integration tests to patch `ask_llm.core.progress_presenter.Progress` (the construction moved out of `batch_processor`). 410 passed, 1 skipped.
+
+### Version
+
+- 2.16.5 → 2.16.6
+
+## 2.16.5 (2026-07-14)
+
+P1.3 (partial) — extract `StreamCollector`. Internal refactor; no CLI surface change. First step of the `GlobalBatchProcessor` god-class split (ARCHITECTURE_REVIEW.md §7.2 / P1.3).
+
+### Added
+
+- `ask_llm.core.stream_collector.stream_and_collect(...)` — the single streaming + token-collection implementation, extracted out of `GlobalBatchProcessor._stream_and_collect`. Pure function (no instance state); independently unit-testable. The unused `task` parameter was dropped.
+
+### Changed
+
+- `GlobalBatchProcessor` shrank 834 → 771 LOC. The paper and translation-chunk runners now call the module-level `stream_and_collect`. Dropped now-unused imports (`time`, `PROGRESS_UPDATE_INTERVAL`, `Iterator`, `ReasoningChunk`).
+
+### Tests
+
+- Added `test_stream_collector.py` (plain-text concatenation, reasoning separation, progress throttling). 404 passed, 1 skipped.
+
+### Version
+
+- 2.16.4 → 2.16.5
+
+## 2.16.4 (2026-07-14)
+
+P1.7 / B5 — checkpoint survives Ctrl-C. Fixes the "resumable on interrupt" gap (ARCHITECTURE_REVIEW.md §4.1.4 / B5).
+
+### Fixed
+
+- **B5 — Ctrl-C no longer discards all batch progress.** `BoundedRetryRunner` now installs a SIGINT handler (main thread only): on the first Ctrl-C it sets an interrupt flag, stops scheduling new tasks, drains the in-flight tasks to completion, and returns the partial results instead of re-raising `KeyboardInterrupt`. The prior handler is restored immediately, so a second Ctrl-C hard-interrupts. New `RunMetrics.interrupted` flag signals the partial run.
+- **`batch` and `trans` services keep the checkpoint on interrupt.** Previously the post-run unlink (`if not new_failed: unlink`) could delete the checkpoint after a partial interrupted run. Both services now check `last_metrics.interrupted`: on interrupt the checkpoint is kept and a resume hint is printed; unlink happens only on a clean, fully-successful run. Existing resume logic already handles partial result sets, so interrupted tasks are re-run on `--resume`.
+
+### Tests
+
+- Added `test_sigint_returns_partial_results_and_drains_inflight` (simulates Ctrl-C mid-run, asserts `interrupted` + partial results + drained in-flight) and `test_normal_run_not_marked_interrupted`. 401 passed, 1 skipped.
+
+### Version
+
+- 2.16.3 → 2.16.4
+
+## 2.16.3 (2026-07-14)
+
+P1.6 — unify `RequestMetadata` construction (B8 root-cause finish). Internal refactor; no CLI surface change.
+
+### Added
+
+- `RequestMetadata.from_execution(...)` classmethod — single factory for the per-request metadata that `batch_processor` (paper + translation-chunk paths) and `processor` (single `ask`) build on every successful call.
+
+### Changed
+
+- **P1.6 — collapsed three duplicate `RequestMetadata(...)` construction sites.** The temperature-resolution ternary (`temperature if temperature is not None else provider.config.api_temperature`) — the exact code path that caused the v2.15.1 adapter dict-vs-object crash — now lives in one place. Per-site differences (how output words/tokens are computed) remain at the call sites.
+
+### Version
+
+- 2.16.2 → 2.16.3
+
+## 2.16.2 (2026-07-14)
+
+P1.1 / B1 — unify retry × fallback into a single shared-budget escalation. Fixes the highest-severity design defect in `docs/ARCHITECTURE_REVIEW.md` (§4.1.3).
+
+### Fixed
+
+- **B1 — retry × fallback call amplification.** The bounded runner and the in-worker fallback chain were two uncoordinated retry layers: when the runner retried a task, the worker re-walked the *entire* fallback chain from the primary, so each task could make up to `(max_retries + 1) × len(fallback_chain)` API calls (e.g. `max_retries=3` × a 3-config chain → up to 12 calls). The fallback chain and the retry budget now share a single escalation of at most `max_retries + 1` attempts: attempt *k* uses `configs[min(k, len-1)]` — a transient failure advances to the next config (or re-tries the last when the chain is shorter than the budget). Per-task API calls are bounded by the retry budget regardless of chain length. Terminal errors (auth, content filter, validation) still short-circuit immediately.
+
+### Changed
+
+- `GlobalBatchProcessor._process_single_global_task` now performs exactly one config attempt per call (previously walked the whole chain). Flat attempt records are threaded across runner retries via a per-run side dict (`attempt_history_by_task`).
+- Terminal failures now saturate `result.retry_count = max_retries` so the runner declines to schedule another attempt (replaces the in-worker `break`).
+
+### Behaviour note
+
+- Multi-config fallback tasks now advance the chain on transient failure instead of re-trying the same provider. **Single-config tasks are unchanged** — they retry the same provider up to `max_retries + 1` times, exactly as before. Net effect: lower API cost and gentler rate-limit pressure for multi-provider batches.
+
+### Tests
+
+- Rewrote `test_fallback_succeeds_when_primary_fails` and `test_all_configs_fail_returns_failed` to drive the new escalation via a `_escalate` helper. Added `test_single_config_retries_same_provider_within_budget` and a runner-level `test_process_global_tasks_bounded_calls_with_fallback_chain` asserting `total_calls <= n_tasks × (max_retries + 1)` (the review's P1 acceptance criterion). 397 passed, 1 skipped.
+
+### Version
+
+- 2.16.1 → 2.16.2
+
+## 2.16.1 (2026-07-14)
+
+P1 execution-engine cleanup (internal refactor; no CLI surface change). Begins the P1 phase of `docs/ARCHITECTURE_REVIEW.md`.
+
+### Added
+
+- `BatchStatistics.from_results(results)` classmethod — single source of truth for per-`(provider, model)` batch-statistics aggregation (P1.5).
+
+### Changed
+
+- **P1.5 — collapsed duplicate statistics aggregators.** `batch_service._calculate_statistics` (a byte-duplicate of `batch_processor.calculate_statistics_by_model`) is deleted; both paths now route through `BatchStatistics.from_results`. `calculate_statistics_by_model` is reduced to a thin delegate for import compatibility.
+- **P1.7 — removed a duplicate `TYPE_CHECKING` block** in `batch_processor.py` (the `RateLimitConfig` import was declared twice).
+
+### Notes
+
+- P1.7 dead-code audit: `ProviderRetryRegistry.set`, `BoundedRetryRunner.run`, and the `core/batch.py` re-export shim are each retained — all have callers (`.set` and `.run` are exercised by unit tests; `.run` supports reusing a runner instance across batches; the shim is imported by ~20 modules). `ProviderRetryRegistry.set` will be wired into the runner when the `EscalationPolicy` (P1.1) lands.
+
+### Version
+
+- 2.16.0 → 2.16.1
+
+## 2.16.0 (2026-07-14)
+
+Architecture-review P0 stopgap release — fixes seven load-bearing bugs identified in `docs/ARCHITECTURE_REVIEW.md` and tightens the API-key boundary. No CLI surface changes; one internal data-model type change (`BatchResult.attempt_history`).
+
+### Fixed
+
+- **B2 — CJK provider token counts were silently approximate.** `TokenCounter` mapped DeepSeek/Qwen to `cl100k_base`, which undercounts CJK text; chunk sizing against those context windows could overflow. Now warns once per model and applies a configurable safety factor (`APPROX_TOKEN_SAFETY_FACTOR = 0.85`) in `split_hard_by_max_tokens`. `truncate_to_tokens` fallback unified to word-count.
+- **B3 — unresolved `${VAR}` API-key placeholders were silent.** `ProviderConfig.validate_api_key` now warns loudly when an `api_key` still carries an unresolved `${...}` placeholder after YAML load. The run-boundary gate (`api_key_gate`) already blocked this on ask/chat/batch; it is now also wired into `run_global_batch_tasks` (covers trans/paper) via a new pure `ensure_resolved_provider_keys` chokepoint.
+- **B4 — body splitter cut fenced code blocks mid-fence.** `MarkdownTokenSplitter` is now code-fence aware: headings inside a fence are not used as split points, and long paragraphs containing fences are split at fence boundaries (each fenced block stays atomic). The full `MarkdownStructure` parser lands in P3.
+- **B6 — N tasks produced N live progress bars.** `GlobalBatchProcessor` now uses a pool of `min(max_workers, num_tasks)` per-worker-slot bars instead of one bar per pending task. O(workers) bars regardless of batch size.
+- **B7 — `BatchResult.attempt_history` was self-referential.** Changed to `list[AttemptRecord]` (flat, acyclic by construction); the v2.15.1 circular-reference crash class is now structurally impossible. New `AttemptRecord.from_result` factory; the manual slice/cycle-guard hacks were removed.
+- **B8 — `ProviderAdapterCache.get` was untyped and accepted dicts.** Typed `(config: ProviderConfig | dict) -> LLMProviderProtocol`; the dict path (root of the v2.15.1 adapter dict-vs-object crash) is rebuilt into a `ProviderConfig` and emits `DeprecationWarning`; bad inputs raise `TypeError`.
+- **B9 — rate-limit acquire timeout was hardcoded 60s.** New `ProviderRateLimitConfig.acquire_timeout_seconds` (per provider/model); the failure message points at the knob.
+- **Secrets — stale credentials lingered after key rotation.** The interactive gate now calls `ProviderAdapterCache.clear()` after applying a rotated key. Full `SecretStr` migration deferred to P2.
+
+### Added
+
+- `APPROX_TOKEN_SAFETY_FACTOR` constant.
+- `ProviderRateLimitConfig.acquire_timeout_seconds` field (+ `default_config.yml` docs).
+- `ask_llm.utils.api_key_gate.UnresolvedAPIKeyError` and `ensure_resolved_provider_keys`.
+- `ask_llm.core.batch_models.AttemptRecord` (moved from `execution_report`; re-exported for compatibility).
+- Tests: `test_api_key_gate.py`, `test_markdown_token_splitter.py`; expanded `test_models.py`, `test_utils.py`, `test_rate_limiter.py`, `test_provider_cache.py`, `test_batch_processor.py`, `test_execution_report.py`.
+
+### Changed
+
+- `BatchResult.attempt_history` type changed from `list[BatchResult]` to `list[AttemptRecord]`. External code reading it as `BatchResult`s must switch to the flat fields (`provider`, `model`, `status`, …).
+
+### Version
+
+- 2.15.1 → 2.16.0
+
+### Contributors
+
+- Refactored with assistance from **Claude** (agent).
+
 ## 2.15.1 (2026-06-24)
 
 ### Fixed

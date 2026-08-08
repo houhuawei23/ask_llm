@@ -19,15 +19,8 @@ from ask_llm.services.format_service import (
     run_sequential_format,
 )
 from ask_llm.utils.console import console
+from ask_llm.utils.engine_facade import create_engine_adapter
 from ask_llm.utils.md_path_discovery import discover_markdown_files
-
-try:
-    from llm_engine import create_provider_adapter
-except ImportError:
-    console.print_error(
-        "llm_engine is required but not installed. Please install it with: pip install llm-engine"
-    )
-    raise
 
 
 def _default_file_workers() -> int:
@@ -249,7 +242,7 @@ def format_cmd(
         # --config, --provider, --model, and --temperature.
         load_result = ConfigLoader.load(config_path)
         set_config(load_result)
-        config_manager = ConfigManager(load_result.app_config)
+        config_manager = ConfigManager(load_result.app_config, load_result.unified_config)
 
         if provider:
             config_manager.set_provider(provider)
@@ -266,7 +259,7 @@ def format_cmd(
             console.print_error("未指定模型。请使用 --model 或在配置中设置默认模型。")
             raise typer.Exit(1)
 
-        llm_provider = create_provider_adapter(provider_config, default_model=default_model)
+        llm_provider = create_engine_adapter(provider_config, default_model=default_model)
         processor = RequestProcessor(llm_provider)
         format_service = FormatService(processor=processor, model=default_model)
 

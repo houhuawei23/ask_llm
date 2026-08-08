@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import os
+import signal
+import threading
 from dataclasses import dataclass
 
 import pytest
@@ -194,3 +197,66 @@ def test_run_with_metrics_counts_retries_and_failures():
     assert metrics.retried == 4
     assert metrics.total_latency >= 0
     assert metrics.average_latency >= 0
+
+
+def test_sigint_returns_partial_results_and_drains_inflight():
+    """B5: Ctrl-C stops scheduling new work, drains in-flight, returns partials.
+
+    The runner must NOT re-raise KeyboardInterrupt; it returns whatever
+    completed so the caller can persist a checkpoint and resume. A second
+    Ctrl-C (handler restored) would hard-interrupt.
+    """
+    if threading.current_thread() is not threading.main_thread():
+        pytest.skip("SIGINT graceful-drain requires the main thread")
+
+    completed: list[int] = []
+    triggered = threading.Event()
+    stop_after = 4
+
+    def worker(task: int, retry_count: int) -> _SimpleResult:
+        completed.append(task)
+        # Once a few tasks finish, simulate Ctrl-C delivered from a worker.
+        if len(completed) >= stop_after and not triggered.is_set():
+            triggered.set()
+            os.kill(os.getpid(), signal.SIGINT)
+        return _SimpleResult(task_id=task, value=task, retry_count=retry_count)
+
+    runner = BoundedRetryRunner(
+        max_workers=2,
+        max_retries=0,
+        retry_delay=0.01,
+        retry_delay_max=0.1,
+    )
+    results, metrics = runner.run_with_metrics(
+        list(range(20)),
+        worker,
+        is_failed=lambda r: False,
+        error_message=lambda r: r.error,
+        retry_count_from_result=lambda r: r.retry_count,
+        order_key=lambda r: r.task_id,
+    )
+
+    assert metrics.interrupted is True
+    # Some tasks completed (before interrupt + drained in-flight), not all 20.
+    assert 1 <= len(results) < 20
+    # Every returned result is intact (drained, not lost).
+    assert all(r.value == r.task_id for r in results)
+
+
+def test_normal_run_not_marked_interrupted():
+    """A run that completes without Ctrl-C must report interrupted=False."""
+    runner = BoundedRetryRunner(
+        max_workers=2,
+        max_retries=0,
+        retry_delay=0.01,
+        retry_delay_max=0.1,
+    )
+    _results, metrics = runner.run_with_metrics(
+        list(range(5)),
+        lambda t, rc: _SimpleResult(task_id=t, value=t, retry_count=rc),
+        is_failed=lambda r: False,
+        error_message=lambda r: r.error,
+        retry_count_from_result=lambda r: r.retry_count,
+        order_key=lambda r: r.task_id,
+    )
+    assert metrics.interrupted is False

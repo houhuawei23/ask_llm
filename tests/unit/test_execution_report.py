@@ -132,10 +132,14 @@ def test_attempt_history_is_included_in_report():
         ),
     )
     final = fallback_result.model_copy()
-    final.attempt_history = [primary_result, fallback_result]
+    # attempt_history holds only the *preceding* (failed) attempts as flat records.
+    from ask_llm.core.batch_models import AttemptRecord
+
+    final.attempt_history = [AttemptRecord.from_result(primary_result)]
 
     report = build_report_from_batch_results("batch", [final])
     assert report.successful_tasks == 1
+    # preceding attempt (primary) + final (fallback) == 2
     assert len(report.tasks[0].attempts) == 2
     providers = {a.provider for a in report.tasks[0].attempts}
     assert providers == {"deepseek", "qwen"}

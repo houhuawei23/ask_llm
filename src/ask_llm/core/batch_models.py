@@ -37,9 +37,7 @@ class BatchTask(BaseModel):
     prompt: str
     content: str
     output_filename: str | None = None  # Optional output filename for split mode
-    task_model_config: ModelConfig | None = (
-        None  # Optional for backward compatibility (renamed from model_config to avoid Pydantic reserved keyword)
-    )
+    model_settings: ModelConfig | None = None  # Optional per-task model configuration
     fallback_model_configs: list[ModelConfig] = Field(
         default_factory=list,
         description="Ordered list of fallback provider/model configs to try on failure",
@@ -72,7 +70,7 @@ def sort_batch_tasks_by_estimated_input(
     """
 
     def _estimate(t: BatchTask) -> int:
-        model = t.task_model_config.model if t.task_model_config else default_model
+        model = t.model_settings.model if t.model_settings else default_model
         if "{content}" in t.prompt:
             full = t.prompt.replace("{content}", t.content)
         else:
@@ -80,6 +78,43 @@ def sort_batch_tasks_by_estimated_input(
         return int(TokenCounter.estimate_tokens(full, model)["token_count"])
 
     return sorted(tasks, key=_estimate, reverse=True)
+
+
+class AttemptRecord(BaseModel):
+    """Flat, non-recursive record of a single provider/model attempt for one task.
+
+    ``BatchResult.attempt_history`` is a ``list[AttemptRecord]`` (not
+    ``list[BatchResult]``) so the object graph is acyclic by construction. The
+    prior self-referential type caused the v2.15.1 circular-reference crash
+    during checkpoint serialization; a flat record type makes that class of bug
+    structurally impossible. See ARCHITECTURE_REVIEW.md bug B7.
+    """
+
+    provider: str
+    model: str
+    status: TaskStatus
+    error: str | None = None
+    error_category: ErrorCategory | None = None
+    latency: float | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    timestamp: datetime = Field(default_factory=datetime.now)
+
+    @classmethod
+    def from_result(cls, result: "BatchResult") -> "AttemptRecord":
+        """Project a :class:`BatchResult` into a flat attempt record."""
+        metadata = result.metadata
+        return cls(
+            provider=result.model_settings.provider,
+            model=result.model_settings.model,
+            status=result.status,
+            error=result.error,
+            error_category=result.error_category,
+            latency=metadata.latency if metadata else None,
+            input_tokens=metadata.input_tokens if metadata else None,
+            output_tokens=metadata.output_tokens if metadata else None,
+            timestamp=result.timestamp,
+        )
 
 
 class BatchResult(BaseModel):
@@ -91,9 +126,7 @@ class BatchResult(BaseModel):
     prompt: str
     content: str
     output_filename: str | None = None  # Optional output filename for split mode
-    model_settings: (
-        ModelConfig  # Renamed from model_config to avoid conflict with Pydantic's reserved field
-    )
+    model_settings: ModelConfig  # Model configuration used for this task
     response: str | None = None
     metadata: RequestMetadata | None = None
     reasoning: str | None = None  # e.g. DeepSeek reasoner when paper_mode + return_reasoning
@@ -103,12 +136,51 @@ class BatchResult(BaseModel):
         default=None,
         description="Classified failure category when status is FAILED",
     )
-    attempt_history: list["BatchResult"] = Field(
+    attempt_history: list[AttemptRecord] = Field(
         default_factory=list,
-        description="Historical attempts for this task (e.g. fallback chain)",
+        description=(
+            "Preceding attempts for this task (e.g. earlier configs in a fallback "
+            "chain). Flat AttemptRecords, never the final result itself, so the "
+            "object graph stays acyclic."
+        ),
     )
     timestamp: datetime = Field(default_factory=datetime.now)
     retry_count: int = 0
+
+    def project(self) -> dict[str, Any]:
+        """Single projection of this result for exporters and reports (P4.7).
+
+        The one canonical dict shape for a ``BatchResult``; exporters
+        (``BatchResultExporter._prepare_data``) build on it instead of
+        hand-assembling per-result dicts.
+        """
+        return {
+            "task_id": self.task_id,
+            "prompt": self.prompt,
+            "content": self.content,
+            "model_settings": {
+                "provider": self.model_settings.provider,
+                "model": self.model_settings.model,
+                "temperature": self.model_settings.temperature,
+                "top_p": self.model_settings.top_p,
+            },
+            "response": self.response,
+            "status": self.status.value,
+            "error": self.error,
+            "metadata": {
+                "provider": self.metadata.provider,
+                "model": self.metadata.model,
+                "temperature": self.metadata.temperature,
+                "input_tokens": self.metadata.input_tokens,
+                "output_tokens": self.metadata.output_tokens,
+                "latency": self.metadata.latency,
+                "timestamp": self.metadata.timestamp.isoformat(),
+            }
+            if self.metadata
+            else None,
+            "timestamp": self.timestamp.isoformat() if self.timestamp else None,
+            "retry_count": self.retry_count,
+        }
 
 
 class BatchStatistics(BaseModel):
@@ -121,3 +193,36 @@ class BatchStatistics(BaseModel):
     average_latency: float = Field(default=0.0, description="Average latency per task")
     total_input_tokens: int = Field(default=0, description="Total input tokens")
     total_output_tokens: int = Field(default=0, description="Total output tokens")
+
+    @classmethod
+    def from_results(cls, results: list[BatchResult]) -> dict[str, "BatchStatistics"]:
+        """Aggregate per-``(provider, model)`` statistics from batch results.
+
+        Single source of truth for batch statistics. Replaces the previously
+        duplicated aggregators that lived in ``batch_processor`` and
+        ``batch_service`` (ARCHITECTURE_REVIEW.md §4.1.2, P1.5). Pure function.
+        """
+        grouped: dict[str, list[BatchResult]] = {}
+        for result in results:
+            key = f"{result.model_settings.provider}/{result.model_settings.model}"
+            grouped.setdefault(key, []).append(result)
+
+        statistics: dict[str, BatchStatistics] = {}
+        for key, model_results in grouped.items():
+            stats = cls(total_tasks=len(model_results))
+            successful = [r for r in model_results if r.status == TaskStatus.SUCCESS]
+            stats.successful_tasks = len(successful)
+            stats.failed_tasks = len(model_results) - stats.successful_tasks
+            if successful:
+                latencies = [r.metadata.latency for r in successful if r.metadata]
+                if latencies:
+                    stats.total_latency = sum(latencies)
+                    stats.average_latency = stats.total_latency / len(latencies)
+                stats.total_input_tokens = sum(
+                    r.metadata.input_tokens for r in successful if r.metadata
+                )
+                stats.total_output_tokens = sum(
+                    r.metadata.output_tokens for r in successful if r.metadata
+                )
+            statistics[key] = stats
+        return statistics

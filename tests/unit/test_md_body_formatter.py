@@ -353,3 +353,78 @@ $$
                 assert "Test body prompt" in formatter.prompt_template
             finally:
                 os.chdir(old_cwd)
+
+
+class TestPositionAwareJoin:
+    """P3.4: reassembly restores original inter-chunk separators."""
+
+    def test_join_unit_level(self):
+        parts = ["aaa", "bbb", "ccc"]
+        original = "aaa\nbbb\n\nccc"
+        spans = [(0, 3), (4, 7), (9, 12)]
+        assert BodyFormatter._join_chunks_position_aware(parts, spans, original) == original
+
+    def test_join_fallback_on_unclean_spans(self):
+        parts = ["aaa", "bbb"]
+        original = "aaaXbbb"
+        spans = [(0, 3), (4, 7)]
+        assert BodyFormatter._join_chunks_position_aware(parts, spans, original) is None
+
+    def test_join_empty_separator_becomes_blank_line(self):
+        parts = ["aaa", "bbb"]
+        original = "aaabbb"
+        spans = [(0, 3), (3, 6)]
+        assert BodyFormatter._join_chunks_position_aware(parts, spans, original) == "aaa\n\nbbb"
+
+    def test_format_body_preserves_single_newlines(self, tmp_path):
+        """List items split across chunks must not gain forced blank lines."""
+        text = "- item one with some extra words here\n- item two with more words\n- item three\n"
+        mock_provider = MagicMock(spec=LLMProviderProtocol)
+        mock_provider.name = "mock"
+        mock_provider.default_model = "mock-model"
+        mock_provider.config = MagicMock()
+        mock_provider.config.api_temperature = 0.7
+        processor = RequestProcessor(mock_provider)
+
+        def echo(*args, **kwargs):
+            content = kwargs.get("content", args[0] if args else "")
+            return ProcessingResult(
+                content=content,
+                metadata=RequestMetadata(
+                    provider="mock",
+                    model="mock-model",
+                    temperature=0.7,
+                    input_words=10,
+                    input_tokens=20,
+                    output_words=10,
+                    output_tokens=20,
+                    latency=0.1,
+                ),
+            )
+
+        processor.process_with_metadata = echo
+        formatter = BodyFormatter(
+            processor=processor,
+            model="gpt-4",
+            prompt_template=_TEST_PROMPT_TEMPLATE,
+            max_chunk_tokens=8,  # force splitting into multiple chunks
+        )
+        result = formatter.format_body(text)
+        if result.stats.chunks_processed > 1:
+            # No forced blank lines between hard-split chunks (§4.4.4):
+            # contiguous artificial cuts rejoin without inserted "\n\n".
+            assert "\n\n" not in result.text
+            assert "- item one" in result.text
+            assert "- item two" in result.text
+            assert "- item three" in result.text
+
+
+def test_position_join_hard_split_verbatim():
+    """Contiguous hard-split chunks rejoin verbatim (no forced blank line)."""
+    parts = ["aaa", "bbb"]
+    original = "aaabbb"
+    spans = [(0, 3), (3, 6)]
+    types = ["character_split", "character_split"]
+    assert (
+        BodyFormatter._join_chunks_position_aware(parts, spans, original, types) == "aaabbb"
+    )

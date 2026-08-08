@@ -85,17 +85,19 @@ def test_benchmark_json_export_dumps(benchmark, count):
 @pytest.mark.benchmark
 def test_benchmark_provider_adapter_cache_hit(benchmark):
     """Benchmark provider adapter cache hit path."""
+    from ask_llm.core.models import ProviderConfig
+
     ProviderAdapterCache.clear()
-    config = {
-        "api_provider": "openai",
-        "api_base": "https://api.openai.com/v1",
-        "api_key": "sk-test",
-        "models": ["gpt-4"],
-        "api_temperature": 0.7,
-        "api_top_p": None,
-        "max_tokens": None,
-        "timeout": 60.0,
-    }
+    config = ProviderConfig(
+        api_provider="openai",
+        api_base="https://api.openai.com/v1",
+        api_key="sk-test",
+        models=["gpt-4"],
+        api_temperature=0.7,
+        api_top_p=None,
+        max_tokens=None,
+        timeout=60.0,
+    )
     with patch("ask_llm.utils.provider_cache._create_cached_adapter") as mock_create:
         mock_create.return_value = MagicMock()
         ProviderAdapterCache.get(config, default_model="gpt-4")

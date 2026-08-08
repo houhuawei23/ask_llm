@@ -13,11 +13,6 @@ from pathlib import Path
 from loguru import logger
 
 from ask_llm.config.manager import ConfigManager
-from ask_llm.config.paper_explain_pipeline import (
-    PaperExplainPipelineConfig,
-    load_paper_explain_pipeline,
-    parse_section_job_key,
-)
 from ask_llm.config.unified_config import UnifiedConfig
 from ask_llm.core.batch import BatchResult, BatchStatistics, BatchTask, ModelConfig, TaskStatus
 from ask_llm.core.execution_report import ExecutionReport, build_report_from_batch_results
@@ -37,15 +32,20 @@ from ask_llm.core.paper_explain import (
     resolve_prompt_key,
     section_label_for_job,
 )
+from ask_llm.core.paper_explain_pipeline import (
+    PaperExplainPipelineConfig,
+    load_paper_explain_pipeline,
+    parse_section_job_key,
+)
 from ask_llm.core.tasks.builders import build_paper_explain_task
 from ask_llm.utils.console import console
+from ask_llm.utils.fallback_chain import build_fallback_chain
 from ask_llm.utils.file_handler import FileHandler
-from ask_llm.utils.pricing import format_cost_estimate
-from ask_llm.utils.provider_router import build_fallback_chain
-from ask_llm.utils.provider_specs import (
+from ask_llm.utils.model_limits import (
     load_providers_model_limits,
     resolve_paper_max_tokens,
 )
+from ask_llm.utils.pricing import format_cost_estimate
 from ask_llm.utils.token_counter import TokenCounter
 
 PricingMap = dict[tuple[str, str], dict[str, float]]
@@ -80,8 +80,16 @@ class PaperJobResult:
 
 @dataclass
 class PaperSessionResult:
-    """Aggregate result of a paper-explain session."""
+    """Aggregate result of a paper-explain session.
 
+    ``status`` replaces the historical ``typer.Exit`` control flow (P4.2):
+    the service never exits the process; the CLI translates the status to an
+    exit code.
+    """
+
+    # "ok" | "dry_run" | "nothing_to_do" | "failed"
+    status: str = "ok"
+    error: str | None = None
     job_results: list[PaperJobResult] = field(default_factory=list)
     statistics: dict[str, BatchStatistics] = field(default_factory=dict)
     total_jobs: int = 0
@@ -137,14 +145,14 @@ class PaperService:
 
         Returns:
             PaperSessionResult aggregating per-job outcomes and statistics.
+            ``status`` is "ok", "dry_run", "nothing_to_do", or "failed" — the
+            CLI maps these to exit codes (P4.2; the service never raises
+            ``typer.Exit``).
 
         Raises:
             ValueError: If run_mode is invalid or input is not a file/directory.
             FileNotFoundError: If required files are missing.
-            typer.Exit: On dry-run completion or when no jobs remain.
         """
-        import typer
-
         run_norm = options.run_mode.strip().lower()
         if run_norm not in ("sections", "full", "all"):
             raise ValueError("--run must be one of: sections, full, all")
@@ -175,8 +183,10 @@ class PaperService:
         if not jobs:
             raise ValueError("No jobs to run (check --run and --sections, or empty sections)")
 
+        from ask_llm.core.constants import DEFAULT_FALLBACK_MODEL
+
         paper_max_tokens = paper_cfg.max_output_tokens
-        full_model_name = (paper_cfg.full_model or "").strip() or "deepseek-reasoner"
+        full_model_name = (paper_cfg.full_model or "").strip() or DEFAULT_FALLBACK_MODEL
         model_limits_map, _ = load_providers_model_limits()
         section_job_model = self.model
         current_provider = self.config_manager.current_provider_name
@@ -191,7 +201,11 @@ class PaperService:
                 section_job_model,
                 current_provider,
             )
-            raise typer.Exit(0)
+            return PaperSessionResult(
+                status="dry_run",
+                total_jobs=len(jobs),
+                explain_root=explain_root,
+            )
 
         jobs_with_orig_idx, skipped_count = self._apply_resume_or_force(
             jobs,
@@ -203,7 +217,12 @@ class PaperService:
 
         if not jobs_with_orig_idx:
             console.print_info("All sections already completed. Nothing to do.")
-            raise typer.Exit(0)
+            return PaperSessionResult(
+                status="nothing_to_do",
+                total_jobs=len(jobs),
+                skipped_count=skipped_count,
+                explain_root=explain_root,
+            )
 
         idx_to_meta: dict[int, tuple[str, str, str | None]] = {}
         paper_tasks: list[BatchTask] = []
@@ -239,7 +258,7 @@ class PaperService:
                 build_paper_explain_task(
                     orig_idx,
                     full_prompt,
-                    task_model_config=model_config,
+                    model_settings=model_config,
                     output_filename=f"paper:{key}",
                     return_reasoning=(key.startswith("full")),
                     fallback_model_configs=fallback_configs,
@@ -255,7 +274,7 @@ class PaperService:
             paper_tasks,
             self.config_manager,
             max_workers=options.concurrency,
-            max_retries=3,
+            max_retries=self.unified_config.paper.retries,
             show_progress=True,
             clamp_workers_to_task_count=True,
         )
@@ -265,7 +284,14 @@ class PaperService:
         if failed:
             for r in failed:
                 console.print_error(f"Paper job {r.task_id} failed: {r.error or 'unknown error'}")
-            raise typer.Exit(1)
+            errors = "; ".join(f"job {r.task_id}: {r.error or 'unknown'}" for r in failed)
+            return PaperSessionResult(
+                status="failed",
+                error=errors,
+                total_jobs=len(jobs),
+                skipped_count=skipped_count,
+                explain_root=explain_root,
+            )
 
         session_result = PaperSessionResult(
             total_jobs=len(jobs),

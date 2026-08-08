@@ -9,7 +9,9 @@ import typer
 from loguru import logger
 
 try:
-    import llm_engine  # noqa: F401 — fail fast if engine missing
+    from ask_llm.utils import (
+        engine_facade as _engine_facade,  # noqa: F401 — fail fast if engine missing
+    )
 except ImportError:
     from ask_llm.utils.console import console
 
@@ -21,15 +23,13 @@ except ImportError:
 from ask_llm.cli.errors import raise_unexpected_cli_error
 from ask_llm.config.cli_session import (
     apply_cli_overrides_and_gate_api_key,
-    load_cli_session,
-    resolve_provider_and_model_or_exit,
+    bootstrap_command,
 )
 from ask_llm.services.translation_service import (
     TranslationOptions,
     TranslationService,
 )
 from ask_llm.utils.console import console
-from ask_llm.utils.pricing import load_providers_pricing
 
 
 def trans(
@@ -237,23 +237,20 @@ def trans(
     """
     try:
         _t0 = time.perf_counter()
-        load_result, config_manager = load_cli_session(config)
-        trans_cfg = load_result.unified_config.translation
-
-        pricing_map, pricing_source = load_providers_pricing(providers_pricing)
-        if pricing_source:
-            console.print_info(f"API pricing loaded from: {pricing_source}")
-        else:
-            console.print_info(
-                "No providers.yml with pricing found; token counts will still be shown, "
-                "cost estimate unavailable (add pricing_per_million_tokens or use --providers-pricing)"
-            )
-
-        final_provider, final_model = resolve_provider_and_model_or_exit(
+        (
+            load_result,
             config_manager,
+            pricing_map,
+            pricing_source,
+            final_provider,
+            final_model,
+        ) = bootstrap_command(
+            config,
+            pricing_path=providers_pricing,
             cli_provider=provider,
             cli_model=model,
         )
+        trans_cfg = load_result.unified_config.translation
 
         apply_cli_overrides_and_gate_api_key(
             config_manager,

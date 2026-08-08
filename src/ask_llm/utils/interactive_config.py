@@ -9,14 +9,7 @@ from ask_llm.config.manager import ConfigManager
 from ask_llm.core.batch import ModelConfig
 from ask_llm.utils.api_key_gate import api_key_is_missing_or_unresolved
 from ask_llm.utils.console import console
-
-try:
-    from llm_engine import create_provider_adapter
-except ImportError:
-    console.print_error(
-        "llm_engine is required but not installed. Please install it with: pip install llm-engine"
-    )
-    raise
+from ask_llm.utils.engine_facade import create_engine_adapter
 
 
 class InteractiveConfigHelper:
@@ -174,7 +167,7 @@ class InteractiveConfigHelper:
 
         try:
             default_model = self.config_manager.get_default_model(provider_name)
-            llm_provider = create_provider_adapter(provider_config, default_model=default_model)
+            llm_provider = create_engine_adapter(provider_config, default_model=default_model)
             success, message, latency = llm_provider.test_connection()
 
             if success:
