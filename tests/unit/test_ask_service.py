@@ -147,6 +147,29 @@ def test_process_to_file_uses_processor(service, mock_processor):
     )
 
 
+def test_process_to_file_without_metadata_flag_omits_metadata(service, mock_processor):
+    """Regression: metadata must only reach file output when --metadata is set."""
+    metadata = RequestMetadata(
+        provider="openai",
+        model="gpt-4",
+        temperature=0.7,
+        input_words=1,
+        input_tokens=1,
+        output_words=1,
+        output_tokens=1,
+        latency=0.1,
+    )
+    mock_processor.process_with_metadata.return_value = ProcessingResult(
+        content="result",
+        metadata=metadata,
+    )
+
+    result = service.process_to_file("hello", prompt_template="Translate: {content}")
+
+    assert result.metadata == metadata
+    assert result.output_content == "result"
+
+
 def test_determine_output_path_for_input_file(service):
     with patch("ask_llm.services.ask_service.FileHandler") as mock_fh:
         mock_fh.generate_output_path.return_value = "input_output.txt"

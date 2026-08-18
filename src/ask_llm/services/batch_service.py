@@ -215,12 +215,7 @@ def run_batch_from_config(
         skip_api_key_check,
     )
 
-    if validation.skipped:
-        console.print()
-        console.print_warning(f"Skipped {len(validation.skipped)} provider(s):")
-        for skipped in validation.skipped:
-            console.print(f"  - {skipped}")
-
+    # Skipped providers are reported once by the CLI via BatchService.print_skipped_providers().
     if not validation.validated:
         raise ValueError("No providers were successfully validated. Cannot process tasks.")
 

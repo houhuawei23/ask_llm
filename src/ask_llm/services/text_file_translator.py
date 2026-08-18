@@ -257,8 +257,6 @@ class TextFileTranslator:
 
         failed_count = sum(1 for r in results if r.status == TaskStatus.FAILED)
         successful_chunks = sum(1 for r in results if r.status == TaskStatus.SUCCESS)
-        if failed_count > 0:
-            console.print_warning(f"{failed_count} chunk(s) failed to translate")
         if (
             successful_chunks == 0
             and failed_count > 0

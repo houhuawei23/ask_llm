@@ -299,7 +299,7 @@ def trans(
             app_config=load_result.app_config,
         )
 
-        service.translate_files(
+        session_result = service.translate_files(
             files,
             options,
             output=output,
@@ -309,7 +309,13 @@ def trans(
             glossary=glossary,
             translated_suffix=translated_suffix,
         )
-        service.export_report(report)
+        service.export_report(report, session_result)
+
+        if session_result.failed_files > 0:
+            console.print_error(
+                f"Translation finished with {session_result.failed_files} failed file(s)"
+            )
+            raise typer.Exit(1)
 
     except typer.Exit:
         # typer.Exit subclasses RuntimeError; re-raise before the RuntimeError handler

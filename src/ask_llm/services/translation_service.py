@@ -266,11 +266,7 @@ class TranslationService:
                     self._accumulate(session_result, result)
 
         self._print_session_total(session_result)
-        session_result.report = build_report_from_batch_results(
-            "trans",
-            self._batch_results,
-            metadata={"files": files},
-        )
+        session_result.report = self._build_report(files)
         logger.debug("TranslationService wall time: {:.2f}s", time.perf_counter() - _t0)
         return session_result
 
@@ -351,11 +347,27 @@ class TranslationService:
             session_result.failed_files += 1
         self._batch_results.extend(job_result.results)
 
-    def export_report(self, report_path: str | None) -> str | None:
+    def _build_report(self, files: list[str] | None = None):
+        """Single construction point for the session/export execution report."""
+        metadata: dict[str, object] = {"provider": self.provider, "model": self.model}
+        if files:
+            metadata["files"] = files
+        return build_report_from_batch_results("trans", self._batch_results, metadata=metadata)
+
+    def export_report(
+        self,
+        report_path: str | None,
+        session_result: TranslationSessionResult | None = None,
+    ) -> str | None:
         """Export the execution report to ``report_path`` if available.
+
+        Prefers ``session_result.report`` (built during ``translate_files``) so
+        the exported report is identical to the session report; falls back to
+        rebuilding from the accumulated per-chunk results.
 
         Args:
             report_path: Destination path for the JSON report.
+            session_result: Session whose report should be exported.
 
         Returns:
             The exported path, or ``None`` if no report was generated or no path
@@ -363,13 +375,11 @@ class TranslationService:
         """
         if not report_path:
             return None
-        if self._batch_results:
-            report = build_report_from_batch_results(
-                "trans",
-                self._batch_results,
-                metadata={"provider": self.provider, "model": self.model},
-            )
-            report.to_json_file(report_path)
-            console.print_info(f"Execution report saved to: {report_path}")
-            return report_path
-        return None
+        report = session_result.report if session_result is not None else None
+        if report is None:
+            if not self._batch_results:
+                return None
+            report = self._build_report()
+        report.to_json_file(report_path)
+        console.print_info(f"Execution report saved to: {report_path}")
+        return report_path

@@ -540,6 +540,7 @@ class TestTransPerFileBatching:
             ],
         )
 
-        assert result.exit_code == 0, result.output
+        # Partial failure maps to a non-zero exit code; the OK file is still translated.
+        assert result.exit_code == 1, result.output
         assert (output_dir / "ok_trans.md").exists()
         assert not (output_dir / "bad_trans.md").exists()

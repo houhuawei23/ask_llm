@@ -247,7 +247,7 @@ class PaperService:
         results, _processor = run_global_batch_tasks(
             paper_tasks,
             self.config_manager,
-            max_workers=options.concurrency,
+            max_workers=max_workers,
             max_retries=self.unified_config.paper.retries,
             show_progress=True,
             clamp_workers_to_task_count=True,

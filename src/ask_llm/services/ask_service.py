@@ -28,11 +28,12 @@ class AskResult:
     output_path: str | None = None
     metadata: RequestMetadata | None = None
     reasoning: str | None = None
+    include_metadata: bool = False
 
     @property
     def output_content(self) -> str:
-        """Content formatted for file output (metadata prepended when available)."""
-        if self.metadata:
+        """Content formatted for file output (metadata prepended when included)."""
+        if self.metadata and self.include_metadata:
             return self.metadata.format() + self.content
         return self.content
 
@@ -260,6 +261,7 @@ class AskService:
             content=result.content,
             metadata=result.metadata,
             reasoning=result.reasoning,
+            include_metadata=include_metadata,
         )
 
     def determine_output_path(

@@ -18,6 +18,7 @@ from __future__ import annotations
 from typing import Any
 
 from llm_engine import create_provider_adapter as _create_provider_adapter
+from loguru import logger
 
 from ask_llm.core.models import ProviderConfig
 from ask_llm.core.protocols import LLMProviderProtocol
@@ -86,5 +87,8 @@ def load_engine_providers_config() -> dict[str, Any]:
         from llm_engine.config_loader import load_providers_config
 
         return load_providers_config() or {}
-    except Exception:
+    except Exception as e:
+        logger.warning(
+            f"llm_engine providers catalog unavailable ({e}); no base_url fallback data."
+        )
         return {}

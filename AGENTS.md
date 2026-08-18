@@ -334,11 +334,16 @@ Services must not call `typer.Exit`; they raise `ValueError`, `FileNotFoundError
 `RuntimeError` and let the CLI convert to user-facing messages and exit codes.
 
 ```python
-from ask_llm.config.cli_session import load_cli_session, resolve_provider_and_model_or_exit
+from ask_llm.config.cli_session import (
+    gate_api_key_or_exit,
+    load_cli_session,
+    resolve_and_prepare,
+)
 from ask_llm.services.ask_service import AskService
 
 load_result, config_manager = load_cli_session(config_path)
-provider, model = resolve_provider_and_model_or_exit(config_manager, cli_provider=provider)
+provider, model = resolve_and_prepare(config_manager, cli_provider=provider)
+gate_api_key_or_exit(config_manager, provider)
 service = AskService(
     config_manager=config_manager,
     unified_config=load_result.unified_config,
