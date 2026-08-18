@@ -73,15 +73,15 @@ ask_llm/
 │   │   ├── merge.py                    # _deep_merge + provenance (record_leaves)
 │   │   ├── providers_catalog.py        # providers.yml runtime-field loader
 │   │   ├── unified_config.py           # UnifiedConfig (single source: providers + behavior sections)
-│   │   ├── context.py                  # service-locator: get_config / get_config_or_none (13 callers)
+│   │   ├── context.py                  # service-locator: get_config_or_none (runtime-leaf, typing-only loader import)
 │   │   ├── manager.py                  # ConfigManager (provider/model overrides)
 │   │   └── cli_session.py              # CLI bootstrap (resolve_and_prepare, gate_api_key_or_exit, bootstrap_command)
 │   └── utils/              # Utility modules
 │       ├── engine_facade.py            # SINGLE llm_engine import point (create_engine_adapter, EngineConfigView)
 │       ├── provider_cache.py           # ProviderAdapterCache (process-wide LRU)
-│       ├── fallback_chain.py           # build_fallback_chain (renamed from provider_router, P4.6b)
+│       ├── fallback_chain.py           # build_fallback_chain + model_config_with_fallback (P4.6b)
 │       ├── model_limits.py             # DeepSeek max_tokens caps + ModelLimits (renamed from provider_specs, P4.6b)
-│       ├── api_key_gate.py             # Pre-flight key checks + UnresolvedAPIKeyError
+│       ├── api_key_gate.py             # Pure key checks + UnresolvedAPIKeyError (interactive gate lives in cli_session)
 │       ├── rate_limiter.py             # GlobalRateLimiter (per-(provider,model) token bucket)
 │       ├── token_counter.py            # TokenCounter (cl100k_base approximation for DeepSeek/Qwen)
 │       ├── chunk_balance.py            # rebalance_translation_chunks (routes through BinarySplitter)
@@ -93,8 +93,8 @@ ask_llm/
 │       ├── export_formats.py           # detect_export_format (single extension table)
 │       ├── pricing.py                  # Pricing lookup
 │       ├── notebook_translator.py      # Jupyter notebook markdown-cell translation
-│       ├── path_resolver.py            # _resolve_trans_input_paths / _is_directory_output (P4.3)
-│       ├── prompt_resolver.py          # Prompt template loading (@ prefix)
+│       ├── path_resolver.py            # resolve_trans_input_paths / is_directory_output / resolve_translation_output_path
+│       ├── prompt_resolver.py          # Prompt loading (@ prefix) + expand_prompt ({content} replace semantics)
 │       ├── md_path_discovery.py        # Markdown path discovery for format
 │       └── interactive_config.py       # Interactive provider/key configuration
 ├── tests/                  # Tests
@@ -498,4 +498,5 @@ Providers are handled externally by `llm-api-engine`. Update configuration in `p
 
 - Designed and implemented with assistance from **kimi-code** (agent) and **kimi-k2.7** (model). \
   2.20.0 review & refactor with assistance from **ZCode** (agent) and **GLM-5.3** (model). \
-  2.21.0 bug fixes & consolidation with assistance from **ZCode** (agent) and **GLM-5.3** (model).
+  2.21.0 bug fixes & consolidation with assistance from **ZCode** (agent) and **GLM-5.3** (model). \
+  2.22.0 correctness & dead-code sweep with assistance from **ZCode** (agent) and **GLM-5.3** (model).

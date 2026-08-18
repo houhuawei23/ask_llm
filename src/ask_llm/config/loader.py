@@ -167,6 +167,8 @@ class ConfigLoader:
         provider_data = cls._convert_providers_format(data)
         merged_data = {**data, **provider_data}
 
+        cls._warn_or_reject_unknown_sections(merged_data)
+
         try:
             unified_config = UnifiedConfig.model_validate(merged_data)
         except Exception as e:
@@ -311,6 +313,31 @@ class ConfigLoader:
             "default_model": default_model,
             "providers": converted_providers,
         }
+
+    @staticmethod
+    def _warn_or_reject_unknown_sections(merged_data: dict) -> None:
+        """Fail fast on unknown top-level config sections (A5, conservative scope).
+
+        Nested sections are left to Pydantic's default ignore: provider data is
+        merged from several sources and may legitimately carry extra keys.
+        Removed-in-2.22 sections get a deprecation warning instead of an error.
+        """
+        known = set(UnifiedConfig.model_fields.keys())
+        # Sections removed in 2.22; kept as tolerated-with-warning for old configs.
+        deprecated = {"text_splitter"}
+        unknown = set(merged_data.keys()) - known - deprecated
+        if unknown:
+            raise ValueError(
+                f"Unknown top-level config section(s): {', '.join(sorted(unknown))}. "
+                f"Valid sections: {', '.join(sorted(known))}. "
+                "Fix the typo or remove the section from default_config.yml."
+            )
+        present_deprecated = [k for k in deprecated if k in merged_data]
+        if present_deprecated:
+            logger.warning(
+                f"Config section(s) {', '.join(present_deprecated)} are no longer used "
+                "and will be removed in a future release; ignoring them."
+            )
 
     @classmethod
     def _app_config_from_unified(cls, unified_config: UnifiedConfig) -> AppConfig:

@@ -72,6 +72,27 @@ class TestConfigLoader:
             ConfigLoader.load(config_path)
         assert "Unsupported config file format" in str(exc_info.value)
 
+    def test_unknown_top_level_section_rejected(self, sample_config_dict, temp_dir):
+        """A typo'd top-level section must fail fast instead of being ignored."""
+        bad = {**sample_config_dict, "translationn": {"target_language": "zh"}}
+        config_path = temp_dir / "typo.yml"
+        with open(config_path, "w") as f:
+            yaml.dump(bad, f)
+
+        with pytest.raises(ValueError) as exc_info:
+            ConfigLoader.load(config_path)
+        assert "translationn" in str(exc_info.value)
+
+    def test_removed_text_splitter_section_warns_not_errors(self, sample_config_dict, temp_dir):
+        """text_splitter (removed in 2.22) is tolerated with a deprecation warning."""
+        cfg = {**sample_config_dict, "text_splitter": {"max_chunk_size": 2000}}
+        config_path = temp_dir / "legacy.yml"
+        with open(config_path, "w") as f:
+            yaml.dump(cfg, f)
+
+        load_result = ConfigLoader.load(config_path)
+        assert load_result.unified_config is not None
+
     def test_env_var_override(self, sample_config_file):
         """Test ASK_LLM_* environment variables override config."""
         try:

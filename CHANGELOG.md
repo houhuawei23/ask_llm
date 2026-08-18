@@ -1,5 +1,101 @@
 # Changelog
 
+## 2.22.0 (2026-08-18)
+
+第三轮重构：行为缺陷修复 + CLI 错误处理统一 + gate 分层净化 + 死代码清扫（净 −700 行）
++ 重复逻辑收敛（~12 处）+ 配置健壮性（公开导入路径与配置 schema 变更，故升 minor）。
+
+### Fixed（真实 bug）
+
+- **`ask --metadata` 对文件输出失效**：`process_to_file(include_metadata=...)` 参数从未被
+  使用，`AskResult.output_content` 无条件拼接元数据 → 文件输出恒带元数据。现按旗标拼接
+  （含回归测试）。
+- **`trans` 退出码语义缺失**：丢弃 `TranslationSessionResult`，全部文件失败仍 exit 0。
+  现失败文件数 > 0 → 打印摘要 + exit 1（与 paper 一致；报告仍照常导出）。
+- **batch 跳过 provider 警告打印两遍**（服务内 + CLI `print_skipped_providers`）；保留
+  CLI 侧一份。
+- **text 翻译 chunk 失败警告打印两遍**（`translate_and_export` + `export_text_file` 各
+  一遍）；保留导出侧一份。
+- **paper 并发数展示与实参不一致**：日志打印夹紧值、实际传未夹紧的
+  `options.concurrency`；统一为同一值。
+- **translation 双报告不一致**：会话报告与 `--report` 导出报告对同一批结果构造不同的
+  metadata；统一为单一 `_build_report` 构造点（导出复用会话报告）。
+- **`engine_facade` 静默吞异常**：providers 目录加载失败零日志即返回 `{}`；补
+  `logger.warning`。
+- **paper 命令缺 Ctrl-C 处理**（其余命令均有）；随错误级联统一补齐。
+
+### Changed（统一与分层）
+
+- **CLI 错误处理统一**：`cli_errors` 增加 `KeyboardInterrupt` 分支（提示 + exit 1），
+  全部 8 个命令接入；删除 batch/trans/paper/format_cmd/diagnose 五份逐字重复的手写
+  except 级联（ask 此前裸 re-raise 走 click 的 "Aborted!"，chat 的 REPL 内层
+  "Goodbye!"/exit 0 保留）。
+- **`utils/api_key_gate` 纯净化**：删除 `require_resolved_api_key`（与纯版
+  `ensure_resolved_provider_keys` 逻辑等价）；交互式 gate 移入
+  `config/cli_session._interactive_api_key_gate` 并入 `gate_api_key_or_exit`。utils 层
+  不再 import typer（新增 AST 回归测试）。**行为变化：batch 缺 key 不再交互式补 key，
+  而是 fail-fast 报错**（`--skip-api-key-check` 语义不变）。
+- **paper 新增 `--retries`**（与 trans 对齐），经 `PaperExplainOptions.retries` 回退
+  `paper.retries` 配置。
+- **`{content}` 合并规则三份 → 一份**：`utils/prompt_resolver.expand_prompt` 为唯一实现
+  （processor / batch_models 排序 / batch_processor 进度元数据三处调用）。
+- **`_load_prompt_from_file` 三份 → 零份**：均为 `prompt_resolver.load_prompt_template`
+  纯转发，删除后调用点直连（含 md_heading 逐行相同的冗余覆写）。
+- **format 双执行入口合一**：`run_sequential_format`/`run_parallel_format` →
+  `run_format(max_workers)`（≤1 走串行）；CLI 两处 13-kwarg 调用点合并为一处。
+- **翻译失败 `TranslationJobResult` 构造 ×7** → `translation_options.failed_job_result`
+  工厂。
+- **输出路径解析统一**：text/notebook 两份 →
+  `path_resolver.resolve_translation_output_path`；`_is_directory_output`/
+  `_resolve_trans_input_paths` 转正为公开名（`cli/common` 的私有名再导出与
+  `cli/__init__` 导出删除，测试改从 `utils.path_resolver` 导入）。
+- **`ModelConfig`+fallback 三步组合 ×3**（text/notebook/paper）→
+  `fallback_chain.model_config_with_fallback`。
+- **processor 三处 provider.call kwargs 构造** → `_call_kwargs` + 流式单值/迭代分流
+  `_iter_provider_response`。
+- **task_executor 双分支**（paper/translation ~100 行平行段）共享
+  `_attempt_context`/`_verbose_api_params`/`_success_metadata`；`_auth_error_logged`
+  转正公开 `auth_error_logged`（消除最后的跨类私有探取）。
+- **md_heading 两个同构 worker 合一**（resume 复用同一单元元组）；`_process_batch`
+  未用参数删除。**md_body**：resume 失败块线性扫描 O(n²) → dict；`chunk_spans` 字典
+  构建两次 → 一次。
+- **配置健壮性**：loader 在 `UnifiedConfig.model_validate` 前校验顶层未知节（笔误
+  fail-fast，嵌套节不动以兼容 providers 合并形状）；`config/context` 运行时叶子化
+  （typing-only 导入 loader + 清空 `config/__init__` 贪婪再导出），打断
+  `loader → engine_facade → core → utils → config.context` 包级环——实测
+  `import ask_llm.config.context` 的模块加载从 60+ 降到 26。
+
+### Removed（死代码清扫，A9 收尾）
+
+- **完全死代码**：`context.get_config()`（全部走 `get_config_or_none`）、
+  `model_limits.get_model_limits`、`rate_limiter.set_limit`、
+  `binary_splitter.DISPLAY_MATH_PATTERN` ×2、`chat._shell_history`、
+  `ProcessingResult.output_path`、`_BatchResult.meta`（heading 版）、
+  `RunMetrics.average_latency`、`provider_cache` dict 兼容分支 + `info()`、
+  `batch_checkpoint.load` 冗余覆写、`batch_processor` hasattr 恒真分支等。
+- **仅测试引用**（代码与测试同步删除/改指向）：`RetryPolicy.should_retry`/`as_callable`、
+  `LogContext.with_attempt`/`with_provider_model`、`TokenCounter.format_stats`/
+  `truncate_to_tokens`、`FileHandler.is_text_file`、`BaseCheckpoint.add_failed_task`、
+  `Translator.generate_prompt`（测试改经 `prompt_template_for_batch` 展开）、
+  `MarkdownTokenSplitter._find_code_fence_ranges` 包装（测试直指 `MarkdownStructure`）、
+  `cli/common._offset_task_ids`、`TranslationService._TextTranslationJob` 别名与两个
+  兼容委托方法。
+- **死配置管道（schema 变更）**：`translation.min_chunk_merge_tokens`（2.19 起声明
+  ignored，5 层管道全拆，含 `rebalance` 的 `min_merge_tokens` 形参）；`text_splitter`
+  配置节（零读取，类+字段+模板+夹具全删；旧配置含该节会得到 deprecation 警告而非报错）。
+- 卫生：删除 `core/tasks/` 残留 `__pycache__`；修复 AGENTS.md Service Layer 示例漂移
+  （仍引用已删除的 `resolve_provider_and_model_or_exit`）；pre-commit 通用密钥正则改
+  单行匹配（原 `\s*` 跨行把 YAML 节头 `token:` 误判为密钥）。
+
+### Tests
+
+- 461 passed / 1 skipped（2.21.0 为 468；新增 7 项行为/分层回归，移除 14 项仅测死代码
+  的用例）。
+
+### Version
+
+- 2.21.0 → **2.22.0**
+
 ## 2.21.0 (2026-08-18)
 
 评审遗留第二轮：ask/chat 真实 bug 修复 + 命令层服务下沉 + provider/model 解析收敛单一入口
