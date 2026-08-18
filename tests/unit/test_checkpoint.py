@@ -34,7 +34,7 @@ def test_batch_checkpoint_roundtrip(tmp_path):
     task = _make_task(task_id=1)
     result = _make_result(task_id=0)
     checkpoint.merge([result])
-    checkpoint.add_failed_task(task, task_id=1)
+    checkpoint.failed_tasks.append(task)
 
     path = tmp_path / "checkpoint.json"
     checkpoint.save(path)
@@ -65,12 +65,6 @@ def test_merge_skips_duplicate_task_ids():
     assert checkpoint.completed_task_ids == [0]
     assert len(checkpoint.successful_results) == 2
 
-
-def test_add_failed_task_skips_completed():
-    checkpoint = BatchCheckpoint.create(command="batch", config_digest="abc")
-    checkpoint.completed_task_ids = [0]
-    checkpoint.add_failed_task(_make_task(task_id=0), task_id=0)
-    assert len(checkpoint.failed_tasks) == 0
 
 
 def test_result_to_task():

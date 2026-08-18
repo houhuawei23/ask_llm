@@ -42,7 +42,7 @@ class TestTransPromptFileIntegration:
             assert translator.custom_prompt_template == prompt_content
 
             # Generate prompt
-            prompt = translator.generate_prompt("Hello world")
+            prompt = translator.prompt_template_for_batch().replace("{content}", "Hello world")
             assert "Hello world" in prompt
         finally:
             Path(temp_path).unlink()
@@ -65,7 +65,7 @@ class TestTransPromptFileIntegration:
                 prompt_file=temp_path,
             )
 
-            prompt = translator.generate_prompt("Test")
+            prompt = translator.prompt_template_for_batch().replace("{content}", "Test")
             # prompt_file should override custom_template
             assert "File prompt" in prompt
             assert "Template prompt" not in prompt

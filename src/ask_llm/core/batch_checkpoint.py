@@ -8,7 +8,6 @@ concrete checkpoint type because they share the same task/result model.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 from ask_llm.core.batch_models import BatchResult, BatchTask
@@ -74,12 +73,3 @@ class BatchCheckpoint(BaseCheckpoint[BatchTask, BatchResult]):
                 BatchResult.model_validate(r) for r in data.get("successful_results", [])
             ],
         )
-
-    @classmethod
-    def load(cls, path: str | Path) -> BatchCheckpoint:
-        """Load a batch checkpoint from JSON file."""
-        import json
-
-        path_obj = Path(path)
-        data = json.loads(path_obj.read_text(encoding="utf-8"))
-        return cls.from_dict(data)

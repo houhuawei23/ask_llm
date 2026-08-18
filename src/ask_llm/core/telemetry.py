@@ -42,14 +42,6 @@ class LogContext(BaseModel):
     attempt: int = Field(default=1, ge=1)
     phase: str | None = None
 
-    def with_attempt(self, attempt: int) -> LogContext:
-        """Return a copy with the attempt counter updated."""
-        return self.model_copy(update={"attempt": attempt})
-
-    def with_provider_model(self, provider: str, model: str) -> LogContext:
-        """Return a copy with provider/model filled in."""
-        return self.model_copy(update={"provider": provider, "model": model})
-
     def to_extra(self) -> dict[str, Any]:
         """Return fields suitable for ``logger.bind(**...)``."""
         return {

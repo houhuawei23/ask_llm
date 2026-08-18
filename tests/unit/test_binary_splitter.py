@@ -145,6 +145,6 @@ class TestChunkIdConvention:
             TextChunk(content="tiny2", chunk_id=2, start_pos=404, end_pos=409),
         ]
         out = rebalance_translation_chunks(
-            chunks, model=MODEL, max_chunk_tokens=40, min_merge_tokens=10, enabled=True
+            chunks, model=MODEL, max_chunk_tokens=40, enabled=True
         )
         assert [c.chunk_id for c in out] == list(range(len(out)))

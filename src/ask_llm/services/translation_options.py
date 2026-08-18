@@ -24,7 +24,6 @@ class TranslationOptions:
     retries: int
     balance_translation_chunks: bool
     max_chunk_tokens: int
-    min_chunk_merge_tokens: int
     max_output_tokens: int
     preserve_format: bool
     include_original: bool

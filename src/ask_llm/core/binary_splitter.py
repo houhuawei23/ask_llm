@@ -90,9 +90,6 @@ class TokenBudget:
         return TokenCounter.split_hard_by_max_tokens(text, self._raw_content_cap, self.model)
 
 
-# Matches a display-math block: $$ ... $$ potentially spanning multiple lines.
-DISPLAY_MATH_PATTERN = re.compile(r"^\$\$[\s\S]*?\$\$", re.MULTILINE)
-
 
 class BinarySplitter:
     """Split Markdown with the heading/paragraph binary strategy under a budget.
@@ -101,9 +98,6 @@ class BinarySplitter:
     :class:`MarkdownStructure` parse; the budget decision is delegated to the
     injected :class:`BudgetPolicy`.
     """
-
-    # Kept for backward compatibility (tests / external references).
-    DISPLAY_MATH_PATTERN = DISPLAY_MATH_PATTERN
 
     def __init__(self, budget: BudgetPolicy):
         self.budget = budget

@@ -94,10 +94,8 @@ class TestConsumerEquivalence:
         headings = HeadingExtractor.extract(text)
         assert [(h.level, h.title) for h in headings] == [(1, "A"), (2, "B")]
 
-    def test_token_splitter_fence_ranges_match_parser(self):
-        from ask_llm.core.markdown_token_splitter import MarkdownTokenSplitter
-
+    def test_fence_ranges_helper_matches_parser(self):
         text = "a\n```\ncode\n```\nb\n"
-        assert MarkdownTokenSplitter._find_code_fence_ranges(text) == (
+        assert MarkdownStructure._find_code_fence_ranges(text) == (
             MarkdownStructure.parse(text).fence_ranges
         )

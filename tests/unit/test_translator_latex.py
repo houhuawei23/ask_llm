@@ -27,7 +27,7 @@ class TestTranslatorLaTeX:
         )
 
         # Should not raise KeyError
-        prompt = translator.generate_prompt("Hello world")
+        prompt = translator.prompt_template_for_batch().replace("{content}", "Hello world")
         assert "Hello world" in prompt
         assert "\\beta" in prompt or "β" in prompt
         assert "中文" in prompt or "英文" in prompt
@@ -54,7 +54,7 @@ class TestTranslatorLaTeX:
             )
 
             # Should not raise KeyError
-            prompt = translator.generate_prompt("Test content")
+            prompt = translator.prompt_template_for_batch().replace("{content}", "Test content")
             assert "Test content" in prompt
             assert "\\alpha" in prompt or "α" in prompt
             assert "\\beta" in prompt or "β" in prompt
@@ -72,7 +72,7 @@ class TestTranslatorLaTeX:
         )
 
         # Should not raise KeyError
-        prompt = translator.generate_prompt("Test")
+        prompt = translator.prompt_template_for_batch().replace("{content}", "Test")
         assert "Test" in prompt
         assert "a_{i,j}" in prompt or "a_{i" in prompt
 
@@ -88,7 +88,7 @@ class TestTranslatorLaTeX:
             custom_prompt_template=template,
         )
 
-        prompt = translator.generate_prompt("Energy equation")
+        prompt = translator.prompt_template_for_batch().replace("{content}", "Energy equation")
         assert "Energy equation" in prompt
         assert "中文" in prompt or "英文" in prompt
         assert "mc^{2}" in prompt or "mc²" in prompt

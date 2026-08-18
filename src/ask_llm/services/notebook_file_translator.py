@@ -119,7 +119,6 @@ class NotebookFileTranslator:
                 show_progress=not stream,
                 balance_chunks=options.balance_translation_chunks,
                 max_chunk_tokens=options.max_chunk_tokens,
-                min_chunk_merge_tokens=options.min_chunk_merge_tokens,
                 stream_api=stream_api,
             )
         except RuntimeError as e:

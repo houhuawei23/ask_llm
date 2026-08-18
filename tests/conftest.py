@@ -47,7 +47,6 @@ def sample_config_dict():
         "file": {"chunk_size": 8192, "default_output_suffix": "_output"},
         "format_heading": {"batch_size": 80, "concurrency": 4},
         "format_body": {"max_chunk_tokens": 2400, "concurrency": 4},
-        "text_splitter": {"max_chunk_size": 2000},
         "token": {"default_encoding": "cl100k_base"},
     }
 

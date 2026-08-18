@@ -11,11 +11,9 @@ from ask_llm.core.batch_models import TaskStatus
 
 # Import CLI first to resolve the trans/service circular import at module load time.
 import ask_llm.cli.app
-from ask_llm.services.translation_service import (
-    TranslationOptions,
-    TranslationService,
-    _TextTranslationJob,
-)
+from ask_llm.services.text_file_translator import TextTranslationJob
+from ask_llm.services.translation_options import TranslationOptions
+from ask_llm.services.translation_service import TranslationService
 
 
 def _make_options(resume: bool = False) -> TranslationOptions:
@@ -28,7 +26,6 @@ def _make_options(resume: bool = False) -> TranslationOptions:
         retries=0,
         balance_translation_chunks=False,
         max_chunk_tokens=6000,
-        min_chunk_merge_tokens=3000,
         max_output_tokens=8192,
         preserve_format=True,
         include_original=False,
@@ -39,7 +36,7 @@ def _make_options(resume: bool = False) -> TranslationOptions:
     )
 
 
-def _make_job(tmp_path: Path) -> _TextTranslationJob:
+def _make_job(tmp_path: Path) -> TextTranslationJob:
     file_path = tmp_path / "doc.txt"
     file_path.write_text("hello world", encoding="utf-8")
     output_path = tmp_path / "doc_trans.txt"
@@ -49,7 +46,7 @@ def _make_job(tmp_path: Path) -> _TextTranslationJob:
         content="hello world",
         model_settings=ModelConfig(provider="openai", model="gpt-4"),
     )
-    return _TextTranslationJob(
+    return TextTranslationJob(
         file_path=str(file_path),
         file_type="text",
         chunks=[MagicMock()],
@@ -82,7 +79,7 @@ def test_translation_creates_checkpoint_on_failure(tmp_path):
         mock_run.return_value = ([failed_result], processor)
         with patch.object(service._text_translator, "export_text_file") as mock_export:
             mock_export.return_value = MagicMock(success=False)
-            service._translate_and_export_text_file(
+            service._text_translator.translate_and_export(
                 job,
                 _make_options(),
                 force=False,
@@ -123,7 +120,7 @@ def test_translation_resume_skips_completed_chunks(tmp_path):
         patch.object(service._text_translator, "export_text_file") as mock_export,
     ):
         mock_export.return_value = MagicMock(success=True)
-        service._translate_and_export_text_file(
+        service._text_translator.translate_and_export(
             job,
             _make_options(resume=True),
             force=False,

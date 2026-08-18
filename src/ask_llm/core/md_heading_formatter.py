@@ -7,7 +7,6 @@ and applies the formatted headings back to the original text.
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 from loguru import logger
 
@@ -251,7 +250,6 @@ class HeadingFormatter(ChunkedLLMJob):
         success: bool
         formatted: list[str] = field(default_factory=list)
         original_headings: list[str] = field(default_factory=list)
-        meta: Any = None
         retry_count: int = 0
         failed_info: FailedChunkInfo = field(
             default_factory=lambda: FailedChunkInfo(0, "", "", "", 0)

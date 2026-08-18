@@ -44,7 +44,6 @@ def _make_options(use_fallback: bool = True) -> TranslationOptions:
         retries=0,
         balance_translation_chunks=False,
         max_chunk_tokens=2400,
-        min_chunk_merge_tokens=400,
         max_output_tokens=2000,
         preserve_format=True,
         include_original=False,
@@ -102,7 +101,7 @@ def test_prepare_text_file_applies_fallback_chain(tmp_path: Path):
         mock_translator.create_translation_tasks.return_value = [task]
         mock_translator_cls.return_value = mock_translator
 
-        job = service._prepare_text_file(
+        job = service._text_translator.prepare(
             str(input_file),
             options,
             output=None,
@@ -153,7 +152,7 @@ def test_prepare_text_file_skips_fallback_when_disabled(tmp_path: Path):
         mock_translator.create_translation_tasks.return_value = [task]
         mock_translator_cls.return_value = mock_translator
 
-        job = service._prepare_text_file(
+        job = service._text_translator.prepare(
             str(input_file),
             options,
             output=None,

@@ -28,7 +28,6 @@ translation:
   balance_translation_chunks: true   # split/merge by tiktoken so parallel requests are similar cost
   max_chunk_tokens: 6000            # target max body tokens per chunk after rebalance
   max_output_tokens: 8192           # completion cap per chunk (avoid truncation vs llm_engine default 2000)
-  min_chunk_merge_tokens: 3000        # unused (compat); bodies merge if combined ≤ max_chunk_tokens
   preserve_format: true
   include_original: false
   temperature: null             # null uses provider default
@@ -80,15 +79,11 @@ format_body:
   retry_delay: 1.0
   retry_delay_max: 10.0
 
-# === 7. Text Splitter ===
-text_splitter:
-  max_chunk_size: 2000
-
-# === 8. Token Counting ===
+# === 7. Token counting ===
 token:
   default_encoding: cl100k_base
 
-# === 9. Paper explanation (ask-llm paper) ===
+# === 8. Paper explanation (ask-llm paper) ===
 paper:
   default_run: all              # sections | full | all
   output_subdir: explain
@@ -100,7 +95,7 @@ paper:
   full_model: deepseek-reasoner    # full-text job only; saves reasoning_content when API returns it
   request_timeout_seconds: 600.0  # HTTP timeout (default provider timeout is often 60s; reasoner needs more)
 
-# === 10. Rate Limiting ===
+# === 9. Rate Limiting ===
 # The global rate limiter uses these defaults and caps the batch thread pool to
 # the smallest burst_size among the tasks being run, so workers do not block
 # waiting for tokens. Override per provider (e.g. "deepseek:") or per
@@ -120,7 +115,7 @@ rate_limits:
   #   requests_per_minute: 50
   #   burst_size: 5
 
-# === 11. Project Root Markers ===
+# === 10. Project Root Markers ===
 project_root_markers:
   - pyproject.toml
   - setup.py

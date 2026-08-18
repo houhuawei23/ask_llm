@@ -62,7 +62,6 @@ class NotebookTranslator:
         *,
         balance_chunks: bool = True,
         max_chunk_tokens: int = 2400,
-        min_chunk_merge_tokens: int = 400,
         stream_api: bool = True,
     ) -> tuple[int, int, int, int]:
         """
@@ -77,7 +76,6 @@ class NotebookTranslator:
             show_progress: Whether to show progress
             balance_chunks: Rebalance markdown sub-chunks by token estimate (per cell)
             max_chunk_tokens: Token cap for splitting and rebalance
-            min_chunk_merge_tokens: Unused (API compat); rebalance merges greedily up to max_chunk_tokens
 
         Returns:
             Tuple of (successful_count, failed_count, total_input_tokens, total_output_tokens)
@@ -121,7 +119,6 @@ class NotebookTranslator:
                 tmp_chunks,
                 model,
                 max_chunk_tokens=max_chunk_tokens,
-                min_merge_tokens=min_chunk_merge_tokens,
                 enabled=balance_chunks,
                 prompt_overhead=prompt_overhead,
             )

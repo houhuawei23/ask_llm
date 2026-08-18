@@ -146,18 +146,6 @@ class GlobalRateLimiter:
             )
         return acquired
 
-    def set_limit(
-        self,
-        provider: str,
-        requests_per_minute: int,
-        burst_size: int,
-        model: str | None = None,
-    ) -> None:
-        """运行时调整某个 provider/model 的限流参数。"""
-        key = self._key(provider, model)
-        with self._lock:
-            self._limiters[key] = _SyncTokenBucket(requests_per_minute, burst_size)
-
 
 def get_global_rate_limiter(config: RateLimitConfig | None = None) -> GlobalRateLimiter:
     """Return the singleton rate limiter, optionally configuring it."""

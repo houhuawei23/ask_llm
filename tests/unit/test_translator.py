@@ -18,7 +18,7 @@ class TestTranslator:
             source_language="en",
             style=TranslationStyle.FORMAL,
         )
-        prompt = translator.generate_prompt("Hello world")
+        prompt = translator.prompt_template_for_batch().replace("{content}", "Hello world")
 
         assert "翻译" in prompt or "translate" in prompt.lower()
         assert "Hello world" in prompt
@@ -31,7 +31,7 @@ class TestTranslator:
             source_language="en",
             style=TranslationStyle.CASUAL,
         )
-        prompt = translator.generate_prompt("Hello world")
+        prompt = translator.prompt_template_for_batch().replace("{content}", "Hello world")
 
         assert "Hello world" in prompt
         assert "自然" in prompt or "casual" in prompt.lower() or "口语" in prompt
@@ -43,7 +43,7 @@ class TestTranslator:
             source_language="en",
             style=TranslationStyle.TECHNICAL,
         )
-        prompt = translator.generate_prompt("Hello world")
+        prompt = translator.prompt_template_for_batch().replace("{content}", "Hello world")
 
         assert "Hello world" in prompt
         assert "技术" in prompt or "technical" in prompt.lower() or "专业术语" in prompt
@@ -56,7 +56,7 @@ class TestTranslator:
             source_language="en",
             custom_prompt_template=custom_template,
         )
-        prompt = translator.generate_prompt("Hello world")
+        prompt = translator.prompt_template_for_batch().replace("{content}", "Hello world")
 
         assert prompt == "Translate this: Hello world"
 
@@ -68,7 +68,7 @@ class TestTranslator:
         )
         model = "deepseek-chat"
         instr = translator.count_prompt_template_tokens(model)
-        full = TokenCounter.count_tokens(translator.generate_prompt("word " * 200), model)
+        full = TokenCounter.count_tokens(translator.prompt_template_for_batch().replace("{content}", "word " * 200), model)
         assert instr > 0
         assert instr < full
 
@@ -78,7 +78,7 @@ class TestTranslator:
             target_language="zh",
             source_language="auto",
         )
-        prompt = translator.generate_prompt("Hello world")
+        prompt = translator.prompt_template_for_batch().replace("{content}", "Hello world")
 
         assert "Hello world" in prompt
 

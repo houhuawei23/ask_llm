@@ -7,6 +7,7 @@ cut mid-fence.
 
 from __future__ import annotations
 
+from ask_llm.core.markdown_structure import MarkdownStructure
 from ask_llm.core.markdown_token_splitter import MarkdownTokenSplitter
 
 MODEL = "gpt-4"
@@ -47,12 +48,12 @@ def test_fenced_code_block_not_broken_across_chunks():
 
 def test_find_code_fence_ranges_handles_unclosed_fence():
     """An unclosed fence extends to end of text."""
-    ranges = MarkdownTokenSplitter._find_code_fence_ranges("```\ncode without end")
+    ranges = MarkdownStructure._find_code_fence_ranges("```\ncode without end")
     assert ranges == [(0, len("```\ncode without end"))]
 
 
 def test_find_code_fence_ranges_paired():
-    ranges = MarkdownTokenSplitter._find_code_fence_ranges("a\n```\nx\n```\nb")
+    ranges = MarkdownStructure._find_code_fence_ranges("a\n```\nx\n```\nb")
     assert len(ranges) == 1  # exactly one closed range
     start, _ = ranges[0]
     # Range starts at the opening fence, not before it.

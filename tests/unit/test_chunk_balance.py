@@ -21,7 +21,6 @@ def test_rebalance_splits_token_heavy_chunk() -> None:
         chunks,
         "deepseek-chat",
         max_chunk_tokens=40,
-        min_merge_tokens=10,
         enabled=True,
     )
     assert len(out) >= 2
@@ -38,7 +37,6 @@ def test_rebalance_merges_tiny_chunks() -> None:
         chunks,
         "deepseek-chat",
         max_chunk_tokens=2400,
-        min_merge_tokens=500,
         enabled=True,
     )
     assert len(out) == 1
@@ -64,7 +62,6 @@ def test_rebalance_merges_two_non_tiny_adjacent_when_combined_fits() -> None:
         chunks,
         model,
         max_chunk_tokens=2400,
-        min_merge_tokens=400,
         enabled=True,
     )
     assert len(out) == 1
@@ -80,7 +77,6 @@ def test_rebalance_each_output_within_max_tokens() -> None:
         chunks,
         model,
         max_chunk_tokens=cap,
-        min_merge_tokens=10,
         enabled=True,
     )
     for c in out:
@@ -99,7 +95,7 @@ def test_rebalance_keeps_fenced_block_atomic_when_it_fits() -> None:
     )
     chunks = [TextChunk(content=text, chunk_id=0, start_pos=0, end_pos=len(text), metadata={})]
     out = rebalance_translation_chunks(
-        chunks, model, max_chunk_tokens=40, min_merge_tokens=10, enabled=True
+        chunks, model, max_chunk_tokens=40, enabled=True
     )
     assert len(out) >= 2
     # The fenced block must appear intact inside exactly one chunk and no chunk

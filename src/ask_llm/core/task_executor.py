@@ -7,7 +7,7 @@ construction, progress updates, and the auth-error log de-duplication.
 Extracted from ``GlobalBatchProcessor`` (ARCHITECTURE_REVIEW.md §7.2 / P1.3) so
 execution is separable from scheduling and fallback orchestration. The two
 module-level helpers moved with it because they are consumed only here
-(``update_global_task_progress_failed``) or by both here and the provider cache
+(``_update_global_task_progress_failed``) or by both here and the provider cache
 (``paper_request_timeout_seconds``); keeping them in this module avoids a
 circular import with ``batch_processor``.
 """
@@ -46,7 +46,7 @@ def paper_request_timeout_seconds() -> float:
     return float(lr.unified_config.paper.request_timeout_seconds)
 
 
-def update_global_task_progress_failed(
+def _update_global_task_progress_failed(
     progress: Progress | None,
     progress_task_id: TaskID | None,
     model_key: str,
@@ -407,7 +407,7 @@ class TaskExecutor:
             result.error = error_msg
             result.error_category = category
 
-            update_global_task_progress_failed(
+            _update_global_task_progress_failed(
                 progress, progress_task_id, model_key, task.task_id, progress_tokens
             )
             return result

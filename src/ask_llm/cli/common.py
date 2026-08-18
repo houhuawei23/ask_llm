@@ -10,29 +10,11 @@ from pathlib import Path
 
 import typer
 
-from ask_llm.core.batch_models import BatchTask
-from ask_llm.core.text_splitter import TextChunk
 from ask_llm.utils.console import console
 from ask_llm.utils.path_resolver import (  # noqa: F401  (re-export)
     _is_directory_output,
     _resolve_trans_input_paths,
 )
-
-
-def _offset_task_ids(
-    tasks: list[BatchTask], chunks: list[TextChunk], offset: int
-) -> tuple[list[BatchTask], list[TextChunk]]:
-    """Shift task and chunk IDs by ``offset`` so tasks from multiple files are globally unique.
-
-    Returns new task and chunk lists where each ``task_id``/``chunk_id`` is the original
-    value plus ``offset``. This preserves the one-to-one mapping required by
-    :class:`TranslationExporter` when results from all files are processed in a single
-    global batch.
-    """
-    id_map: dict[int, int] = {chunk.chunk_id: chunk.chunk_id + offset for chunk in chunks}
-    new_chunks = [chunk.model_copy(update={"chunk_id": id_map[chunk.chunk_id]}) for chunk in chunks]
-    new_tasks = [task.model_copy(update={"task_id": id_map[task.task_id]}) for task in tasks]
-    return new_tasks, new_chunks
 
 
 def _config_init(output_path: str | None = None) -> None:

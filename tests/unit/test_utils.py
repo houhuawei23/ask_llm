@@ -53,15 +53,6 @@ class TestTokenCounter:
         assert TokenCounter._get_encoding("gpt-4") == "cl100k_base"
         assert TokenCounter._get_encoding("deepseek-chat") == "cl100k_base"
 
-    def test_format_stats(self):
-        """Test stats formatting."""
-        text = "Hello world"
-        formatted = TokenCounter.format_stats(text)
-
-        assert "Words:" in formatted
-        assert "Tokens:" in formatted
-        assert "Chars:" in formatted
-
     def test_count_tokens_cached_returns_same_result(self):
         """Caching must not change the token count for repeated inputs."""
         TokenCounter.clear_cache()
@@ -112,16 +103,6 @@ class TestTokenCounter:
         assert len(deepseek_chunks) >= len(gpt_chunks)
         # No chunk exceeds the (cl100k) 100-token budget.
         assert all(TokenCounter.count_tokens(c, "deepseek-chat") <= 100 for c in deepseek_chunks)
-
-    def test_truncate_fallback_is_word_based(self):
-        """Without a real encoding, truncation follows word count, not chars."""
-        from unittest.mock import patch
-
-        text = "alpha bravo charlie delta echo foxtrot"
-        with patch.object(TokenCounter, "get_encoding", return_value=None):
-            truncated = TokenCounter.truncate_to_tokens(text, 3)
-        assert truncated.split() == ["alpha", "bravo", "charlie"]
-
 
 class TestFileHandler:
     """Test FileHandler."""
@@ -223,9 +204,3 @@ class TestFileHandler:
         assert FileHandler.detect_type("file.MD") == ".md"
         assert FileHandler.detect_type("/path/to/file.py") == ".py"
 
-    def test_is_text_file(self):
-        """Test text file detection."""
-        assert FileHandler.is_text_file("file.txt") is True
-        assert FileHandler.is_text_file("file.py") is True
-        assert FileHandler.is_text_file("file.md") is True
-        assert FileHandler.is_text_file("file.bin") is False

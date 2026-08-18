@@ -278,7 +278,6 @@ def trans(
                 max_chunk_tokens=(
                     max_chunk_tokens if max_chunk_tokens is not None else trans_cfg.max_chunk_tokens
                 ),
-                min_chunk_merge_tokens=trans_cfg.min_chunk_merge_tokens,
                 max_output_tokens=trans_cfg.max_output_tokens,
                 preserve_format=preserve_format,
                 include_original=trans_cfg.include_original,

@@ -1,15 +1,15 @@
-from __future__ import annotations
-
-from dataclasses import dataclass
-
-from ask_llm.core.error_keywords import TRANSIENT_KEYWORDS
-
 """Retry policy abstraction for the bounded concurrent runner.
 
 Centralizes the previously-hardcoded transient-error keyword list so retry
 behavior can be customized per provider (e.g. Anthropic ``overloaded_error``)
 without modifying the runner internals.
 """
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from ask_llm.core.error_keywords import TRANSIENT_KEYWORDS
 
 # Default keywords indicating a transient / retryable error message.
 # Derived from the single keyword rule table (P4.8): every transient rule's
@@ -37,25 +37,6 @@ class RetryPolicy:
             return False
         lower = error_message.lower()
         return any(kw in lower for kw in self.transient_keywords)
-
-    def should_retry(self, error_message: str, attempt: int) -> bool:
-        """Return True if a failed task should be retried.
-
-        Args:
-            error_message: Error text from the failed result.
-            attempt: Zero-based failure count so far.
-        """
-        if attempt >= self.max_retries:
-            return False
-        return self.is_retryable(error_message)
-
-    def as_callable(self):
-        """Return a ``Callable[[str], bool]`` usable as ``is_retryable_error``."""
-
-        def _callable(error_message: str) -> bool:
-            return self.is_retryable(error_message)
-
-        return _callable
 
 
 # Shared default policy; mirrors the historical hardcoded behavior plus a few

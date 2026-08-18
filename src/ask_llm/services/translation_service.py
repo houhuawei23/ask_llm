@@ -40,16 +40,6 @@ from ask_llm.utils.pricing import format_cost_estimate
 
 PricingMap = dict[tuple[str, str], dict[str, float]]
 
-# Backward-compat aliases (tests / external imports).
-_TextTranslationJob = TextTranslationJob
-
-__all__ = [
-    "TranslationJobResult",
-    "TranslationOptions",
-    "TranslationService",
-    "TranslationSessionResult",
-    "_TextTranslationJob",
-]
 
 
 class TranslationService:
@@ -269,16 +259,6 @@ class TranslationService:
         session_result.report = self._build_report(files)
         logger.debug("TranslationService wall time: {:.2f}s", time.perf_counter() - _t0)
         return session_result
-
-    # --- Backward-compat delegates (tests / external callers) ---
-
-    def _prepare_text_file(self, file_path, options, **kwargs):
-        """Delegate to TextFileTranslator.prepare (backward compat)."""
-        return self._text_translator.prepare(file_path, options, **kwargs)
-
-    def _translate_and_export_text_file(self, job, options, **kwargs):
-        """Delegate to TextFileTranslator.translate_and_export (backward compat)."""
-        return self._text_translator.translate_and_export(job, options, **kwargs)
 
     # --- Presentation helpers ---
 

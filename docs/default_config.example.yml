@@ -84,15 +84,11 @@ format_body:
   max_chunk_tokens: 2400
   concurrency: 4
 
-# === 7. Text Splitter ===
-text_splitter:
-  max_chunk_size: 2000
-
-# === 8. Token Counting ===
+# === 7. Token counting ===
 token:
   default_encoding: cl100k_base
 
-# === 9. Paper explanation (ask-llm paper) ===
+# === 8. Paper explanation (ask-llm paper) ===
 paper:
   default_run: all
   output_subdir: explain

@@ -136,7 +136,6 @@ class TextFileTranslator:
             chunks,
             self.model,
             max_chunk_tokens=options.max_chunk_tokens,
-            min_merge_tokens=options.min_chunk_merge_tokens,
             enabled=options.balance_translation_chunks,
             prompt_overhead=prompt_overhead,
         )

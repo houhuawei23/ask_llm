@@ -251,7 +251,6 @@ class ProcessingResult(BaseModel):
 
     content: str = Field(..., description="Response content")
     metadata: RequestMetadata | None = None
-    output_path: str | None = None
     reasoning: str | None = Field(
         default=None,
         description="Chain-of-thought / reasoning_content when using reasoner models",

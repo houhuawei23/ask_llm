@@ -248,7 +248,7 @@ class GlobalBatchProcessor:
                     ),
                 )["token_count"]
                 estimated_output = estimate_output_tokens(
-                    task.task_kind if hasattr(task, "task_kind") else "translation",
+                    task.task_kind,
                     input_token_estimate,
                 )
                 model_key = (

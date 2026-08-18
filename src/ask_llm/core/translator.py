@@ -119,22 +119,10 @@ class Translator:
 
         return template
 
-    def generate_prompt(self, content: str) -> str:
-        """
-        Generate translation prompt for given content.
-
-        Args:
-            content: Content to translate
-
-        Returns:
-            Formatted prompt string
-        """
-        return self.prompt_template_for_batch().replace("{content}", content)
-
     def count_prompt_template_tokens(self, model: str) -> int:
         """
         Tiktoken count of the instruction-only part: template with language placeholders
-        filled and ``{content}`` removed (same substitution rules as ``generate_prompt``).
+        filled and ``{content}`` removed (the batch runner expands ``{content}`` later).
         """
         static = self.prompt_template_for_batch().replace("{content}", "")
         return TokenCounter.count_tokens(static, model)

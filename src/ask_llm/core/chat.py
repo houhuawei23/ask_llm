@@ -67,7 +67,6 @@ class ChatSession:
 
         # Shell command history
         self._last_shell_cmd: str | None = None
-        self._shell_history: list[str] = []
 
     @classmethod
     def from_initial_context(
@@ -520,9 +519,6 @@ class ChatSession:
                 console.print_warning("No previous command")
                 return True
 
-        # Store in history
-        if cmd != self._last_shell_cmd:
-            self._shell_history.append(cmd)
         self._last_shell_cmd = cmd
 
         console.print(f"[dim]$ {cmd}[/dim]")

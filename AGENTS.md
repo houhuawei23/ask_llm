@@ -258,7 +258,7 @@ The tool uses a single `default_config.yml` for all settings. Run `ask-llm confi
 
 Search order: `--config` > `./default_config.yml` > `~/.config/ask_llm/` > `/etc/ask_llm/` > package built-in.
 
-Sections: `providers`, `general`, `translation`, `batch`, `file`, `format_heading`, `format_body`, `text_splitter`, `token`, `paper`, `rate_limits`, `project_root_markers`.
+Sections: `providers`, `general`, `translation`, `batch`, `file`, `format_heading`, `format_body`, `token`, `paper`, `rate_limits`, `project_root_markers`.
 Use `${VAR}` in YAML for environment variable substitution.
 
 Provider runtime configuration (base_url, api_key, models, max_output, etc.) lives in `providers.yml`.

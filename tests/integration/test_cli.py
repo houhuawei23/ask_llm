@@ -67,7 +67,6 @@ class TestCLIWithConfig:
             "batch": {},
             "file": {},
             "format_heading": {},
-            "text_splitter": {},
             "token": {},
         }
         config_path = temp_dir / "default_config.yml"
@@ -134,7 +133,6 @@ config_data = {
     "batch": {},
     "file": {},
     "format_heading": {},
-    "text_splitter": {},
     "token": {},
 }
 

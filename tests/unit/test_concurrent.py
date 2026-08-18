@@ -196,7 +196,6 @@ def test_run_with_metrics_counts_retries_and_failures():
     assert metrics.failed == 1
     assert metrics.retried == 4
     assert metrics.total_latency >= 0
-    assert metrics.average_latency >= 0
 
 
 def test_sigint_returns_partial_results_and_drains_inflight():

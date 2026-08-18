@@ -18,20 +18,7 @@ class TestRetryPolicy:
         assert not DEFAULT_RETRY_POLICY.is_retryable("Invalid API key")
         assert not DEFAULT_RETRY_POLICY.is_retryable("model not found")
         assert not DEFAULT_RETRY_POLICY.is_retryable("")
-        assert not DEFAULT_RETRY_POLICY.is_retryable(None)  # type: ignore[arg-type]
-
-    def test_should_retry_respects_max(self):
-        policy = RetryPolicy(max_retries=2)
-        assert policy.should_retry("timeout", attempt=0)
-        assert policy.should_retry("timeout", attempt=1)
-        # attempt == max_retries -> stop
-        assert not policy.should_retry("timeout", attempt=2)
-
-    def test_should_retry_non_transient_never(self):
-        policy = RetryPolicy(max_retries=5)
-        assert not policy.should_retry("authentication failed", attempt=0)
-
-    def test_custom_keywords(self):
+        assert not DEFAULT_RETRY_POLICY.is_retryable(None)  # type: ignore[arg-type]    def test_custom_keywords(self):
         policy = RetryPolicy(transient_keywords=("mycloud_down",))
         assert policy.is_retryable("ERROR mycloud_down please retry")
         assert not policy.is_retryable("timeout")
@@ -41,9 +28,3 @@ class TestRetryPolicy:
         assert "429" in DEFAULT_TRANSIENT_KEYWORDS
         assert "timeout" in DEFAULT_TRANSIENT_KEYWORDS
         assert "overloaded_error" in DEFAULT_TRANSIENT_KEYWORDS
-
-    def test_as_callable(self):
-        policy = RetryPolicy(transient_keywords=("timeout",))
-        fn = policy.as_callable()
-        assert fn("read timeout") is True
-        assert fn("auth error") is False

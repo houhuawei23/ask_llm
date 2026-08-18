@@ -64,19 +64,6 @@ def test_log_context_defaults():
     extra = ctx.to_extra()
     assert extra["task_id"] == 1
     assert extra["provider"] == "deepseek"
-
-
-def test_log_context_with_attempt():
-    ctx = LogContext(task_id=1).with_attempt(3)
-    assert ctx.attempt == 3
-
-
-def test_log_context_with_provider_model():
-    ctx = LogContext(task_id=1).with_provider_model("qwen", "qwen-max")
-    assert ctx.provider == "qwen"
-    assert ctx.model == "qwen-max"
-
-
 def test_bind_context_returns_bound_logger():
     logger = bind_context(LogContext(task_id=42))
     assert logger is not None

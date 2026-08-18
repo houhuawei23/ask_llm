@@ -20,33 +20,18 @@ from ask_llm.utils.engine_facade import EngineConfigView, create_engine_adapter
 
 __all__ = ["EngineConfigView", "ProviderAdapterCache"]
 
-_DICT_DEPRECATION_MSG = (
-    "Passing a dict to ProviderAdapterCache.get is deprecated; pass a "
-    "ProviderConfig object instead. Support for dict inputs will be removed "
-    "in a future release."
-)
 
+def _to_provider_config(config: ProviderConfig) -> ProviderConfig:
+    """Type guard: cache inputs must be real ``ProviderConfig`` objects.
 
-def _to_provider_config(config: ProviderConfig | dict[str, Any]) -> ProviderConfig:
-    """Coerce a cache input into a real ``ProviderConfig`` object.
-
-    Accepting a ``dict`` here is the root cause of the v2.15.1
-    adapter dict-vs-object crash: a dict leaked through this seam and broke
-    downstream ``adapter.config.api_temperature`` attribute access. Dicts are
-    still accepted for backward compatibility but emit a ``DeprecationWarning``
-    and are rebuilt as a ``ProviderConfig`` so the adapter always carries an
-    object-typed config.
+    Accepting a ``dict`` here was the root cause of the v2.15.1 adapter
+    dict-vs-object crash; the deprecated dict path was removed.
     """
-    if isinstance(config, ProviderConfig):
-        return config
-    if isinstance(config, dict):
-        import warnings
-
-        warnings.warn(_DICT_DEPRECATION_MSG, DeprecationWarning, stacklevel=3)
-        return ProviderConfig(**config)
-    raise TypeError(
-        f"ProviderAdapterCache.get expects a ProviderConfig (or dict), got {type(config).__name__}"
-    )
+    if not isinstance(config, ProviderConfig):
+        raise TypeError(
+            f"ProviderAdapterCache.get expects a ProviderConfig, got {type(config).__name__}"
+        )
+    return config
 
 
 @lru_cache(maxsize=128)
@@ -131,14 +116,3 @@ class ProviderAdapterCache:
         release underlying HTTP connections.
         """
         _create_cached_adapter.cache_clear()
-
-    @classmethod
-    def info(cls) -> dict[str, Any]:
-        """Return cache statistics."""
-        cache_info = _create_cached_adapter.cache_info()
-        return {
-            "hits": cache_info.hits,
-            "misses": cache_info.misses,
-            "maxsize": cache_info.maxsize,
-            "currsize": cache_info.currsize,
-        }

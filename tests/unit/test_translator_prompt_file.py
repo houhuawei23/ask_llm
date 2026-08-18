@@ -26,7 +26,7 @@ class TestTranslatorPromptFile:
                 prompt_file=temp_path,
             )
 
-            prompt = translator.generate_prompt("Hello world")
+            prompt = translator.prompt_template_for_batch().replace("{content}", "Hello world")
             assert "Hello world" in prompt
             assert "中文" in prompt or "英文" in prompt
         finally:
@@ -57,7 +57,7 @@ class TestTranslatorPromptFile:
                 prompt_file=temp_path,
             )
 
-            prompt = translator.generate_prompt("Test")
+            prompt = translator.prompt_template_for_batch().replace("{content}", "Test")
             assert "Custom prompt" in prompt
             assert "Test" in prompt
         finally:
@@ -79,7 +79,7 @@ class TestTranslatorPromptFile:
                 prompt_file=temp_path,
             )
 
-            prompt = translator.generate_prompt("Test")
+            prompt = translator.prompt_template_for_batch().replace("{content}", "Test")
             assert "File prompt" in prompt
             assert "Template prompt" not in prompt
         finally:
@@ -100,7 +100,7 @@ class TestTranslatorPromptFile:
                 prompt_file=temp_path,
             )
 
-            prompt = translator.generate_prompt("Hello")
+            prompt = translator.prompt_template_for_batch().replace("{content}", "Hello")
             assert "中文" in prompt or "英文" in prompt
             assert "Hello" in prompt
         finally:

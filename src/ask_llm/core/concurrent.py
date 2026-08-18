@@ -35,7 +35,6 @@ class RunMetrics:
     failed: int = 0
     retried: int = 0
     total_latency: float = 0.0
-    average_latency: float = 0.0
     interrupted: bool = False
 
 
@@ -240,7 +239,6 @@ class BoundedRetryRunner(Generic[TTask, TResult]):
             failed=sum(1 for r in results if is_failed(r)),
             retried=retried_count,
             total_latency=total_time,
-            average_latency=total_time / len(tasks) if tasks else 0.0,
             interrupted=interrupted,
         )
         return results, metrics

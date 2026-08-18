@@ -119,15 +119,6 @@ class BaseCheckpoint(ABC, Generic[TTask, TResult]):
                 self.completed_task_ids.append(task_id)
             self.successful_results.append(result)
 
-    def add_failed_task(self, task: TTask, task_id: int) -> None:
-        """Add a failed task context for retry.
-
-        The task is only added if it is not already marked completed.
-        """
-        if task_id in self.completed_task_ids:
-            return
-        self.failed_tasks.append(task)
-
     def mark_all_failed_for_retry(self, failed_results: list[TResult]) -> None:
         """Replace the failed task list with tasks derived from failed results.
 

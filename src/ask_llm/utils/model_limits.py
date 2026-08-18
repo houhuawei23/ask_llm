@@ -116,13 +116,3 @@ def resolve_paper_max_tokens(
     if cap is not None:
         r = min(r, cap)
     return r
-
-
-def get_model_limits(
-    model: str | None,
-    limits_by_model: Mapping[str, ModelLimits] | None,
-) -> ModelLimits | None:
-    """Return limits for ``model`` if present in the catalog."""
-    if not model or not limits_by_model:
-        return None
-    return limits_by_model.get(model.strip())

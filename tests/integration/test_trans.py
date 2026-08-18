@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from ask_llm.cli import _is_directory_output, _offset_task_ids, _resolve_trans_input_paths
+from ask_llm.cli import _is_directory_output, _resolve_trans_input_paths
 from ask_llm.config.context import set_config
 from ask_llm.config.loader import ConfigLoader
 from ask_llm.config.manager import ConfigManager
@@ -51,7 +51,7 @@ Third paragraph with more content.
 
             # Test translator setup
             translator = Translator(target_language="zh", source_language="en")
-            prompt = translator.generate_prompt("Hello")
+            prompt = translator.prompt_template_for_batch().replace("{content}", "Hello")
             assert "Hello" in prompt
 
         finally:
@@ -357,35 +357,6 @@ More content.
         with tempfile.TemporaryDirectory() as tmpdir:
             out = str(Path(tmpdir) / "out")
             assert _is_directory_output(out, ["a.md"], 1) is False
-
-    def test_offset_task_ids_shifts_ids(self):
-        """_offset_task_ids shifts task and chunk IDs by the given offset."""
-        model_config = ModelConfig(provider="test", model="test-model")
-        chunks = [
-            TextChunk(content="a", chunk_id=0),
-            TextChunk(content="b", chunk_id=1),
-        ]
-        tasks = [
-            BatchTask(task_id=0, prompt="p", content="a", model_settings=model_config),
-            BatchTask(task_id=1, prompt="p", content="b", model_settings=model_config),
-        ]
-
-        new_tasks, new_chunks = _offset_task_ids(tasks, chunks, 10)
-
-        assert [c.chunk_id for c in new_chunks] == [10, 11]
-        assert [t.task_id for t in new_tasks] == [10, 11]
-        # Original objects are not mutated.
-        assert [c.chunk_id for c in chunks] == [0, 1]
-        assert [t.task_id for t in tasks] == [0, 1]
-
-    def test_offset_task_ids_preserves_mapping(self):
-        """Offset IDs keep the one-to-one mapping required by TranslationExporter."""
-        model_config = ModelConfig(provider="test", model="test-model")
-        chunks = [TextChunk(content="x", chunk_id=0)]
-        tasks = [BatchTask(task_id=0, prompt="p", content="x", model_settings=model_config)]
-
-        new_tasks, new_chunks = _offset_task_ids(tasks, chunks, 5)
-        assert new_tasks[0].task_id == new_chunks[0].chunk_id
 
 
 class TestTransPerFileBatching:

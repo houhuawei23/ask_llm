@@ -74,11 +74,6 @@ class TranslationConfig(BaseModel):
         le=128000,
         description="Completion max_tokens per translation API call (must cover zh expansion vs body)",
     )
-    min_chunk_merge_tokens: int = Field(
-        default=400,
-        ge=0,
-        description="Deprecated: rebalance merge is greedy up to max_chunk_tokens; value ignored (kept for YAML compat)",
-    )
     preserve_format: bool = Field(
         default=True,
         description="Whether to preserve original formatting in translation export",
@@ -285,16 +280,6 @@ class FormatBodyConfig(BaseModel):
     )
 
 
-class TextSplitterConfig(BaseModel):
-    """Text splitter configuration."""
-
-    max_chunk_size: int = Field(
-        default=2000,
-        gt=0,
-        description="Maximum chunk size in characters",
-    )
-
-
 class TokenConfig(BaseModel):
     """Token counting configuration."""
 
@@ -435,7 +420,6 @@ class UnifiedConfig(BaseModel):
     file: FileConfig = Field(default_factory=FileConfig)
     format_heading: FormatHeadingConfig = Field(default_factory=FormatHeadingConfig)
     format_body: FormatBodyConfig = Field(default_factory=FormatBodyConfig)
-    text_splitter: TextSplitterConfig = Field(default_factory=TextSplitterConfig)
     token: TokenConfig = Field(default_factory=TokenConfig)
     paper: PaperConfig = Field(default_factory=PaperConfig)
     rate_limits: RateLimitConfig = Field(default_factory=RateLimitConfig)

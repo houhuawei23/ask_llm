@@ -39,7 +39,7 @@ def _merge_adjacent_greedy(
     """Merge adjacent translation bodies left-to-right while the combined body fits the budget.
 
     Chunks are merged as raw markdown/text only; the translation prompt is applied later per
-    merged chunk (see ``Translator.generate_prompt``). The fit test goes through
+    merged chunk (see ``Translator.prompt_template_for_batch``). The fit test goes through
     :class:`TokenBudget` so merged chunks respect the safety factor and prompt
     overhead, keeping the merge consistent with the split.
     """
@@ -87,7 +87,6 @@ def rebalance_translation_chunks(
     model: str,
     *,
     max_chunk_tokens: int = 2400,
-    min_merge_tokens: int = 400,
     enabled: bool = True,
     prompt_overhead: int = 0,
 ) -> list[TextChunk]:
@@ -100,7 +99,6 @@ def rebalance_translation_chunks(
         chunks: Chunks from TextSplitter
         model: Model name for tiktoken mapping
         max_chunk_tokens: Max body tokens per chunk after split+merge (prompt is added per chunk)
-        min_merge_tokens: Unused; kept for call-site compatibility
         enabled: When False, return chunks unchanged
         prompt_overhead: Tokens reserved for the per-chunk translation prompt template (review V2 D2)
 
@@ -109,8 +107,6 @@ def rebalance_translation_chunks(
     """
     if not enabled or not chunks:
         return chunks
-
-    _ = min_merge_tokens  # API / config compat; merge is greedy up to max_chunk_tokens only
 
     pieces: list[tuple[str, _Meta]] = []
     for c in sorted(chunks, key=lambda x: x.chunk_id):
