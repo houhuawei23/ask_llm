@@ -9,8 +9,9 @@ import typer
 
 from ask_llm.cli.errors import raise_unexpected_cli_error
 from ask_llm.config.cli_session import (
-    apply_cli_overrides_and_gate_api_key,
     bootstrap_command,
+    gate_api_key_or_exit,
+    resolve_and_prepare,
 )
 from ask_llm.services.paper_service import PaperExplainOptions, PaperService
 from ask_llm.utils.console import console
@@ -158,20 +159,20 @@ def paper(
             config_manager,
             pricing_map,
             pricing_source,
-            final_provider,
-            final_model,
         ) = bootstrap_command(
             config_path,
             pricing_path=providers_pricing,
-            cli_provider=provider,
-            cli_model=model,
         )
 
-        apply_cli_overrides_and_gate_api_key(
+        final_provider, final_model = resolve_and_prepare(
             config_manager,
-            provider=final_provider,
-            model=final_model,
+            cli_provider=provider,
+            cli_model=model,
             temperature=temperature,
+        )
+        gate_api_key_or_exit(
+            config_manager,
+            final_provider,
             skip_api_key_check=skip_api_key_check,
         )
         paper_cfg = load_result.unified_config.paper

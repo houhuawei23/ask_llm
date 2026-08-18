@@ -316,6 +316,8 @@ class ConfigLoader:
     def _app_config_from_unified(cls, unified_config: UnifiedConfig) -> AppConfig:
         """Derive the provider-facing AppConfig view from a validated UnifiedConfig."""
         providers = unified_config.providers
+        if not providers:
+            raise ValueError("At least one provider must be configured")
         default_provider = unified_config.default_provider
         if not default_provider:
             default_provider = next(iter(providers.keys()))

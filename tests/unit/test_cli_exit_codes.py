@@ -20,14 +20,17 @@ def _patch_format_bootstrap(monkeypatch):
 
     fake_manager = mock.MagicMock()
     fake_manager.get_provider_config.return_value = {"provider": "deepseek"}
-    fake_manager.get_model_override.return_value = "deepseek-chat"
-    fake_manager.get_default_model.return_value = "deepseek-chat"
 
     load_result = mock.MagicMock()
     monkeypatch.setattr(
         format_cmd, "load_cli_session", mock.MagicMock(return_value=(load_result, fake_manager))
     )
-    monkeypatch.setattr(format_cmd, "apply_cli_overrides_and_gate_api_key", mock.MagicMock())
+    monkeypatch.setattr(
+        format_cmd,
+        "resolve_and_prepare",
+        mock.MagicMock(return_value=("deepseek", "deepseek-chat")),
+    )
+    monkeypatch.setattr(format_cmd, "gate_api_key_or_exit", mock.MagicMock())
     monkeypatch.setattr(format_cmd, "create_engine_adapter", mock.MagicMock())
     monkeypatch.setattr(format_cmd, "RequestProcessor", mock.MagicMock())
 
@@ -50,10 +53,11 @@ def test_format_resume_success_exits_zero(monkeypatch, tmp_path):
     assert response.exit_code == 0, response.output
     assert "API 错误" not in response.output
     resume.assert_called_once()
-    # Bootstrap must go through the shared helper (includes the API key gate).
+    # Bootstrap must resolve through the shared entry and run the API key gate.
     from ask_llm.cli.commands import format_cmd
 
-    format_cmd.apply_cli_overrides_and_gate_api_key.assert_called_once()
+    format_cmd.resolve_and_prepare.assert_called_once()
+    format_cmd.gate_api_key_or_exit.assert_called_once()
 
 
 def test_format_invalid_type_reports_type_error(monkeypatch, tmp_path):

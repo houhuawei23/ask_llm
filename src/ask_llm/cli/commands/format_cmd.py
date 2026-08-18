@@ -10,8 +10,9 @@ import typer
 
 from ask_llm.cli.errors import raise_unexpected_cli_error
 from ask_llm.config.cli_session import (
-    apply_cli_overrides_and_gate_api_key,
+    gate_api_key_or_exit,
     load_cli_session,
+    resolve_and_prepare,
 )
 from ask_llm.core.processor import RequestProcessor
 from ask_llm.services.format_service import (
@@ -239,26 +240,22 @@ def format_cmd(
         ask-llm format doc.md --type body --resume doc.md.body_checkpoint.json
     """
     try:
-        # Load config and apply CLI overrides first so that --resume respects
+        # Load config and resolve provider/model first so that --resume respects
         # --config, --provider, --model, and --temperature.
         load_result, config_manager = load_cli_session(config_path)
-        apply_cli_overrides_and_gate_api_key(
+        _final_provider, final_model = resolve_and_prepare(
             config_manager,
-            provider=provider,
-            model=model,
+            cli_provider=provider,
+            cli_model=model,
             temperature=temperature,
         )
+        gate_api_key_or_exit(config_manager, _final_provider)
 
         provider_config = config_manager.get_provider_config()
-        default_model = config_manager.get_model_override() or config_manager.get_default_model()
 
-        if not default_model:
-            console.print_error("未指定模型。请使用 --model 或在配置中设置默认模型。")
-            raise typer.Exit(1)
-
-        llm_provider = create_engine_adapter(provider_config, default_model=default_model)
+        llm_provider = create_engine_adapter(provider_config, default_model=final_model)
         processor = RequestProcessor(llm_provider)
-        format_service = FormatService(processor=processor, model=default_model)
+        format_service = FormatService(processor=processor, model=final_model)
 
         # Handle --resume mode after config and processor are ready
         if resume:
@@ -306,7 +303,7 @@ def format_cmd(
                 resolved_files,
                 format_type=type_lower,
                 processor=processor,
-                model=default_model,
+                model=final_model,
                 prompt_file_resolved=prompt_resolved,
                 heading_batch_size=heading_batch_size,
                 heading_concurrency=heading_concurrency,
@@ -325,7 +322,7 @@ def format_cmd(
                 resolved_files,
                 format_type=type_lower,
                 processor=processor,
-                model=default_model,
+                model=final_model,
                 prompt_file_resolved=prompt_resolved,
                 heading_batch_size=heading_batch_size,
                 heading_concurrency=heading_concurrency,

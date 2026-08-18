@@ -13,7 +13,7 @@ from pathlib import Path
 from loguru import logger
 
 from ask_llm.config.manager import ConfigManager
-from ask_llm.config.unified_config import UnifiedConfig
+from ask_llm.config.unified_config import PaperConfig, UnifiedConfig
 from ask_llm.core.batch_models import (
     BatchResult,
     BatchStatistics,
@@ -189,10 +189,10 @@ class PaperService:
         if not jobs:
             raise ValueError("No jobs to run (check --run and --sections, or empty sections)")
 
-        from ask_llm.core.constants import DEFAULT_FALLBACK_MODEL
-
         paper_max_tokens = paper_cfg.max_output_tokens
-        full_model_name = (paper_cfg.full_model or "").strip() or DEFAULT_FALLBACK_MODEL
+        # PaperConfig.full_model carries the default ("deepseek-reasoner"); the
+        # class default is the single fallback source for whitespace-only values.
+        full_model_name = (paper_cfg.full_model or "").strip() or PaperConfig().full_model
         model_limits_map, _ = load_providers_model_limits()
         section_job_model = self.model
         current_provider = self.config_manager.current_provider_name

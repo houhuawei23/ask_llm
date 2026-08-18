@@ -7,7 +7,7 @@ from loguru import logger
 
 from ask_llm.config.manager import ConfigManager
 from ask_llm.core.batch_models import ModelConfig
-from ask_llm.utils.api_key_gate import api_key_is_missing_or_unresolved
+from ask_llm.utils.api_key_gate import PROVIDERS_WITHOUT_API_KEYS, api_key_is_missing_or_unresolved
 from ask_llm.utils.console import console
 from ask_llm.utils.engine_facade import create_engine_adapter
 
@@ -117,8 +117,8 @@ class InteractiveConfigHelper:
         Raises:
             ValueError: If API key cannot be configured or is invalid
         """
-        # Ollama is a local server that requires no API key
-        if provider_name == "ollama":
+        # Keyless providers (local services) need no API key
+        if provider_name in PROVIDERS_WITHOUT_API_KEYS:
             return
 
         provider_config = self.config_manager.get_provider_config(provider_name)

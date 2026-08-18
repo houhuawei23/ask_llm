@@ -23,6 +23,10 @@ _INVALID_PLACEHOLDERS = frozenset(
     }
 )
 
+# Providers that run local / keyless services and must skip API-key gating.
+# Single source for api_key_gate, interactive_config, and `config test`.
+PROVIDERS_WITHOUT_API_KEYS = frozenset({"ollama"})
+
 
 class UnresolvedAPIKeyError(ValueError):
     """Raised when a provider API key is missing/unresolved before network calls.
@@ -35,9 +39,6 @@ class UnresolvedAPIKeyError(ValueError):
 
 def provider_env_var_name(provider_name: str) -> str:
     """Conventional env var for a provider (e.g. deepseek -> DEEPSEEK_API_KEY)."""
-    # Special case: kimi uses KIMI_CODE_API_KEY (Kimi Code API)
-    if provider_name.lower() == "kimi-code":
-        return "KIMI_CODE_API_KEY"
     return f"{provider_name.upper().replace('-', '_')}_API_KEY"
 
 
@@ -60,8 +61,8 @@ def require_resolved_api_key(config_manager: ConfigManager, provider_name: str) 
     Second line of defense before batch / parallel API calls.
     Exit with a single clear message if key is still missing.
     """
-    # Ollama requires no API key
-    if provider_name == "ollama":
+    # Keyless providers (local services) need no API key
+    if provider_name in PROVIDERS_WITHOUT_API_KEYS:
         return
     pc = config_manager.get_provider_config(provider_name)
     if api_key_is_missing_or_unresolved(pc.api_key):
@@ -81,7 +82,7 @@ def ensure_resolved_provider_keys(config_manager: ConfigManager, provider_names:
     reach the provider across many concurrent calls. Ollama (no key) is skipped.
     """
     for name in provider_names:
-        if name == "ollama":
+        if name in PROVIDERS_WITHOUT_API_KEYS:
             continue
         pc = config_manager.get_provider_config(name)
         if api_key_is_missing_or_unresolved(pc.api_key):
@@ -116,8 +117,8 @@ def ensure_api_key_for_provider(
     if skip_api_key_check:
         return False
 
-    # Ollama is a local server that requires no API key
-    if provider_name == "ollama":
+    # Keyless providers (local services) are exempt from the gate
+    if provider_name in PROVIDERS_WITHOUT_API_KEYS:
         return False
 
     pc = config_manager.get_provider_config(provider_name)

@@ -25,8 +25,8 @@ OUTPUT_TOKEN_MULTIPLIERS = {
     TaskKind.FORMAT: 1.0,  # Formatting typically preserves length
 }
 
-# Default fallback model when no model is specified
-DEFAULT_FALLBACK_MODEL = "deepseek-reasoner"
+# Fallback model for batch scheduling/estimation when a task carries no model settings
+DEFAULT_BATCH_FALLBACK_MODEL = "gpt-3.5-turbo"
 
 # Minimum token estimate for tasks with zero or unknown input
 DEFAULT_MIN_OUTPUT_TOKENS = 100

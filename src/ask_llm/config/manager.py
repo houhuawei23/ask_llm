@@ -23,7 +23,16 @@ class ConfigManager:
         """
         self._base_config = config
         self._unified_config = unified_config
-        self._current_provider: str = config.default_provider
+        self._current_provider = config.default_provider
+        if self._current_provider not in config.providers:
+            # Fail fast with a clear fallback instead of surfacing a confusing
+            # "Provider '...' not found" on the first get_provider_config() call.
+            fallback = next(iter(config.providers))
+            logger.warning(
+                f"Default provider '{self._current_provider}' not found in configured "
+                f"providers; falling back to '{fallback}'"
+            )
+            self._current_provider = fallback
         self._overrides: dict[str, Any] = {}
         # Track the source of each override for transparency/debugging.
         # Maps override key -> source label (e.g. "CLI", "ENV", "default_config.yml").

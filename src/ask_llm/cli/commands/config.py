@@ -11,7 +11,10 @@ from ask_llm.cli.common import _config_init
 from ask_llm.cli.errors import cli_errors
 from ask_llm.config.context import set_config
 from ask_llm.config.loader import ConfigLoader
-from ask_llm.utils.api_key_gate import api_key_is_missing_or_unresolved
+from ask_llm.utils.api_key_gate import (
+    PROVIDERS_WITHOUT_API_KEYS,
+    api_key_is_missing_or_unresolved,
+)
 from ask_llm.utils.console import console
 from ask_llm.utils.engine_facade import create_engine_adapter
 
@@ -120,7 +123,9 @@ def config(
 
                 pc = config.providers[name]
 
-                if name != "ollama" and api_key_is_missing_or_unresolved(pc.api_key):
+                if name not in PROVIDERS_WITHOUT_API_KEYS and api_key_is_missing_or_unresolved(
+                    pc.api_key
+                ):
                     console.print_warning(f"[{name}] API key not configured")
                     continue
 

@@ -21,6 +21,7 @@ from ask_llm.core.batch_models import (
 )
 from ask_llm.core.concurrent import BoundedRetryRunner, RunMetrics
 from ask_llm.core.constants import (
+    DEFAULT_BATCH_FALLBACK_MODEL,
     DEFAULT_MIN_OUTPUT_TOKENS,
     OUTPUT_TOKEN_MULTIPLIERS,
     TaskKind,
@@ -210,7 +211,9 @@ class GlobalBatchProcessor:
             List of batch results
         """
         default_model = (
-            tasks[0].model_settings.model if tasks and tasks[0].model_settings else "gpt-3.5-turbo"
+            tasks[0].model_settings.model
+            if tasks and tasks[0].model_settings
+            else DEFAULT_BATCH_FALLBACK_MODEL
         )
         pending_tasks = sort_batch_tasks_by_estimated_input(tasks.copy(), default_model)
 
@@ -238,7 +241,11 @@ class GlobalBatchProcessor:
                 )
                 input_token_estimate = TokenCounter.estimate_tokens(
                     estimated_prompt,
-                    task.model_settings.model if task.model_settings else "gpt-3.5-turbo",
+                    (
+                        task.model_settings.model
+                        if task.model_settings
+                        else DEFAULT_BATCH_FALLBACK_MODEL
+                    ),
                 )["token_count"]
                 estimated_output = estimate_output_tokens(
                     task.task_kind if hasattr(task, "task_kind") else "translation",
