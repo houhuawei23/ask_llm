@@ -14,9 +14,7 @@ from ask_llm.utils.prompt_resolver import resolve_prompt_file
 _DEFAULTS_FILENAME = "paper-explain-pipeline.defaults.yml"
 
 
-def _entry_for_stem(
-    entries: list[FullPromptEntry], stem: str
-) -> FullPromptEntry | None:
+def _entry_for_stem(entries: list[FullPromptEntry], stem: str) -> FullPromptEntry | None:
     """First entry whose template filename stem matches *stem*, if any."""
     for e in entries:
         if Path(e.file).stem == stem:

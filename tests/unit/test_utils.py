@@ -27,7 +27,6 @@ class TestTokenCounter:
             assert TokenCounter._get_encoding("") == "cl100k_base"
             assert TokenCounter._get_encoding("totally-unknown-model") == "cl100k_base"
 
-
     def test_count_characters(self):
         """Test character counting."""
         assert TokenCounter.count_characters("") == 0

@@ -302,7 +302,9 @@ def test_on_result_exception_does_not_break_run():
         is_failed=lambda r: False,
         error_message=lambda r: r.error,
         retry_count_from_result=lambda r: r.retry_count,
-        on_result=lambda r: calls.append(r.task_id) if r.task_id != 1 else (_ for _ in ()).throw(ValueError("boom")),
+        on_result=lambda r: calls.append(r.task_id)
+        if r.task_id != 1
+        else (_ for _ in ()).throw(ValueError("boom")),
         order_key=lambda r: r.task_id,
     )
     assert len(results) == 3  # run completed despite the callback raising

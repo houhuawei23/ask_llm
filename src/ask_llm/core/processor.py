@@ -294,7 +294,9 @@ class RequestProcessor:
         Returns:
             Chat history
         """
-        history = ChatHistory(provider=self.provider.name, model=model or self.provider.default_model)
+        history = ChatHistory(
+            provider=self.provider.name, model=model or self.provider.default_model
+        )
 
         if system_prompt:
             history.add_message(MessageRole.SYSTEM, system_prompt)

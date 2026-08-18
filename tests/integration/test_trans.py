@@ -46,8 +46,7 @@ Third paragraph with more content.
 
             assert len(chunks) >= 1
             assert all(
-                TokenCounter.count_tokens(chunk.content, "deepseek-chat") <= 25
-                for chunk in chunks
+                TokenCounter.count_tokens(chunk.content, "deepseek-chat") <= 25 for chunk in chunks
             )
 
             # Test translator setup

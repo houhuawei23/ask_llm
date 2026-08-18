@@ -57,9 +57,7 @@ class TestBinarySplitter:
         assert chunks[0].metadata["type"] == "full_document"
 
     def test_splits_by_headings(self):
-        sections = "\n\n".join(
-            f"## Section {i}\n\n" + ("content " * 40) for i in range(4)
-        )
+        sections = "\n\n".join(f"## Section {i}\n\n" + ("content " * 40) for i in range(4))
         text = f"# Doc\n\n{sections}\n"
         chunks = _split(text, 80)
         assert len(chunks) > 1
@@ -101,7 +99,7 @@ class TestBinarySplitter:
         chunks = BinarySplitter(budget).split(text)
         assert len(chunks) >= 1
         # all content preserved
-        assert "".join(c.content for c in chunks).replace(" ", "") .replace("\n", "") >= (
+        assert "".join(c.content for c in chunks).replace(" ", "").replace("\n", "") >= (
             text.replace(" ", "").replace("\n", "")
         )
 

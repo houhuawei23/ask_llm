@@ -574,6 +574,4 @@ def test_position_join_hard_split_verbatim():
     original = "aaabbb"
     spans = [(0, 3), (3, 6)]
     types = ["character_split", "character_split"]
-    assert (
-        BodyFormatter._join_chunks_position_aware(parts, spans, original, types) == "aaabbb"
-    )
+    assert BodyFormatter._join_chunks_position_aware(parts, spans, original, types) == "aaabbb"

@@ -93,9 +93,7 @@ class TestConfigLoader:
             # MAX_CONCURRENT_API_CALLS is later in ENV_TO_CONFIG order -> wins.
             assert load_result.unified_config.translation.max_concurrent_api_calls == 7
             # A conflict warning was emitted naming the winning var.
-            warning_msgs = " ".join(
-                str(c) for c in mock_logger.warning.call_args_list
-            )
+            warning_msgs = " ".join(str(c) for c in mock_logger.warning.call_args_list)
             assert "Conflicting env overrides" in warning_msgs
             assert "ASK_LLM_TRANSLATION_MAX_CONCURRENT_API_CALLS" in warning_msgs
         finally:
@@ -111,9 +109,7 @@ class TestConfigLoader:
             with patch("ask_llm.config.env.logger") as mock_logger:
                 load_result = ConfigLoader.load(sample_config_file)
             assert load_result.unified_config.translation.max_concurrent_api_calls == 4
-            warning_msgs = " ".join(
-                str(c) for c in mock_logger.warning.call_args_list
-            )
+            warning_msgs = " ".join(str(c) for c in mock_logger.warning.call_args_list)
             assert "Conflicting env overrides" not in warning_msgs
         finally:
             os.environ.pop("ASK_LLM_TRANSLATION_THREADS", None)

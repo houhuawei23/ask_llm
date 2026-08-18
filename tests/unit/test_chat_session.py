@@ -78,9 +78,7 @@ def session_user_message(provider):
 
 
 def test_from_initial_context_streams_reasoning_chunks_as_content():
-    provider = FakeProvider(
-        chunks=[ReasoningChunk(content="answer", reasoning="thinking"), "!"]
-    )
+    provider = FakeProvider(chunks=[ReasoningChunk(content="answer", reasoning="thinking"), "!"])
 
     session = ChatSession.from_initial_context(provider, model="m1", initial_context="ctx")
 

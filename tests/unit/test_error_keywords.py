@@ -19,9 +19,7 @@ class TestClassify:
     def test_categories(self):
         assert classify_error_message("429 too many requests") == ErrorCategory.RATE_LIMIT
         assert classify_error_message("connection timed out") == ErrorCategory.TIMEOUT
-        assert classify_error_message("blocked by content filter") == (
-            ErrorCategory.CONTENT_FILTER
-        )
+        assert classify_error_message("blocked by content filter") == (ErrorCategory.CONTENT_FILTER)
         assert classify_error_message("context length exceeded, input too long") == (
             ErrorCategory.MODEL_ERROR
         )
