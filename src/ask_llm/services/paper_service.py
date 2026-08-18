@@ -7,7 +7,7 @@ argument parsing and user-facing error handling.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 from loguru import logger
@@ -21,7 +21,7 @@ from ask_llm.core.batch_models import (
     ModelConfig,
     TaskStatus,
 )
-from ask_llm.core.execution_report import ExecutionReport, build_report_from_batch_results
+from ask_llm.core.execution_report import build_report_from_batch_results
 from ask_llm.core.global_batch_runner import run_global_batch_tasks
 from ask_llm.core.models import AppConfig
 from ask_llm.core.paper_explain import (
@@ -43,7 +43,6 @@ from ask_llm.core.paper_explain_pipeline import (
     load_paper_explain_pipeline,
     parse_section_job_key,
 )
-from ask_llm.core.tasks.builders import build_paper_explain_task
 from ask_llm.utils.console import console
 from ask_llm.utils.fallback_chain import build_fallback_chain
 from ask_llm.utils.file_handler import FileHandler
@@ -74,17 +73,6 @@ class PaperExplainOptions:
 
 
 @dataclass
-class PaperJobResult:
-    """Result of a single paper-explain job."""
-
-    task_id: int
-    key: str
-    output_file: Path
-    success: bool
-    error: str | None = None
-
-
-@dataclass
 class PaperSessionResult:
     """Aggregate result of a paper-explain session.
 
@@ -96,12 +84,6 @@ class PaperSessionResult:
     # "ok" | "dry_run" | "nothing_to_do" | "failed"
     status: str = "ok"
     error: str | None = None
-    job_results: list[PaperJobResult] = field(default_factory=list)
-    statistics: dict[str, BatchStatistics] = field(default_factory=dict)
-    total_jobs: int = 0
-    skipped_count: int = 0
-    explain_root: Path | None = None
-    report: ExecutionReport | None = None
 
 
 class PaperService:
@@ -207,13 +189,9 @@ class PaperService:
                 section_job_model,
                 current_provider,
             )
-            return PaperSessionResult(
-                status="dry_run",
-                total_jobs=len(jobs),
-                explain_root=explain_root,
-            )
+            return PaperSessionResult(status="dry_run")
 
-        jobs_with_orig_idx, skipped_count = self._apply_resume_or_force(
+        jobs_with_orig_idx, _skipped_count = self._apply_resume_or_force(
             jobs,
             explain_root,
             explain_pipeline,
@@ -223,26 +201,14 @@ class PaperService:
 
         if not jobs_with_orig_idx:
             console.print_info("All sections already completed. Nothing to do.")
-            return PaperSessionResult(
-                status="nothing_to_do",
-                total_jobs=len(jobs),
-                skipped_count=skipped_count,
-                explain_root=explain_root,
-            )
+            return PaperSessionResult(status="nothing_to_do")
 
         idx_to_meta: dict[int, tuple[str, str, str | None]] = {}
         paper_tasks: list[BatchTask] = []
 
         for orig_idx, (key, body, appendix_h2) in jobs_with_orig_idx:
-            template = load_prompt_template(prompt_dir, key, pipeline=explain_pipeline)
-            label = section_label_for_job(bundle, key, appendix_h2, pipeline=explain_pipeline)
-            heading = self._resolve_heading(bundle, key, appendix_h2, explain_pipeline)
-            full_prompt = format_prompt(
-                template,
-                paper_title=bundle.paper_title,
-                section_name=label,
-                content=body,
-                section_heading=heading,
+            template, full_prompt = self._render_job_prompt(
+                bundle, key, body, appendix_h2, explain_pipeline, prompt_dir
             )
             job_model = full_model_name if key.startswith("full") else section_job_model
             eff_max = resolve_paper_max_tokens(job_model, paper_max_tokens, model_limits_map)
@@ -261,12 +227,14 @@ class PaperService:
                 fallback_configs = build_fallback_chain(self.app_config, model_config)
             idx_to_meta[orig_idx] = (key, template, appendix_h2)
             paper_tasks.append(
-                build_paper_explain_task(
-                    orig_idx,
-                    full_prompt,
-                    model_settings=model_config,
+                BatchTask(
+                    task_id=orig_idx,
+                    prompt=full_prompt,
+                    content="",
                     output_filename=f"paper:{key}",
-                    return_reasoning=(key.startswith("full")),
+                    model_settings=model_config,
+                    task_kind="paper_explain",
+                    return_reasoning=key.startswith("full"),
                     fallback_model_configs=fallback_configs,
                 )
             )
@@ -291,21 +259,10 @@ class PaperService:
             for r in failed:
                 console.print_error(f"Paper job {r.task_id} failed: {r.error or 'unknown error'}")
             errors = "; ".join(f"job {r.task_id}: {r.error or 'unknown'}" for r in failed)
-            return PaperSessionResult(
-                status="failed",
-                error=errors,
-                total_jobs=len(jobs),
-                skipped_count=skipped_count,
-                explain_root=explain_root,
-            )
+            return PaperSessionResult(status="failed", error=errors)
 
-        session_result = PaperSessionResult(
-            total_jobs=len(jobs),
-            skipped_count=skipped_count,
-            explain_root=explain_root,
-        )
         for result in sorted(results, key=lambda r: r.task_id):
-            job_result = self._write_result(
+            self._write_result(
                 result,
                 idx_to_meta,
                 bundle,
@@ -316,20 +273,10 @@ class PaperService:
                 options.include_metadata,
                 options.force,
             )
-            session_result.job_results.append(job_result)
 
-        session_result.statistics = BatchStatistics.from_results(results)
-        session_result.report = build_report_from_batch_results(
-            "paper",
-            results,
-            metadata={
-                "input_path": str(input_path),
-                "run_mode": options.run_mode,
-                "pipeline": options.pipeline_path,
-            },
-        )
-        self._print_usage(session_result.statistics)
-        return session_result
+        statistics = BatchStatistics.from_results(results)
+        self._print_usage(statistics)
+        return PaperSessionResult()
 
     def _build_jobs(
         self,
@@ -463,6 +410,33 @@ class PaperService:
         base, _ = parse_section_job_key(key, explain_pipeline)
         return bundle.section_headings.get(base or key)
 
+    def _render_job_prompt(
+        self,
+        bundle: PaperBundle,
+        key: str,
+        body: str,
+        appendix_h2: str | None,
+        explain_pipeline: PaperExplainPipelineConfig,
+        prompt_dir: str,
+    ) -> tuple[str, str]:
+        """Render one explain job's full prompt.
+
+        Returns:
+            (template_text, formatted_prompt) — the template is kept for the
+            output preamble summary.
+        """
+        template = load_prompt_template(prompt_dir, key, pipeline=explain_pipeline)
+        label = section_label_for_job(bundle, key, appendix_h2, pipeline=explain_pipeline)
+        heading = self._resolve_heading(bundle, key, appendix_h2, explain_pipeline)
+        full_prompt = format_prompt(
+            template,
+            paper_title=bundle.paper_title,
+            section_name=label,
+            content=body,
+            section_heading=heading,
+        )
+        return template, full_prompt
+
     def _dry_run(
         self,
         jobs: list[tuple[str, str, str | None]],
@@ -477,15 +451,8 @@ class PaperService:
         console.print(f"\n[bold]Dry Run — {len(jobs)} job(s) planned:[/bold]")
         total_tokens = 0
         for idx, (key, body, appendix_h2) in enumerate(jobs):
-            template = load_prompt_template(prompt_dir, key, pipeline=explain_pipeline)
-            label = section_label_for_job(bundle, key, appendix_h2, pipeline=explain_pipeline)
-            heading = self._resolve_heading(bundle, key, appendix_h2, explain_pipeline)
-            full_prompt = format_prompt(
-                template,
-                paper_title=bundle.paper_title,
-                section_name=label,
-                content=body,
-                section_heading=heading,
+            _template, full_prompt = self._render_job_prompt(
+                bundle, key, body, appendix_h2, explain_pipeline, prompt_dir
             )
             job_model = full_model_name if key.startswith("full") else section_job_model
             tok = TokenCounter.count_tokens(full_prompt, job_model)
@@ -549,7 +516,7 @@ class PaperService:
         full_model_name: str,
         include_metadata: bool,
         force: bool,
-    ) -> PaperJobResult:
+    ) -> None:
         """Write a single paper-explain result to disk."""
         idx = result.task_id
         key, template, appendix_h2 = idx_to_meta[idx]
@@ -608,12 +575,6 @@ class PaperService:
         text_out = preamble + body_out
         FileHandler.write(str(out_file), text_out, force=force)
         console.print_success(f"Wrote {out_file}")
-        return PaperJobResult(
-            task_id=idx,
-            key=key,
-            output_file=out_file,
-            success=True,
-        )
 
     def _print_usage(self, statistics: dict[str, BatchStatistics]) -> None:
         """Print aggregate token/cost usage by model."""

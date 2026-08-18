@@ -5,9 +5,7 @@ import typer
 
 from ask_llm.config.cli_session import resolve_and_prepare
 from ask_llm.config.manager import ConfigManager
-from ask_llm.core.batch_models import BatchTask, ModelConfig
 from ask_llm.core.models import AppConfig, ProviderConfig
-from ask_llm.core.tasks.builders import build_paper_explain_task
 
 
 def _make_config_manager(default_provider: str = "deepseek") -> ConfigManager:
@@ -105,29 +103,3 @@ def test_config_manager_falls_back_when_default_provider_invalid() -> None:
     )
     cm = ConfigManager(app_config)
     assert cm.current_provider_name == "deepseek"
-
-
-def test_batch_task_legacy_paper_mode_sets_kind() -> None:
-    mc = ModelConfig(provider="x", model="m")
-    t = BatchTask(
-        task_id=0,
-        prompt="p",
-        content="",
-        model_settings=mc,
-        paper_mode=True,
-    )
-    assert t.task_kind == "paper_explain"
-
-
-def test_build_paper_explain_task() -> None:
-    mc = ModelConfig(provider="p", model="m", max_tokens=100)
-    t = build_paper_explain_task(
-        1,
-        "full prompt",
-        model_settings=mc,
-        output_filename="paper:full",
-        return_reasoning=True,
-    )
-    assert t.task_kind == "paper_explain"
-    assert t.return_reasoning is True
-    assert t.content == ""

@@ -16,7 +16,6 @@ from ask_llm.core.paper_explain import (
     normalize_paper_explain_response,
     resolve_prompt_key,
     resolve_prompt_path,
-    split_markdown_by_headings,
     split_markdown_ordered,
 )
 
@@ -49,7 +48,8 @@ def test_split_markdown_by_headings():
         Methods body.
         """
     )
-    sections, _unmatched = split_markdown_by_headings(md)
+    # Non-standard headings are stored under extra:* keys; unmatched is always empty.
+    sections, _order, _headings = split_markdown_ordered(md)
     assert "abstract" in sections
     assert "Abs body." in sections["abstract"]
     assert "introduction" in sections

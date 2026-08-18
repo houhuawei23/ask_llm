@@ -9,16 +9,19 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from ask_llm.utils.prompt_resolver import resolve_prompt_file
+
 _DEFAULTS_FILENAME = "paper-explain-pipeline.defaults.yml"
 
-# Built-in default matching default_config.yml so @-path resolution works
-# without an active CLI config (e.g. library / embedded use).
-_DEFAULT_PROJECT_ROOT_MARKERS = (
-    "pyproject.toml",
-    "setup.py",
-    ".git",
-    "default_config.yml",
-)
+
+def _entry_for_stem(
+    entries: list[FullPromptEntry], stem: str
+) -> FullPromptEntry | None:
+    """First entry whose template filename stem matches *stem*, if any."""
+    for e in entries:
+        if Path(e.file).stem == stem:
+            return e
+    return None
 
 
 def _defaults_yaml_path() -> Path:
@@ -258,11 +261,8 @@ class PaperExplainPipelineConfig(BaseModel):
         if job_key == "full":
             return entries[0].file
         if job_key.startswith("full:"):
-            stem = job_key.split(":", 1)[1]
-            for e in entries:
-                if Path(e.file).stem == stem:
-                    return e.file
-            return None
+            e = _entry_for_stem(entries, job_key.split(":", 1)[1])
+            return e.file if e else None
         return None
 
     def label_zh_for_full_job_key(self, job_key: str) -> str | None:
@@ -271,10 +271,8 @@ class PaperExplainPipelineConfig(BaseModel):
         if job_key == "full" and entries:
             return entries[0].label_zh or self.section_labels_zh.get("full")
         if job_key.startswith("full:"):
-            stem = job_key.split(":", 1)[1]
-            for e in entries:
-                if Path(e.file).stem == stem:
-                    return e.label_zh
+            e = _entry_for_stem(entries, job_key.split(":", 1)[1])
+            return e.label_zh if e else None
         return None
 
     def resolve_template_filename_for_job(self, job_key: str) -> str | None:
@@ -285,30 +283,24 @@ class PaperExplainPipelineConfig(BaseModel):
         if job_key.startswith("combo:"):
             parts = job_key.split(":")
             if len(parts) >= 3:
-                combo_id, tpl_stem = parts[1], parts[2]
-                c = self.combo_by_id(combo_id)
+                c = self.combo_by_id(parts[1])
                 if c:
-                    for p in c.prompts:
-                        if Path(p.file).stem == tpl_stem:
-                            return p.file
+                    e = _entry_for_stem(c.prompts, parts[2])
+                    return e.file if e else None
             return None
         base, stem = parse_section_job_key(job_key, self)
         if base is None or stem is None:
             return None
-        for p in self.resolved_section_prompts(base):
-            if Path(p.file).stem == stem:
-                return p.file
-        return None
+        e = _entry_for_stem(self.resolved_section_prompts(base), stem)
+        return e.file if e else None
 
     def label_zh_for_section_job_key(self, job_key: str) -> str | None:
         """Label for ``canonical:tplstem`` section jobs."""
         base, stem = parse_section_job_key(job_key, self)
         if stem is None or base is None:
             return None
-        for p in self.resolved_section_prompts(base):
-            if Path(p.file).stem == stem:
-                return p.label_zh
-        return None
+        e = _entry_for_stem(self.resolved_section_prompts(base), stem)
+        return e.label_zh if e else None
 
     def label_zh_for_combo_job_key(self, job_key: str) -> str | None:
         if not job_key.startswith("combo:"):
@@ -316,14 +308,11 @@ class PaperExplainPipelineConfig(BaseModel):
         parts = job_key.split(":")
         if len(parts) < 3:
             return None
-        combo_id, tpl_stem = parts[1], parts[2]
-        c = self.combo_by_id(combo_id)
+        c = self.combo_by_id(parts[1])
         if not c:
             return None
-        for p in c.prompts:
-            if Path(p.file).stem == tpl_stem:
-                return p.label_zh
-        return None
+        e = _entry_for_stem(c.prompts, parts[2])
+        return e.label_zh if e else None
 
     @classmethod
     def builtin(cls) -> PaperExplainPipelineConfig:
@@ -364,12 +353,12 @@ def parse_section_job_key(
     return None, None
 
 
-def slugify_output_stem(s: str) -> str:
+def slugify_output_stem(s: str, *, max_len: int = 100, fallback: str = "combo") -> str:
     """User-facing filename stem → safe slug (lowercase, hyphenated)."""
     t = s.strip()
     t = re.sub(r"[^\w\u4e00-\u9fff]+", "-", t.lower())
     t = re.sub(r"-+", "-", t).strip("-")
-    return (t[:100] or "combo").strip("-")
+    return (t[:max_len] or fallback).strip("-")
 
 
 def merged_section_labels_zh(pipeline: PaperExplainPipelineConfig) -> dict[str, str]:
@@ -395,45 +384,23 @@ def resolve_pipeline_yaml_path(pipeline_config: str, project_root: Path | None =
     then package ``ask_llm/prompts/``.
     """
     base = pipeline_config.strip()
-    candidates: list[Path] = []
 
     if base.startswith("@"):
-        rel = base[1:].lstrip("/")
-        root = project_root
-        if root is None:
-            try:
-                from ask_llm.config.context import get_config_or_none
-
-                cwd = Path.cwd()
-                lr = get_config_or_none()
-                markers = (
-                    lr.unified_config.project_root_markers
-                    if lr is not None
-                    else _DEFAULT_PROJECT_ROOT_MARKERS
-                )
-                for marker in markers:
-                    for parent in [cwd, *list(cwd.parents)]:
-                        if (parent / marker).exists():
-                            root = parent
-                            break
-                    if root:
-                        break
-            except Exception:
-                root = None
-            if not root:
-                root = Path.cwd()
-        candidates.append((root / rel).resolve())
+        first = (
+            resolve_prompt_file(base)
+            if project_root is None
+            else (project_root / base[1:].lstrip("/")).resolve()
+        )
+        candidates = [first]
     else:
-        candidates.append(Path(base).expanduser().resolve())
+        candidates = [Path(base).expanduser().resolve()]
 
     import ask_llm as _ask_llm
 
     pkg_root = Path(_ask_llm.__file__).resolve().parent
     rel_name = Path(base[1:].lstrip("/") if base.startswith("@") else base).name
-    repo_prompts = (pkg_root.parent.parent / "prompts" / rel_name).resolve()
-    candidates.append(repo_prompts)
-    pkg_prompts = (pkg_root / "prompts" / rel_name).resolve()
-    candidates.append(pkg_prompts)
+    candidates.append((pkg_root.parent.parent / "prompts" / rel_name).resolve())
+    candidates.append((pkg_root / "prompts" / rel_name).resolve())
 
     for path in candidates:
         if path.is_file():

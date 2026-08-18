@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 from ask_llm.core.models import RequestMetadata
 from ask_llm.core.telemetry import ErrorCategory
@@ -43,19 +43,7 @@ class BatchTask(BaseModel):
         description="Ordered list of fallback provider/model configs to try on failure",
     )
     task_kind: Literal["translation_chunk", "paper_explain"] = "translation_chunk"
-    paper_mode: bool = False  # legacy; if True, task_kind is coerced to paper_explain
     return_reasoning: bool = False
-
-    @model_validator(mode="before")
-    @classmethod
-    def _legacy_paper_mode(cls, data: Any) -> Any:
-        if (
-            isinstance(data, dict)
-            and data.get("paper_mode")
-            and data.get("task_kind", "translation_chunk") == "translation_chunk"
-        ):
-            return {**data, "task_kind": "paper_explain"}
-        return data
 
 
 def sort_batch_tasks_by_estimated_input(
@@ -129,7 +117,7 @@ class BatchResult(BaseModel):
     model_settings: ModelConfig  # Model configuration used for this task
     response: str | None = None
     metadata: RequestMetadata | None = None
-    reasoning: str | None = None  # e.g. DeepSeek reasoner when paper_mode + return_reasoning
+    reasoning: str | None = None  # e.g. DeepSeek reasoner when paper_explain + return_reasoning
     status: TaskStatus = TaskStatus.PENDING
     error: str | None = None
     error_category: ErrorCategory | None = Field(
