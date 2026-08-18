@@ -23,8 +23,7 @@ from ask_llm.core.execution_report import ExecutionReport, build_report_from_bat
 from ask_llm.core.models import AppConfig
 from ask_llm.utils.api_key_gate import (
     api_key_is_missing_or_unresolved,
-    ensure_api_key_for_provider,
-    require_resolved_api_key,
+    ensure_resolved_provider_keys,
 )
 from ask_llm.utils.batch_exporter import BatchResultExporter
 from ask_llm.utils.batch_loader import BatchConfigLoader
@@ -64,7 +63,6 @@ def _validate_models(
     provider_models: list[ModelConfig],
     app_config: AppConfig,
     config_manager: ConfigManager,
-    skip_api_key_check: bool,
 ) -> _ValidationResult:
     """Validate provider/model list and test connections."""
     result = _ValidationResult()
@@ -196,14 +194,11 @@ def run_batch_from_config(
     batch_mode = batch_config.get("mode", batch_config_unified.mode)
 
     unique_providers = sorted({m.provider for m in provider_models})
-    for pname in unique_providers:
-        strict_gate = ensure_api_key_for_provider(
-            config_manager,
-            pname,
-            skip_api_key_check=skip_api_key_check,
-        )
-        if strict_gate:
-            require_resolved_api_key(config_manager, pname)
+    if not skip_api_key_check:
+        # Service-layer fail-fast (pure error, no interactive prompt / typer.Exit):
+        # the interactive gate lives in the CLI bootstrap for single-provider
+        # commands; batch resolves keys before spawning concurrent calls.
+        ensure_resolved_provider_keys(config_manager, unique_providers)
 
     # Validate all models and test connections
     console.print()
@@ -212,7 +207,6 @@ def run_batch_from_config(
         provider_models,
         app_config,
         config_manager,
-        skip_api_key_check,
     )
 
     # Skipped providers are reported once by the CLI via BatchService.print_skipped_providers().

@@ -3,7 +3,7 @@
 import pytest
 import typer
 
-from ask_llm.config.cli_session import resolve_and_prepare
+from ask_llm.config.cli_session import gate_api_key_or_exit, resolve_and_prepare
 from ask_llm.config.manager import ConfigManager
 from ask_llm.core.models import AppConfig, ProviderConfig
 
@@ -103,3 +103,29 @@ def test_config_manager_falls_back_when_default_provider_invalid() -> None:
     )
     cm = ConfigManager(app_config)
     assert cm.current_provider_name == "deepseek"
+
+
+def test_gate_api_key_or_exit_passes_with_resolved_key() -> None:
+    gate_api_key_or_exit(_make_config_manager(), "deepseek")
+
+
+def test_gate_api_key_or_exit_exits_non_interactive_without_key(monkeypatch) -> None:
+    """Missing key + non-interactive stdin must exit 1 with the env-var hint."""
+    import typer
+
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    app_config = AppConfig(
+        default_provider="deepseek",
+        providers={
+            "deepseek": ProviderConfig(
+                api_provider="deepseek",
+                api_key="${DEEPSEEK_API_KEY}",
+                api_base="https://api.example.com",
+                models=["deepseek-chat"],
+            ),
+        },
+    )
+    cm = ConfigManager(app_config)
+    with pytest.raises(typer.Exit) as excinfo:
+        gate_api_key_or_exit(cm, "deepseek")
+    assert excinfo.value.exit_code == 1

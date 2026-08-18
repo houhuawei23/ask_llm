@@ -9,7 +9,7 @@ from typing import Annotated
 import typer
 from loguru import logger
 
-from ask_llm.cli.errors import raise_unexpected_cli_error
+from ask_llm.cli.errors import cli_errors
 from ask_llm.config.cli_session import load_cli_session, load_pricing_with_hint
 from ask_llm.services.batch_service import BatchService, run_batch_from_config
 from ask_llm.utils.console import console
@@ -127,84 +127,67 @@ def batch(
         ask-llm batch batch-examples/prompt-content-pairs.yml -o results.json -f json
         ask-llm batch config.yml --threads 10 --retries 5
     """
+    _t0 = time.perf_counter()
     try:
-        _t0 = time.perf_counter()
+        with cli_errors("batch"):
+            load_result, config_manager = load_cli_session(config_path)
+            batch_cfg = load_result.unified_config.batch
+            pricing_map, _pricing_source = load_pricing_with_hint(None)
+            effective_threads = threads if threads is not None else batch_cfg.threads
+            effective_retries = retries if retries is not None else batch_cfg.retries
 
-        load_result, config_manager = load_cli_session(config_path)
-        batch_cfg = load_result.unified_config.batch
-        pricing_map, _pricing_source = load_pricing_with_hint(None)
-        effective_threads = threads if threads is not None else batch_cfg.threads
-        effective_retries = retries if retries is not None else batch_cfg.retries
+            if output_format is None and output:
+                output_path_obj = Path(output)
+                suffix = output_path_obj.suffix.lower()
+                extension_to_format = {
+                    ".json": "json",
+                    ".yaml": "yaml",
+                    ".yml": "yaml",
+                    ".csv": "csv",
+                    ".md": "markdown",
+                    ".markdown": "markdown",
+                }
+                output_format = extension_to_format.get(suffix, "json")
+                logger.debug(
+                    f"Auto-detected output format '{output_format}' from file extension '{suffix}'"
+                )
+            elif output_format is None:
+                output_format = batch_cfg.default_output_format
 
-        if output_format is None and output:
-            output_path_obj = Path(output)
-            suffix = output_path_obj.suffix.lower()
-            extension_to_format = {
-                ".json": "json",
-                ".yaml": "yaml",
-                ".yml": "yaml",
-                ".csv": "csv",
-                ".md": "markdown",
-                ".markdown": "markdown",
-            }
-            output_format = extension_to_format.get(suffix, "json")
-            logger.debug(
-                f"Auto-detected output format '{output_format}' from file extension '{suffix}'"
+            if verbose:
+                console.setup(quiet=False, debug=True)
+
+            run_result = run_batch_from_config(
+                config_file,
+                load_result.app_config,
+                config_manager,
+                batch_cfg,
+                output_format=output_format,
+                threads=effective_threads,
+                retries=effective_retries,
+                retry_delay=batch_cfg.retry_delay,
+                retry_delay_max=batch_cfg.retry_delay_max,
+                skip_api_key_check=skip_api_key_check,
+                verbose=verbose,
+                resume_checkpoint_path=resume,
+                use_fallback=fallback,
             )
-        elif output_format is None:
-            output_format = batch_cfg.default_output_format
 
-        if verbose:
-            console.setup(quiet=False, debug=True)
+            service = BatchService(
+                run_result,
+                batch_cfg,
+                pricing_map=pricing_map,
+            )
 
-        run_result = run_batch_from_config(
-            config_file,
-            load_result.app_config,
-            config_manager,
-            batch_cfg,
-            output_format=output_format,
-            threads=effective_threads,
-            retries=effective_retries,
-            retry_delay=batch_cfg.retry_delay,
-            retry_delay_max=batch_cfg.retry_delay_max,
-            skip_api_key_check=skip_api_key_check,
-            verbose=verbose,
-            resume_checkpoint_path=resume,
-            use_fallback=fallback,
-        )
+            service.print_statistics()
+            service.print_skipped_providers()
+            service.export_results(
+                output,
+                output_format,
+                split=split,
+                separate_files=separate_files,
+            )
+            service.export_report(report)
 
-        service = BatchService(
-            run_result,
-            batch_cfg,
-            pricing_map=pricing_map,
-        )
-
-        service.print_statistics()
-        service.print_skipped_providers()
-        service.export_results(
-            output,
-            output_format,
-            split=split,
-            separate_files=separate_files,
-        )
-        service.export_report(report)
-
-    except typer.Exit:
-        # typer.Exit subclasses RuntimeError; re-raise before the RuntimeError handler
-        raise
-    except FileNotFoundError as e:
-        console.print_error(str(e))
-        raise typer.Exit(1) from e
-    except ValueError as e:
-        console.print_error(str(e))
-        raise typer.Exit(1) from e
-    except RuntimeError as e:
-        console.print_error(f"API error: {e}")
-        raise typer.Exit(1) from e
-    except KeyboardInterrupt:
-        console.print("\nBatch processing interrupted by user")
-        raise typer.Exit(1) from None
-    except Exception as e:
-        raise_unexpected_cli_error("batch", e)
     finally:
         logger.debug("batch CLI wall time: {:.2f}s", time.perf_counter() - _t0)

@@ -7,7 +7,7 @@ from typing import Annotated
 
 import typer
 
-from ask_llm.cli.errors import raise_unexpected_cli_error
+from ask_llm.cli.errors import cli_errors
 from ask_llm.config.cli_session import (
     bootstrap_command,
     gate_api_key_or_exit,
@@ -97,6 +97,15 @@ def paper(
             help="Parallel LLM calls (default: paper.concurrency in config; thread pool for I/O)",
         ),
     ] = None,
+    retries: Annotated[
+        int | None,
+        typer.Option(
+            "--retries",
+            help="Maximum retries per failed job (default: paper.retries in config)",
+            min=0,
+            max=10,
+        ),
+    ] = None,
     dry_run: Annotated[
         bool,
         typer.Option(
@@ -148,7 +157,7 @@ def paper(
         ask-llm paper -i paper.md -r full
         ask-llm paper -i paper.md -j 8
     """
-    try:
+    with cli_errors("paper"):
         path = Path(input_path).expanduser().resolve()
         if not path.exists():
             console.print_error(f"Path not found: {path}")
@@ -196,6 +205,7 @@ def paper(
             resume=resume,
             pipeline_path=pipeline,
             use_fallback=fallback,
+            retries=retries,
         )
 
         service = PaperService(
@@ -219,19 +229,3 @@ def paper(
             raise typer.Exit(1)
         if session_result.status in ("dry_run", "nothing_to_do"):
             raise typer.Exit(0)
-
-    except FileNotFoundError as e:
-        console.print_error(str(e))
-        raise typer.Exit(1) from e
-    except ValueError as e:
-        console.print_error(str(e))
-        raise typer.Exit(1) from e
-    except typer.Exit:
-        # typer.Exit subclasses RuntimeError (click) — must re-raise before the
-        # RuntimeError handler below swallows it as an "API error".
-        raise
-    except RuntimeError as e:
-        console.print_error(f"API error: {e}")
-        raise typer.Exit(1) from e
-    except Exception as e:
-        raise_unexpected_cli_error("paper", e)

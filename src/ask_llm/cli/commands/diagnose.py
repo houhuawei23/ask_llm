@@ -8,7 +8,7 @@ from typing import Annotated
 
 import typer
 
-from ask_llm.cli.errors import raise_unexpected_cli_error
+from ask_llm.cli.errors import cli_errors
 from ask_llm.core.batch_models import TaskStatus
 from ask_llm.core.execution_report import ExecutionReport
 from ask_llm.core.telemetry import ErrorCategory
@@ -35,7 +35,7 @@ def diagnose(
         ask-llm diagnose report.json
         ask-llm diagnose report.json --top 5
     """
-    try:
+    with cli_errors("diagnose"):
         path = Path(report_path).expanduser().resolve()
         if not path.exists():
             console.print_error(f"Report not found: {path}")
@@ -179,12 +179,3 @@ def diagnose(
                 console.print_info(
                     f"... and {len(failed_tasks) - top_n} more failed tasks (use --top to show more)"
                 )
-
-    except FileNotFoundError as e:
-        console.print_error(str(e))
-        raise typer.Exit(1) from e
-    except ValueError as e:
-        console.print_error(f"Invalid report: {e}")
-        raise typer.Exit(1) from e
-    except Exception as e:
-        raise_unexpected_cli_error("diagnose", e)

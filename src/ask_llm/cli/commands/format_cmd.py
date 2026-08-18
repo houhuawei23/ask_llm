@@ -8,7 +8,7 @@ from typing import Annotated
 
 import typer
 
-from ask_llm.cli.errors import raise_unexpected_cli_error
+from ask_llm.cli.errors import cli_errors
 from ask_llm.config.cli_session import (
     gate_api_key_or_exit,
     load_cli_session,
@@ -239,7 +239,7 @@ def format_cmd(
         ask-llm format ./notes_dir --max-depth 1
         ask-llm format doc.md --type body --resume doc.md.body_checkpoint.json
     """
-    try:
+    with cli_errors("format"):
         # Load config and resolve provider/model first so that --resume respects
         # --config, --provider, --model, and --temperature.
         load_result, config_manager = load_cli_session(config_path)
@@ -335,21 +335,3 @@ def format_cmd(
                 retry_delay=retry_delay,
                 retry_delay_max=retry_delay_max,
             )
-
-    except typer.Exit:
-        # typer.Exit subclasses RuntimeError; re-raise before the RuntimeError handler
-        raise
-    except FileNotFoundError as e:
-        console.print_error(str(e))
-        raise typer.Exit(1) from e
-    except ValueError as e:
-        console.print_error(str(e))
-        raise typer.Exit(1) from e
-    except RuntimeError as e:
-        console.print_error(f"API 错误: {e}")
-        raise typer.Exit(1) from e
-    except KeyboardInterrupt:
-        console.print("\n用户中断")
-        raise typer.Exit(1) from None
-    except Exception as e:
-        raise_unexpected_cli_error("format", e)

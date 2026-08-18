@@ -8,11 +8,38 @@ cli/errors.py and paper.py for the known pattern).
 from unittest import mock
 
 import pytest
+import typer
 from typer.testing import CliRunner
 
 from ask_llm.cli.app import app
 
 runner = CliRunner()
+
+
+def test_cli_errors_maps_keyboard_interrupt_to_exit_1():
+    """Ctrl-C must map to exit 1 with a message, not propagate to click's Abort."""
+    from ask_llm.cli.errors import cli_errors
+
+    with pytest.raises(typer.Exit) as excinfo, cli_errors("ask"):
+        raise KeyboardInterrupt()
+    assert excinfo.value.exit_code == 1
+
+
+def test_api_key_gate_module_does_not_import_typer():
+    """Layering regression: utils/api_key_gate stays pure (no typer dependency)."""
+    import ast
+    from pathlib import Path
+
+    import ask_llm.utils.api_key_gate as gate_mod
+
+    tree = ast.parse(Path(gate_mod.__file__).read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        imported = []
+        if isinstance(node, ast.Import):
+            imported = [alias.name.split(".")[0] for alias in node.names]
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported = [node.module.split(".")[0]]
+        assert "typer" not in imported, "utils must not import typer"
 
 
 def _patch_format_bootstrap(monkeypatch):

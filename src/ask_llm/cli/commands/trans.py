@@ -20,7 +20,7 @@ except ImportError:
     )
     raise
 
-from ask_llm.cli.errors import raise_unexpected_cli_error
+from ask_llm.cli.errors import cli_errors
 from ask_llm.config.cli_session import (
     bootstrap_command,
     gate_api_key_or_exit,
@@ -236,103 +236,87 @@ def trans(
         ask-llm trans paper.md -p @prompts/tech-paper-trans.md
         ask-llm trans ./posts/ --max-parallel-files 5
     """
+    _t0 = time.perf_counter()
     try:
-        _t0 = time.perf_counter()
-        (
-            load_result,
-            config_manager,
-            pricing_map,
-            pricing_source,
-        ) = bootstrap_command(
-            config,
-            pricing_path=providers_pricing,
-        )
-        trans_cfg = load_result.unified_config.translation
-
-        final_provider, final_model = resolve_and_prepare(
-            config_manager,
-            cli_provider=provider,
-            cli_model=model,
-            temperature=trans_cfg.temperature,
-        )
-        gate_api_key_or_exit(
-            config_manager,
-            final_provider,
-            skip_api_key_check=skip_api_key_check,
-        )
-
-        options = TranslationOptions(
-            target_language=target_lang or trans_cfg.target_language,
-            source_language=trans_cfg.source_language if source_lang is None else source_lang,
-            style=trans_cfg.style,
-            threads=threads if threads is not None else trans_cfg.max_concurrent_api_calls,
-            max_parallel_files=(
-                max_parallel_files
-                if max_parallel_files is not None
-                else trans_cfg.max_parallel_files
-            ),
-            retries=retries if retries is not None else trans_cfg.retries,
-            balance_translation_chunks=trans_cfg.balance_translation_chunks
-            and not no_balance_chunks,
-            max_chunk_tokens=(
-                max_chunk_tokens if max_chunk_tokens is not None else trans_cfg.max_chunk_tokens
-            ),
-            min_chunk_merge_tokens=trans_cfg.min_chunk_merge_tokens,
-            max_output_tokens=trans_cfg.max_output_tokens,
-            preserve_format=preserve_format,
-            include_original=trans_cfg.include_original,
-            temperature=trans_cfg.temperature,
-            translatable_extensions=trans_cfg.translatable_extensions,
-            recursive_dir=trans_cfg.recursive_dir,
-            prompt_file=prompt_file,
-            resume=resume,
-            use_fallback=fallback,
-        )
-
-        service = TranslationService(
-            config_manager=config_manager,
-            unified_config=load_result.unified_config,
-            provider=final_provider,
-            model=final_model,
-            pricing_map=pricing_map,
-            pricing_source=pricing_source,
-            app_config=load_result.app_config,
-        )
-
-        session_result = service.translate_files(
-            files,
-            options,
-            output=output,
-            force=force,
-            stream=stream,
-            stream_api=stream_api,
-            glossary=glossary,
-            translated_suffix=translated_suffix,
-        )
-        service.export_report(report, session_result)
-
-        if session_result.failed_files > 0:
-            console.print_error(
-                f"Translation finished with {session_result.failed_files} failed file(s)"
+        with cli_errors("trans"):
+            (
+                load_result,
+                config_manager,
+                pricing_map,
+                pricing_source,
+            ) = bootstrap_command(
+                config,
+                pricing_path=providers_pricing,
             )
-            raise typer.Exit(1)
+            trans_cfg = load_result.unified_config.translation
 
-    except typer.Exit:
-        # typer.Exit subclasses RuntimeError; re-raise before the RuntimeError handler
-        raise
-    except FileNotFoundError as e:
-        console.print_error(str(e))
-        raise typer.Exit(1) from e
-    except ValueError as e:
-        console.print_error(str(e))
-        raise typer.Exit(1) from e
-    except RuntimeError as e:
-        console.print_error(f"API error: {e}")
-        raise typer.Exit(1) from e
-    except KeyboardInterrupt:
-        console.print("\nTranslation interrupted by user")
-        raise typer.Exit(1) from None
-    except Exception as e:
-        raise_unexpected_cli_error("trans", e)
+            final_provider, final_model = resolve_and_prepare(
+                config_manager,
+                cli_provider=provider,
+                cli_model=model,
+                temperature=trans_cfg.temperature,
+            )
+            gate_api_key_or_exit(
+                config_manager,
+                final_provider,
+                skip_api_key_check=skip_api_key_check,
+            )
+
+            options = TranslationOptions(
+                target_language=target_lang or trans_cfg.target_language,
+                source_language=trans_cfg.source_language if source_lang is None else source_lang,
+                style=trans_cfg.style,
+                threads=threads if threads is not None else trans_cfg.max_concurrent_api_calls,
+                max_parallel_files=(
+                    max_parallel_files
+                    if max_parallel_files is not None
+                    else trans_cfg.max_parallel_files
+                ),
+                retries=retries if retries is not None else trans_cfg.retries,
+                balance_translation_chunks=trans_cfg.balance_translation_chunks
+                and not no_balance_chunks,
+                max_chunk_tokens=(
+                    max_chunk_tokens if max_chunk_tokens is not None else trans_cfg.max_chunk_tokens
+                ),
+                min_chunk_merge_tokens=trans_cfg.min_chunk_merge_tokens,
+                max_output_tokens=trans_cfg.max_output_tokens,
+                preserve_format=preserve_format,
+                include_original=trans_cfg.include_original,
+                temperature=trans_cfg.temperature,
+                translatable_extensions=trans_cfg.translatable_extensions,
+                recursive_dir=trans_cfg.recursive_dir,
+                prompt_file=prompt_file,
+                resume=resume,
+                use_fallback=fallback,
+            )
+
+            service = TranslationService(
+                config_manager=config_manager,
+                unified_config=load_result.unified_config,
+                provider=final_provider,
+                model=final_model,
+                pricing_map=pricing_map,
+                pricing_source=pricing_source,
+                app_config=load_result.app_config,
+            )
+
+            session_result = service.translate_files(
+                files,
+                options,
+                output=output,
+                force=force,
+                stream=stream,
+                stream_api=stream_api,
+                glossary=glossary,
+                translated_suffix=translated_suffix,
+            )
+            service.export_report(report, session_result)
+
+            if session_result.failed_files > 0:
+                console.print_error(
+                    f"Translation finished with {session_result.failed_files} failed file(s)"
+                )
+                raise typer.Exit(1)
+
     finally:
         logger.debug("trans CLI wall time: {:.2f}s", time.perf_counter() - _t0)

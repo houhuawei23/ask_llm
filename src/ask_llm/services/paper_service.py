@@ -70,6 +70,7 @@ class PaperExplainOptions:
     resume: bool
     pipeline_path: str | None
     use_fallback: bool = True
+    retries: int | None = None
 
 
 @dataclass
@@ -248,7 +249,11 @@ class PaperService:
             paper_tasks,
             self.config_manager,
             max_workers=max_workers,
-            max_retries=self.unified_config.paper.retries,
+            max_retries=(
+                options.retries
+                if options.retries is not None
+                else self.unified_config.paper.retries
+            ),
             show_progress=True,
             clamp_workers_to_task_count=True,
         )

@@ -26,7 +26,8 @@ def cli_errors(command_name: str) -> Iterator[None]:
     except typer.Exit:
         raise
     except KeyboardInterrupt:
-        raise
+        console.print("\nInterrupted by user")
+        raise typer.Exit(1) from None
     except FileNotFoundError as e:
         console.print_error(str(e))
         raise typer.Exit(1) from e
