@@ -1,5 +1,67 @@
 # Changelog
 
+## 2.21.0 (2026-08-18)
+
+评审遗留第二轮：ask/chat 真实 bug 修复 + 命令层服务下沉 + provider/model 解析收敛单一入口
++ paper 功能瘦身（净 −261 行，删 `core/tasks/` 包；公开导入路径变更，故升 minor）。
+
+### Fixed（真实 bug）
+
+- **`chat` 初始上下文模板用 `str.format` 渲染**：模板或正文含字面 `{`/`}`（LaTeX/JSON）时直接
+  崩溃，违反 `RequestProcessor` 明文规定的 replace 语义。下沉后统一走
+  `create_chat_history`（replace 语义），含花括号回归测试。
+- **`chat` 初始轮裸调 `llm_provider.call`**：绕过 `RequestProcessor`，无 `ReasoningChunk`
+  处理、无失败回滚。改与 `_send_message` 共用 `_stream_assistant_reply`。
+- **`chat` 会话 model 二次重默认**：用原始 CLI `--model` 而非已解析 `final_model`。
+- **`ask` 流式路径 model 注入不一致**：流式传原始 `model`（可能 None），非流式经服务注入
+  已解析 model；两路统一走 `AskService.iter_stream`（注入 `self.model`）。
+- **`ask --include-reasoning` 流式丢弃正文**：`ReasoningChunk.content` 被丢弃，答案文本
+  从不显示（batch 收集器同时累积 content+reasoning，此处语义应当一致）。现 content 实时
+  流式输出、reasoning 之后以暗色块输出。
+- **`ConfigManager` 不校验 `default_provider`**：坏 YAML 默认值迟滞到首次
+  `get_provider_config` 才报错。现构造时回退第一个 provider + warning。
+
+### Changed（收敛与瘦身）
+
+- **`cli_session` 单一解析入口**：`resolve_and_prepare`（resolve → set_provider →
+  apply_overrides）+ `gate_api_key_or_exit`；删除
+  `apply_cli_overrides_and_gate_api_key`、`resolve_provider_and_model_or_exit` 与死代码
+  `resolve_default_model_or_exit`。五个命令统一走同一对入口；trans/paper 不再双重
+  `set_provider`；`format_cmd` 私有 model 解析与中文独立报错路径删除。ask 保持 dry-run
+  之后才 gate（dry-run 无需 API key）。
+- **`RequestProcessor._format_prompt` 转正为 `format_prompt`**（此前被 cli 与
+  task_executor 跨模块私有访问）；`iter_process_raw_stream` 参数 `prompt_template` 更名
+  `prompt`（实参为完整 prompt）。
+- **`AskService.iter_stream`**：新增流式入口，拥有 prompt 格式化与 model 注入；CLI 仅剩
+  展示循环。**`ChatSession.from_initial_context`**：新增引导类方法（历史组装 + 初始回复），
+  chat 命令缩为「解析 → 建 provider → start」，消灭 4 处函数内 deferred import。
+- **字面量收敛**：`gpt-3.5-turbo` → `constants.DEFAULT_BATCH_FALLBACK_MODEL`；
+  `DEFAULT_FALLBACK_MODEL` 删除（`PaperConfig.full_model` 默认值为唯一来源）；
+  `"ollama"` 免 key 特判 → `api_key_gate.PROVIDERS_WITHOUT_API_KEYS`（三处共用）；
+  删除 kimi-code 环境变量死分支（通用公式已产出 `KIMI_CODE_API_KEY`）。
+- **paper 瘦身**（无新抽象，全部为合并/删除）：
+  - 路径解析三重复 → 复用 `utils/prompt_resolver.resolve_prompt_file`；
+  - legacy `pipeline=None` 分支删除（入口 `_pipeline_or_builtin()` 归一，等价性有既有
+    测试背书）；死符号 `SECTION_ORDER` / `split_markdown_by_headings` /
+    `paper_prompt_dir_docs_relpath` 删除；
+  - 两份 H2 切分器合并为 `_split_by_h2(keep_leading=...)`；slug 函数合一；
+  - 5 处 job-key 查找收敛为 `_entry_for_stem`（公开方法名保留）；
+  - `PaperSessionResult` 缩为 `{status, error}`（其余字段均 write-only）；prompt 组装
+    四重奏合并为 `_render_job_prompt`；
+  - `core/tasks/` 包删除（仅为一个 27 行工厂存在）；`BatchTask.paper_mode` legacy 字段 +
+    validator 一并移除。
+
+### Tests
+
+- 新增：`iter_stream` ×4、`ChatSession.from_initial_context` ×6（含花括号回归、
+  ReasoningChunk、失败回滚）、`resolve_and_prepare` 未知 provider 退出、
+  ConfigManager 非法默认回退。移除 2 个 legacy-only 测试。
+- 全量：468 passed, 1 skipped。`ruff check` / `ruff format --check` 全过。
+
+### Version
+
+- `pyproject.toml`、`src/ask_llm/__init__.py`、`README.md` 升至 2.21.0。
+
 ## 2.20.0 (2026-08-18)
 
 评审 V2 A9（清死代码/shim）+ 三处真实 bug 修复。删除 `core/batch.py` 兼容 shim

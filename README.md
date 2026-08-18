@@ -1,4 +1,4 @@
-# Ask LLM v2.20.0
+# Ask LLM v2.21.0
 
 A modern command-line tool for calling multiple LLM APIs (DeepSeek, Qwen, etc.) with an elegant interface.
 
@@ -248,7 +248,8 @@ See [docs/README_ask_llm.md](docs/README_ask_llm.md) for detailed documentation.
 ## Contributors
 
 - Designed and implemented with assistance from **kimi-code** (agent) and **kimi-k2.7** (model). \
-  2.20.0 review & refactor with assistance from **ZCode** (agent) and **GLM-5.3** (model).
+  2.20.0 review & refactor with assistance from **ZCode** (agent) and **GLM-5.3** (model). \
+  2.21.0 bug fixes & consolidation with assistance from **ZCode** (agent) and **GLM-5.3** (model).
 
 ## License
 

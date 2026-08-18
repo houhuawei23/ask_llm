@@ -27,7 +27,7 @@ ask_llm/
 │   ├── core/                 # Core business logic
 │   │   ├── models.py                  # Pydantic data models (ProviderConfig/SecretStr, AppConfig, RequestMetadata)
 │   │   ├── processor.py               # RequestProcessor (prompt format + LLM call)
-│   │   ├── chat.py                    # Interactive chat session
+│   │   ├── chat.py                    # Interactive chat session (from_initial_context bootstrap)
 │   │   ├── batch_models.py            # BatchTask, BatchResult, AttemptRecord, BatchStatistics, TaskStatus
 │   │   ├── batch_processor.py         # GlobalBatchProcessor (thin orchestrator: escalation + pool sizing)
 │   │   ├── task_executor.py           # Single-config attempt: rate-limit + adapter + stream + metadata
@@ -57,10 +57,9 @@ ask_llm/
 │   │   ├── paper_explain.py           # Paper explanation pipeline
 │   │   ├── paper_explain_pipeline.py  # Paper pipeline domain model + YAML loader (moved from config/ in P2.6)
 │   │   ├── protocols.py               # LLMProviderProtocol
-│   │   ├── constants.py               # APPROX_TOKEN_SAFETY_FACTOR, TaskKind, defaults
-│   │   └── tasks/builders.py          # BatchTask factories (e.g. build_paper_explain_task)
+│   │   └── constants.py               # APPROX_TOKEN_SAFETY_FACTOR, TaskKind, defaults
 │   ├── services/            # Use-case / orchestration services
-│   │   ├── ask_service.py              # Single-request (clean reference: 0 print, 0 typer, returns dataclass)
+│   │   ├── ask_service.py              # Single-request incl. streaming iter_stream (0 typer, returns dataclass)
 │   │   ├── batch_service.py            # Batch orchestration (run_batch_from_config + BatchService print/export)
 │   │   ├── translation_service.py      # Translation aggregator (delegates to text/notebook collaborators)
 │   │   ├── text_file_translator.py     # Per-file text/markdown translation (P4.5)
@@ -76,7 +75,7 @@ ask_llm/
 │   │   ├── unified_config.py           # UnifiedConfig (single source: providers + behavior sections)
 │   │   ├── context.py                  # service-locator: get_config / get_config_or_none (13 callers)
 │   │   ├── manager.py                  # ConfigManager (provider/model overrides)
-│   │   └── cli_session.py              # CLI bootstrap (bootstrap_command, load_pricing_with_hint)
+│   │   └── cli_session.py              # CLI bootstrap (resolve_and_prepare, gate_api_key_or_exit, bootstrap_command)
 │   └── utils/              # Utility modules
 │       ├── engine_facade.py            # SINGLE llm_engine import point (create_engine_adapter, EngineConfigView)
 │       ├── provider_cache.py           # ProviderAdapterCache (process-wide LRU)
@@ -493,4 +492,5 @@ Providers are handled externally by `llm-api-engine`. Update configuration in `p
 ## Contributors
 
 - Designed and implemented with assistance from **kimi-code** (agent) and **kimi-k2.7** (model). \
-  2.20.0 review & refactor with assistance from **ZCode** (agent) and **GLM-5.3** (model).
+  2.20.0 review & refactor with assistance from **ZCode** (agent) and **GLM-5.3** (model). \
+  2.21.0 bug fixes & consolidation with assistance from **ZCode** (agent) and **GLM-5.3** (model).
