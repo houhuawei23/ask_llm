@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from ask_llm.core.models import ProcessingResult, RequestMetadata
+from ask_llm.core.protocols import ReasoningChunk
 from ask_llm.services.ask_service import AskDryRunInfo, AskResult, AskService
 
 
@@ -183,3 +184,72 @@ def test_set_processor(service):
     new_processor = MagicMock()
     service.set_processor(new_processor)
     assert service.processor is new_processor
+
+
+def test_iter_stream_without_reasoning_yields_content(service, mock_processor):
+    mock_processor.process.return_value = iter(["Hel", "lo"])
+
+    chunks = list(
+        service.iter_stream(
+            "hello",
+            prompt_template="Translate: {content}",
+            system_prompt="sys",
+            temperature=0.3,
+        )
+    )
+
+    assert chunks == ["Hel", "lo"]
+    mock_processor.process.assert_called_once_with(
+        content="hello",
+        prompt_template="Translate: {content}",
+        temperature=0.3,
+        model="gpt-4",
+        stream=True,
+        system_prompt="sys",
+    )
+
+
+def test_iter_stream_without_reasoning_unwraps_reasoning_chunks(service, mock_processor):
+    mock_processor.process.return_value = iter(
+        [ReasoningChunk(content="answer", reasoning="thinking"), " tail"]
+    )
+
+    chunks = list(service.iter_stream("hello"))
+
+    assert chunks == ["answer", " tail"]
+
+
+def test_iter_stream_with_reasoning_formats_prompt_and_yields_typed(service, mock_processor):
+    mock_processor.format_prompt.return_value = "Translate: hello"
+    mock_processor.iter_process_raw_stream.return_value = iter(
+        [ReasoningChunk(content="bonjour", reasoning="pensee")]
+    )
+
+    chunks = list(
+        service.iter_stream(
+            "hello",
+            prompt_template="Translate: {content}",
+            include_reasoning=True,
+            temperature=0.5,
+        )
+    )
+
+    assert chunks == [ReasoningChunk(content="bonjour", reasoning="pensee")]
+    mock_processor.format_prompt.assert_called_once_with("hello", "Translate: {content}")
+    mock_processor.iter_process_raw_stream.assert_called_once_with(
+        "Translate: hello",
+        temperature=0.5,
+        model="gpt-4",
+        return_reasoning=True,
+        system_prompt=None,
+    )
+
+
+def test_iter_stream_requires_processor(service):
+    service_no_proc = AskService(
+        config_manager=service.config_manager,
+        unified_config=service.unified_config,
+        model="gpt-4",
+    )
+    with pytest.raises(RuntimeError, match="RequestProcessor is not set"):
+        list(service_no_proc.iter_stream("hello"))

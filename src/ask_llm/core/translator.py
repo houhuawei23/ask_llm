@@ -90,7 +90,7 @@ class Translator:
 
         Used by :meth:`create_translation_tasks` so :class:`~ask_llm.core.processor.RequestProcessor`
         can merge ``task.content`` via ``{content}`` once. Storing a fully expanded prompt here
-        would cause :meth:`RequestProcessor._format_prompt` to append the body again.
+        would cause :meth:`RequestProcessor.format_prompt` to append the body again.
         """
         if self.custom_prompt_template:
             template = self.custom_prompt_template

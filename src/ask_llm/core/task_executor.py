@@ -207,7 +207,7 @@ class TaskExecutor:
         body_tokens: int,
     ) -> tuple[BatchResult, str]:
         """Translation chunk: format prompt + stream via RequestProcessor.process."""
-        full_prompt = processor._format_prompt(task.content, task.prompt)
+        full_prompt = processor.format_prompt(task.content, task.prompt)
 
         input_stats = TokenCounter.estimate_tokens(full_prompt, model_config.model)
         input_token_count = input_stats["token_count"]

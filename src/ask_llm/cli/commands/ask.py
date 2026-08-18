@@ -224,14 +224,13 @@ def ask(
                 console.print(result.metadata.format())
         else:
             if stream:
-                _stream_to_console(
-                    processor,
+                _print_stream(
+                    service,
                     content,
                     prompt_template=prompt_template,
-                    temperature=temperature,
-                    model=model,
                     system_prompt=system,
                     include_reasoning=include_reasoning,
+                    temperature=temperature,
                 )
             else:
                 processing_result = service.process(
@@ -249,47 +248,33 @@ def ask(
                     console.print(processing_result.metadata.format())
 
 
-def _stream_to_console(
-    processor: RequestProcessor,
+def _print_stream(
+    service: AskService,
     content: str,
     *,
     prompt_template: str | None,
-    temperature: float | None,
-    model: str | None,
     system_prompt: str | None,
     include_reasoning: bool,
+    temperature: float | None,
 ) -> None:
-    """Stream response to console, handling reasoning content if requested."""
-    if include_reasoning:
-        final_prompt = processor._format_prompt(content, prompt_template)
-        console.print("[bold blue]Response:[/bold blue] ", end="")
-        reasoning_parts: list[str] = []
-        for chunk in processor.iter_process_raw_stream(
-            final_prompt,
-            temperature=temperature,
-            model=model,
-            return_reasoning=True,
-            system_prompt=system_prompt,
-        ):
-            if isinstance(chunk, ReasoningChunk):
-                reasoning_parts.append(chunk.reasoning)
-            else:
-                console.print_stream(chunk, end="")
-        console.print()
-        if reasoning_parts:
-            console.print("[bold yellow]Reasoning:[/bold yellow]")
-            console.print("".join(reasoning_parts), style="dim")
-            console.print()
-    else:
-        console.print("[bold blue]Response:[/bold blue] ", end="")
-        for chunk in processor.process(
-            content=content,
-            prompt_template=prompt_template,
-            temperature=temperature,
-            model=model,
-            stream=True,
-            system_prompt=system_prompt,
-        ):
-            stream_chunk = chunk.content if isinstance(chunk, ReasoningChunk) else chunk
-            console.print_stream(stream_chunk, end="")
+    """Presentation-only streaming loop: content flows live, reasoning prints after."""
+    console.print("[bold blue]Response:[/bold blue] ", end="")
+    reasoning_parts: list[str] = []
+    for chunk in service.iter_stream(
+        content,
+        prompt_template=prompt_template,
+        system_prompt=system_prompt,
+        include_reasoning=include_reasoning,
+        temperature=temperature,
+    ):
+        if isinstance(chunk, ReasoningChunk):
+            reasoning_parts.append(chunk.reasoning)
+            if chunk.content:
+                console.print_stream(chunk.content, end="")
+        else:
+            console.print_stream(chunk, end="")
+    console.print()
+    if reasoning_parts:
+        console.print("[bold yellow]Reasoning:[/bold yellow]")
+        console.print("".join(reasoning_parts), style="dim")
         console.print()

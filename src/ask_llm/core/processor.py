@@ -48,7 +48,7 @@ class RequestProcessor:
             return lr.unified_config.general.default_prompt_template
         return _DEFAULT_PROMPT_TEMPLATE
 
-    def _format_prompt(self, content: str, prompt_template: str | None = None) -> str:
+    def format_prompt(self, content: str, prompt_template: str | None = None) -> str:
         """
         Format prompt with content.
 
@@ -94,7 +94,7 @@ class RequestProcessor:
         Yields:
             Response text chunks (if streaming) or full response
         """
-        prompt = self._format_prompt(content, prompt_template)
+        prompt = self.format_prompt(content, prompt_template)
         logger.debug(f"Processing request with {len(prompt)} characters")
 
         # Prepare kwargs for provider.call()
@@ -125,7 +125,7 @@ class RequestProcessor:
 
     def iter_process_raw_stream(
         self,
-        prompt_template: str,
+        prompt: str,
         *,
         temperature: float | None = None,
         model: str | None = None,
@@ -139,8 +139,8 @@ class RequestProcessor:
         When *return_reasoning* is False, yields content string fragments (same as ``process(..., stream=True)`` style).
         When True (e.g. DeepSeek reasoner), yields ReasoningChunk pairs.
         """
-        prompt = (prompt_template or "").strip()
-        logger.debug(f"Streaming raw prompt request with {len(prompt)} characters")
+        full_prompt = (prompt or "").strip()
+        logger.debug(f"Streaming raw prompt request with {len(full_prompt)} characters")
 
         call_kw: dict = {
             "temperature": temperature,
@@ -152,11 +152,11 @@ class RequestProcessor:
         if system_prompt:
             messages = [
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt},
+                {"role": "user", "content": full_prompt},
             ]
             call_kw["messages"] = messages
         else:
-            call_kw["prompt"] = prompt
+            call_kw["prompt"] = full_prompt
 
         if max_tokens is not None:
             call_kw["max_tokens"] = max_tokens
@@ -208,7 +208,7 @@ class RequestProcessor:
         if raw_prompt:
             prompt = (prompt_template or "").strip()
         else:
-            prompt = self._format_prompt(content, prompt_template)
+            prompt = self.format_prompt(content, prompt_template)
 
         # Count input tokens
         input_stats = TokenCounter.estimate_tokens(prompt, model)
@@ -280,6 +280,7 @@ class RequestProcessor:
         system_prompt: str | None = None,
         initial_context: str | None = None,
         prompt_template: str | None = None,
+        model: str | None = None,
     ) -> ChatHistory:
         """
         Create chat history with optional system prompt and initial context.
@@ -288,17 +289,18 @@ class RequestProcessor:
             system_prompt: System prompt message
             initial_context: Initial user context
             prompt_template: Template for formatting initial context
+            model: Model name recorded on the history (defaults to provider default)
 
         Returns:
             Chat history
         """
-        history = ChatHistory(provider=self.provider.name, model=self.provider.default_model)
+        history = ChatHistory(provider=self.provider.name, model=model or self.provider.default_model)
 
         if system_prompt:
             history.add_message(MessageRole.SYSTEM, system_prompt)
 
         if initial_context:
-            content = self._format_prompt(initial_context, prompt_template)
+            content = self.format_prompt(initial_context, prompt_template)
             history.add_message(MessageRole.USER, content)
 
         return history

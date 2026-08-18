@@ -129,64 +129,19 @@ def chat(
                 initial_context = FileHandler.read(input_file)
                 console.print_info(f"Loaded context: {len(initial_context)} characters")
 
-            # Load prompt template
+            # Load prompt template (file path or literal template string)
             prompt_template = None
             if prompt:
                 prompt_path = Path(prompt)
-                if prompt_path.exists() and prompt_path.is_file():
-                    prompt_template = FileHandler.read(prompt)
-                else:
-                    prompt_template = prompt
+                prompt_template = FileHandler.read(prompt) if prompt_path.is_file() else prompt
 
-            # Create chat session
-            from ask_llm.core.models import ChatHistory
-
-            history = ChatHistory(
-                provider=llm_provider.name, model=model or llm_provider.default_model
-            )
-
-            # Add system prompt
-            if system:
-                from ask_llm.core.models import ChatMessage, MessageRole
-
-                history.messages.insert(0, ChatMessage(role=MessageRole.SYSTEM, content=system))
-
-            # Add initial context
-            if initial_context:
-                if prompt_template and "{content}" in prompt_template:
-                    content = prompt_template.format(content=initial_context)
-                else:
-                    content = initial_context
-
-                from ask_llm.core.models import MessageRole
-
-                history.add_message(MessageRole.USER, content)
-
-                # Get initial response
-                console.print("[dim]Getting initial response...[/dim]")
-                messages = history.get_messages()
-
-                console.print("[bold blue]Assistant:[/bold blue] ", end="")
-                response_parts = []
-
-                for chunk in llm_provider.call(
-                    messages=messages, temperature=temperature, model=model, stream=True
-                ):
-                    response_parts.append(chunk)
-                    console.print_stream(chunk, end="")
-
-                console.print("\n")
-
-                from ask_llm.core.models import MessageRole
-
-                history.add_message(MessageRole.ASSISTANT, "".join(response_parts))
-
-            # Start interactive session
-            session = ChatSession(
-                provider=llm_provider,
+            session = ChatSession.from_initial_context(
+                llm_provider,
+                model=final_model,
                 temperature=temperature,
-                model=model or llm_provider.default_model,
-                history=history,
+                system_prompt=system,
+                initial_context=initial_context,
+                prompt_template=prompt_template,
                 config_manager=config_manager,
             )
             session.start()

@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, ClassVar
 from loguru import logger
 
 from ask_llm.core.models import ChatHistory, ChatMessage, MessageRole
+from ask_llm.core.processor import RequestProcessor
 from ask_llm.core.protocols import LLMProviderProtocol, ReasoningChunk
 from ask_llm.utils.console import console
 from ask_llm.utils.token_counter import TokenCounter
@@ -67,6 +68,58 @@ class ChatSession:
         # Shell command history
         self._last_shell_cmd: str | None = None
         self._shell_history: list[str] = []
+
+    @classmethod
+    def from_initial_context(
+        cls,
+        provider: LLMProviderProtocol,
+        *,
+        model: str,
+        temperature: float | None = None,
+        system_prompt: str | None = None,
+        initial_context: str | None = None,
+        prompt_template: str | None = None,
+        config_manager: ConfigManager | None = None,
+    ) -> ChatSession:
+        """
+        Build a session seeded with system prompt and initial context.
+
+        History assembly (correct ``{content}`` replace semantics via
+        :meth:`RequestProcessor.create_chat_history`) and the initial assistant
+        reply live here so the CLI command only parses arguments. When
+        *initial_context* is given, an initial assistant reply is streamed
+        before the interactive loop starts.
+
+        Args:
+            provider: LLM provider instance.
+            model: Resolved model name.
+            temperature: Sampling temperature.
+            system_prompt: System prompt message.
+            initial_context: Initial user context.
+            prompt_template: Template for formatting the initial context.
+            config_manager: Configuration manager for switching providers.
+
+        Returns:
+            Ready-to-start chat session.
+        """
+        processor = RequestProcessor(provider)
+        history = processor.create_chat_history(
+            system_prompt=system_prompt,
+            initial_context=initial_context,
+            prompt_template=prompt_template,
+            model=model,
+        )
+        session = cls(
+            provider=provider,
+            temperature=temperature,
+            model=model,
+            history=history,
+            config_manager=config_manager,
+        )
+        if initial_context:
+            console.print("[dim]Getting initial response...[/dim]")
+            session._stream_assistant_reply()
+        return session
 
     def start(self) -> None:
         """Start interactive chat session."""
@@ -129,9 +182,11 @@ class ChatSession:
         Args:
             content: User message content
         """
-        # Add user message to history
         self.history.add_message(MessageRole.USER, content)
+        self._stream_assistant_reply()
 
+    def _stream_assistant_reply(self) -> None:
+        """Stream an assistant reply for the current history and record it."""
         # Get messages for API
         messages = self.history.get_messages()
 

@@ -7,6 +7,7 @@ command module stays focused on argument parsing, streaming UX, and exit codes.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from ask_llm.config.manager import ConfigManager
 from ask_llm.config.unified_config import UnifiedConfig
 from ask_llm.core.models import ProcessingResult, RequestMetadata
 from ask_llm.core.processor import RequestProcessor
+from ask_llm.core.protocols import ReasoningChunk
 from ask_llm.utils.file_handler import FileHandler
 from ask_llm.utils.token_counter import TokenCounter
 
@@ -179,6 +181,53 @@ class AskService:
             system_prompt=system_prompt,
             return_reasoning=return_reasoning,
         )
+
+    def iter_stream(
+        self,
+        content: str,
+        *,
+        prompt_template: str | None = None,
+        system_prompt: str | None = None,
+        include_reasoning: bool = False,
+        temperature: float | None = None,
+    ) -> Iterator[str | ReasoningChunk]:
+        """Stream response chunks for the resolved model.
+
+        Owns prompt formatting and model injection so callers only handle
+        presentation. With ``include_reasoning`` the stream yields typed
+        :class:`ReasoningChunk` pairs (content + reasoning); without it, any
+        reasoning chunks are unwrapped to plain content fragments.
+
+        Args:
+            content: Input content.
+            prompt_template: Prompt template with {content} placeholder.
+            system_prompt: Optional system prompt.
+            include_reasoning: Request reasoning content from reasoner models.
+            temperature: Sampling temperature.
+
+        Yields:
+            Response chunks (content fragments or ReasoningChunk pairs).
+        """
+        processor = self._ensure_processor()
+        if include_reasoning:
+            final_prompt = processor.format_prompt(content, prompt_template)
+            yield from processor.iter_process_raw_stream(
+                final_prompt,
+                temperature=temperature,
+                model=self.model,
+                return_reasoning=True,
+                system_prompt=system_prompt,
+            )
+        else:
+            for chunk in processor.process(
+                content=content,
+                prompt_template=prompt_template,
+                temperature=temperature,
+                model=self.model,
+                stream=True,
+                system_prompt=system_prompt,
+            ):
+                yield chunk.content if isinstance(chunk, ReasoningChunk) else chunk
 
     def process_to_file(
         self,
