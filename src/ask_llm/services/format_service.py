@@ -364,9 +364,7 @@ class FormatService:
                     f"恢复结果标题数 ({len(result.formatted_headings)}) 与源文件标题数 "
                     f"({len(headings)}) 不一致，无法安全合并；请直接重新运行 format 命令。"
                 )
-            final_text = HeadingApplier().apply(
-                source_text, headings, result.formatted_headings
-            )
+            final_text = HeadingApplier().apply(source_text, headings, result.formatted_headings)
             still_failed = result.failed_batches
             updated_checkpoint = result.checkpoint_path
 

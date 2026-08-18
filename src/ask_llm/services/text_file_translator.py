@@ -18,7 +18,7 @@ from pathlib import Path
 from loguru import logger
 
 from ask_llm.config.manager import ConfigManager
-from ask_llm.core.batch import BatchResult, BatchTask, ModelConfig, TaskStatus
+from ask_llm.core.batch_models import BatchResult, BatchTask, ModelConfig, TaskStatus
 from ask_llm.core.command_runner import run_with_checkpoint
 from ask_llm.core.markdown_token_splitter import MarkdownTokenSplitter
 from ask_llm.core.models import AppConfig
@@ -279,9 +279,7 @@ class TextFileTranslator:
         retry_count = metrics.retried if metrics is not None else 0
 
         if outcome.interrupted:
-            console.print_warning(
-                f"翻译中断: 已保存进度到 {checkpoint_path}，使用 --resume 继续。"
-            )
+            console.print_warning(f"翻译中断: 已保存进度到 {checkpoint_path}，使用 --resume 继续。")
 
         job_result = self.export_text_file(
             job,

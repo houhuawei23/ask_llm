@@ -9,9 +9,10 @@ from typing import Annotated
 import typer
 
 from ask_llm.cli.errors import raise_unexpected_cli_error
-from ask_llm.config.context import set_config
-from ask_llm.config.loader import ConfigLoader
-from ask_llm.config.manager import ConfigManager
+from ask_llm.config.cli_session import (
+    apply_cli_overrides_and_gate_api_key,
+    load_cli_session,
+)
 from ask_llm.core.processor import RequestProcessor
 from ask_llm.services.format_service import (
     FormatService,
@@ -240,14 +241,10 @@ def format_cmd(
     try:
         # Load config and apply CLI overrides first so that --resume respects
         # --config, --provider, --model, and --temperature.
-        load_result = ConfigLoader.load(config_path)
-        set_config(load_result)
-        config_manager = ConfigManager(load_result.app_config, load_result.unified_config)
-
-        if provider:
-            config_manager.set_provider(provider)
-
-        config_manager.apply_overrides(
+        load_result, config_manager = load_cli_session(config_path)
+        apply_cli_overrides_and_gate_api_key(
+            config_manager,
+            provider=provider,
             model=model,
             temperature=temperature,
         )
@@ -342,6 +339,9 @@ def format_cmd(
                 retry_delay_max=retry_delay_max,
             )
 
+    except typer.Exit:
+        # typer.Exit subclasses RuntimeError; re-raise before the RuntimeError handler
+        raise
     except FileNotFoundError as e:
         console.print_error(str(e))
         raise typer.Exit(1) from e

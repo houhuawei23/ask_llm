@@ -1,6 +1,6 @@
 """Batch task ordering by estimated input size."""
 
-from ask_llm.core.batch import BatchTask, ModelConfig, sort_batch_tasks_by_estimated_input
+from ask_llm.core.batch_models import BatchTask, ModelConfig, sort_batch_tasks_by_estimated_input
 
 
 def test_sort_batch_tasks_descending_by_tokens() -> None:

@@ -226,3 +226,19 @@ class BatchStatistics(BaseModel):
                 )
             statistics[key] = stats
         return statistics
+
+    @classmethod
+    def combined_from_results(cls, results: list[BatchResult]) -> "BatchStatistics":
+        """Aggregate all results into one combined statistics object (all models)."""
+        per_model = cls.from_results(results)
+        combined = cls(
+            total_tasks=sum(s.total_tasks for s in per_model.values()),
+            successful_tasks=sum(s.successful_tasks for s in per_model.values()),
+            failed_tasks=sum(s.failed_tasks for s in per_model.values()),
+            total_latency=sum(s.total_latency for s in per_model.values()),
+            total_input_tokens=sum(s.total_input_tokens for s in per_model.values()),
+            total_output_tokens=sum(s.total_output_tokens for s in per_model.values()),
+        )
+        if combined.successful_tasks > 0:
+            combined.average_latency = combined.total_latency / combined.successful_tasks
+        return combined

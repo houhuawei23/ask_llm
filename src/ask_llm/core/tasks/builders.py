@@ -1,8 +1,8 @@
-"""Factories for :class:`~ask_llm.core.batch.BatchTask` (paper explain, etc.)."""
+"""Factories for :class:`~ask_llm.core.batch_models.BatchTask` (paper explain, etc.)."""
 
 from __future__ import annotations
 
-from ask_llm.core.batch import BatchTask, ModelConfig
+from ask_llm.core.batch_models import BatchTask, ModelConfig
 
 
 def build_paper_explain_task(

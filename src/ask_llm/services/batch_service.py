@@ -17,8 +17,7 @@ from loguru import logger
 
 from ask_llm.config.manager import ConfigManager
 from ask_llm.config.unified_config import BatchConfig as UnifiedBatchConfig
-from ask_llm.core.batch import BatchResult, BatchTask, ModelConfig
-from ask_llm.core.batch_models import BatchStatistics
+from ask_llm.core.batch_models import BatchResult, BatchStatistics, BatchTask, ModelConfig
 from ask_llm.core.command_runner import run_with_checkpoint
 from ask_llm.core.execution_report import ExecutionReport, build_report_from_batch_results
 from ask_llm.core.models import AppConfig
@@ -289,7 +288,6 @@ def run_batch_from_config(
         )
 
     all_results_list = outcome.results
-    global_processor = outcome.processor
 
     if outcome.interrupted:
         console.print_warning(
@@ -299,7 +297,7 @@ def run_batch_from_config(
     elif outcome.checkpoint_deleted:
         console.print_info(f"All tasks succeeded. Removed checkpoint: {checkpoint_path}")
 
-    model_statistics = global_processor.calculate_statistics(all_results_list)
+    model_statistics = BatchStatistics.from_results(all_results_list)
     report = build_report_from_batch_results(
         "batch",
         all_results_list,
@@ -504,26 +502,7 @@ class BatchService:
     def _export_single(self, output: str | None, output_format: str) -> BatchExportResult:
         """Export all results to a single file."""
         combined_results = self._combined_results()
-        combined_stats = BatchStatistics(total_tasks=len(combined_results))
-        combined_stats.successful_tasks = sum(
-            stats.successful_tasks for stats in self.run_result.model_statistics.values()
-        )
-        combined_stats.failed_tasks = sum(
-            stats.failed_tasks for stats in self.run_result.model_statistics.values()
-        )
-        combined_stats.total_latency = sum(
-            stats.total_latency for stats in self.run_result.model_statistics.values()
-        )
-        if combined_stats.successful_tasks > 0:
-            combined_stats.average_latency = (
-                combined_stats.total_latency / combined_stats.successful_tasks
-            )
-            combined_stats.total_input_tokens = sum(
-                stats.total_input_tokens for stats in self.run_result.model_statistics.values()
-            )
-            combined_stats.total_output_tokens = sum(
-                stats.total_output_tokens for stats in self.run_result.model_statistics.values()
-            )
+        combined_stats = BatchStatistics.combined_from_results(combined_results)
 
         if output:
             output_path = output

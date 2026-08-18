@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from ask_llm.core.batch import BatchResult, ModelConfig, TaskStatus
+from ask_llm.core.batch_models import BatchResult, ModelConfig, TaskStatus
 from ask_llm.core.models import RequestMetadata
 from ask_llm.core.text_splitter import TextChunk
 from ask_llm.utils.translation_exporter import TranslationExporter

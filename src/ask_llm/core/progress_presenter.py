@@ -41,8 +41,7 @@ class ProgressPresenter:
             transient=False,
         )
         self.slot_bars: list[TaskID] = [
-            self.progress.add_task(f"[dim]worker {i} idle[/dim]", total=1)
-            for i in range(num_slots)
+            self.progress.add_task(f"[dim]worker {i} idle[/dim]", total=1) for i in range(num_slots)
         ]
         self.free_slots: _queue.Queue[int] = _queue.Queue()
         for i in range(num_slots):
@@ -63,9 +62,7 @@ class ProgressPresenter:
         """
         slot_idx = self.free_slots.get()
         progress_task_id = self.slot_bars[slot_idx]
-        in_tok, est_out, model_key = self.task_meta.get(
-            task_id, (0, 1, "unknown/model")
-        )
+        in_tok, est_out, model_key = self.task_meta.get(task_id, (0, 1, "unknown/model"))
         self.progress.update(
             progress_task_id,
             description=f"[cyan]{model_key}[/cyan] Task {task_id} ({in_tok} tok in)",

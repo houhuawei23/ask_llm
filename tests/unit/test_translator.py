@@ -2,7 +2,7 @@
 
 import pytest
 
-from ask_llm.core.batch import ModelConfig
+from ask_llm.core.batch_models import ModelConfig
 from ask_llm.core.text_splitter import TextChunk
 from ask_llm.core.translator import Translator, TranslationStyle
 from ask_llm.utils.token_counter import TokenCounter

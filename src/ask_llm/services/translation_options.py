@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from ask_llm.core.batch import BatchResult
+from ask_llm.core.batch_models import BatchResult
 from ask_llm.core.execution_report import ExecutionReport
 
 

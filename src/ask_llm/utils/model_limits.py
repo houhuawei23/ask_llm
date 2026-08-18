@@ -6,11 +6,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-import yaml
 from loguru import logger
 
-from ask_llm.config.env import resolve_env_vars
-from ask_llm.utils.pricing import _candidate_providers_yml_paths
+from ask_llm.config.providers_catalog import load_first_providers_yml
 
 # DeepSeek ``/chat/completions`` per-model ``max_tokens`` caps (HTTP API), applied after
 # ``providers.yml``. Verified 2026-04: ``deepseek-chat`` [1,8192], ``deepseek-reasoner`` [1,65536].
@@ -54,48 +52,34 @@ def load_providers_model_limits(
         (limits_by_model_name, path_used)
     """
     limits: dict[str, ModelLimits] = {}
-    used: Path | None = None
-    for p in _candidate_providers_yml_paths(explicit_path):
-        if not p.is_file():
+    data, used = load_first_providers_yml(explicit_path)
+    if data is None:
+        return limits, None
+
+    for prov_id, prov_cfg in data["providers"].items():
+        if not isinstance(prov_cfg, dict):
             continue
-        try:
-            with open(p, encoding="utf-8") as f:
-                data = yaml.safe_load(f)
-            if not data:
+        for m in prov_cfg.get("models") or []:
+            if not isinstance(m, dict):
                 continue
-            data = resolve_env_vars(data)
-            providers = data.get("providers") or {}
-            for prov_id, prov_cfg in providers.items():
-                if not isinstance(prov_cfg, dict):
-                    continue
-                models = prov_cfg.get("models") or []
-                for m in models:
-                    if not isinstance(m, dict):
-                        continue
-                    name = m.get("name")
-                    if not name:
-                        continue
-                    name = str(name).strip()
-                    ctx = int(m.get("context_length") or 0)
-                    if ctx <= 0:
-                        ctx = 128_000
-                    mo = m.get("max_output")
-                    default_out, max_out = _parse_max_output(mo)
-                    if max_out < default_out:
-                        max_out = default_out
-                    if name in limits:
-                        logger.warning(
-                            f"Duplicate model name {name!r} in providers.yml "
-                            f"(provider {prov_id}); overwriting earlier entry"
-                        )
-                    limits[name] = ModelLimits(ctx, default_out, max_out)
-            used = p.resolve()
-            logger.debug(f"Loaded model limits from {used} ({len(limits)} model entries)")
-            break
-        except OSError as e:
-            logger.warning(f"Could not read providers.yml at {p}: {e}")
-        except (yaml.YAMLError, TypeError, ValueError) as e:
-            logger.warning(f"Invalid YAML or model specs in {p}: {e}")
+            name = m.get("name")
+            if not name:
+                continue
+            name = str(name).strip()
+            ctx = int(m.get("context_length") or 0)
+            if ctx <= 0:
+                ctx = 128_000
+            mo = m.get("max_output")
+            default_out, max_out = _parse_max_output(mo)
+            if max_out < default_out:
+                max_out = default_out
+            if name in limits:
+                logger.warning(
+                    f"Duplicate model name {name!r} in providers.yml "
+                    f"(provider {prov_id}); overwriting earlier entry"
+                )
+            limits[name] = ModelLimits(ctx, default_out, max_out)
+    logger.debug(f"Loaded model limits from {used} ({len(limits)} model entries)")
 
     return limits, used
 

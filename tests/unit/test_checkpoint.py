@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ask_llm.core.batch import BatchResult, BatchTask, ModelConfig
+from ask_llm.core.batch_models import BatchResult, BatchTask, ModelConfig
 from ask_llm.core.batch_checkpoint import BatchCheckpoint
 from ask_llm.core.checkpoint import CHECKPOINT_VERSION
 

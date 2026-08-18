@@ -6,7 +6,7 @@ from typing import Any
 import yaml
 from loguru import logger
 
-from ask_llm.core.batch import BatchTask, ModelConfig
+from ask_llm.core.batch_models import BatchTask, ModelConfig
 from ask_llm.utils.file_handler import FileHandler
 
 

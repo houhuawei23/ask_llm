@@ -9,7 +9,7 @@ from typing import Any, ClassVar
 import yaml
 from loguru import logger
 
-from ask_llm.core.batch import BatchResult, BatchStatistics, TaskStatus
+from ask_llm.core.batch_models import BatchResult, BatchStatistics, TaskStatus
 from ask_llm.utils.export_formats import detect_export_format
 from ask_llm.utils.file_handler import FileHandler
 

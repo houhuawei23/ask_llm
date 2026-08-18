@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from ask_llm.core.batch import BatchResult, BatchTask, ModelConfig
+from ask_llm.core.batch_models import BatchResult, BatchTask, ModelConfig
 from ask_llm.core.batch_models import BatchStatistics
 from ask_llm.services.batch_service import BatchExportResult, BatchRunResult, BatchService
 
@@ -257,7 +257,6 @@ def test_run_batch_from_config_applies_fallback_chain(tmp_path):
     config_manager.get_provider_config.return_value = app_config.providers["openai"]
 
     processor = MagicMock()
-    processor.calculate_statistics.return_value = {}
 
     with (
         patch("ask_llm.core.command_runner.run_global_batch_tasks") as mock_run,
@@ -300,7 +299,6 @@ def test_run_batch_from_config_skips_fallback_when_disabled(tmp_path):
     config_manager.get_provider_config.return_value = app_config.providers["openai"]
 
     processor = MagicMock()
-    processor.calculate_statistics.return_value = {}
 
     with (
         patch("ask_llm.core.command_runner.run_global_batch_tasks") as mock_run,

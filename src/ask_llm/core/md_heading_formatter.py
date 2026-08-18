@@ -159,8 +159,8 @@ class HeadingFormatter(ChunkedLLMJob):
             return cls._context_batch_instruction_cache
         instruction: str | None = None
         try:
-            prompt_file = Path(__file__).resolve().parent.parent / "prompts" / (
-                "md-heading-context-batch.md"
+            prompt_file = (
+                Path(__file__).resolve().parent.parent / "prompts" / ("md-heading-context-batch.md")
             )
             if prompt_file.is_file():
                 instruction = prompt_file.read_text(encoding="utf-8")

@@ -11,7 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from ask_llm.config.manager import ConfigManager
-from ask_llm.core.batch import ModelConfig
+from ask_llm.core.batch_models import ModelConfig
 from ask_llm.core.models import AppConfig
 from ask_llm.core.translator import Translator
 from ask_llm.services.translation_options import TranslationJobResult, TranslationOptions

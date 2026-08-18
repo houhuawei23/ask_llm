@@ -164,9 +164,7 @@ class FileHandler:
             raise OSError(f"Failed to write file {path}: {e}") from e
 
     @classmethod
-    def write_chunked(
-        cls, path: str | Path, content: str, on_chunk: OnChunk | None = None
-    ) -> None:
+    def write_chunked(cls, path: str | Path, content: str, on_chunk: OnChunk | None = None) -> None:
         """Write content in chunks, invoking *on_chunk* with bytes written.
 
         Progress-free I/O core (P4.10). Slices by characters (UTF-8 sequences

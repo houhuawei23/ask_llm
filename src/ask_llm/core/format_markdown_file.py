@@ -86,9 +86,7 @@ def _resolve_output_path(file_path: str, output: str | None, inplace: bool) -> s
         return file_path
     lr = get_config_or_none()
     formatted_suffix = (
-        lr.unified_config.file.formatted_suffix
-        if lr is not None
-        else _DEFAULT_FORMATTED_SUFFIX
+        lr.unified_config.file.formatted_suffix if lr is not None else _DEFAULT_FORMATTED_SUFFIX
     )
     if output:
         if Path(output).is_dir():

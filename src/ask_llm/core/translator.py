@@ -6,7 +6,7 @@ from typing import ClassVar
 
 from loguru import logger
 
-from ask_llm.core.batch import BatchTask, ModelConfig
+from ask_llm.core.batch_models import BatchTask, ModelConfig
 from ask_llm.core.text_splitter import TextChunk
 from ask_llm.utils.token_counter import TokenCounter
 

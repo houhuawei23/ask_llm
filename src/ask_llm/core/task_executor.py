@@ -337,9 +337,7 @@ class TaskExecutor:
 
         try:
             limiter = get_global_rate_limiter()
-            acquire_timeout = limiter.acquire_timeout(
-                model_config.provider, model_config.model
-            )
+            acquire_timeout = limiter.acquire_timeout(model_config.provider, model_config.model)
             acquired = limiter.acquire(
                 model_config.provider,
                 model_config.model,

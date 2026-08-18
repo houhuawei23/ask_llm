@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ask_llm.core.batch import BatchResult, BatchTask
+from ask_llm.core.batch_models import BatchResult, BatchTask
 from ask_llm.core.checkpoint import CHECKPOINT_VERSION, BaseCheckpoint
 
 

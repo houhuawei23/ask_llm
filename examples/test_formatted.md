@@ -22,7 +22,7 @@ The free energy principle is a mathematical principle of information physics: mu
 In a 2018 interview, Friston explained what it entails for the free energy principle to not be subject to falsification:[8]
 
 > I think it is useful to make a fundamental distinction at this point—that we can appeal to later.
-> 
+>
 > The distinction is between a state and process theory; i.e., the difference between a normative principle that things may or may not conform to, and a process theory or hypothesis about how that principle is realized. Under this distinction, the free energy principle stands in stark distinction to things like predictive coding and the Bayesian brain hypothesis. This is because the free energy principle is what it is — a principle. Like Hamilton's principle of stationary action, it cannot be falsified. It cannot be disproven. In fact, there's not much you can do with it, unless you ask whether measurable systems conform to the principle. On the other hand, hypotheses that the brain performs some form of Bayesian inference or predictive coding are what they are—hypotheses. These hypotheses may or may not be supported by empirical evidence.
 
 There are many examples of these hypotheses being supported by empirical evidence.[9]

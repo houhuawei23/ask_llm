@@ -33,6 +33,7 @@ class _FormatBodyDefaults:
     """Built-in defaults matching default_config.yml."""
 
     max_chunk_tokens: int = 2400
+    max_output_tokens: int = 8192
     concurrency: int = 32
     retries: int = 3
     retry_delay: float = 1.0
@@ -117,6 +118,9 @@ class BodyFormatter(ChunkedLLMJob):
         )
         self.model = model
         self.max_chunk_tokens = self._pick(max_chunk_tokens, fb_config.max_chunk_tokens)
+        # Capture at init (main thread): do not read the global config on worker
+        # threads in _process_chunk.
+        self.max_output_tokens = fb_config.max_output_tokens
 
     def format_body(
         self,
@@ -180,7 +184,9 @@ class BodyFormatter(ChunkedLLMJob):
             return BodyFormatResult(text=text, stats=stats, failed_chunks=[])
 
         # Calculate total document tokens
-        total_doc_tokens = sum(splitter._tok(chunk.content) for chunk in chunks)
+        total_doc_tokens = sum(
+            TokenCounter.count_tokens(chunk.content, self.model) for chunk in chunks
+        )
         logger.info(
             f"[BodyFormat] model={self.model}, total_doc_tokens≈{total_doc_tokens}, "
             f"chunks={len(chunks)}, concurrency={min(self.concurrency, len(chunks))}, "
@@ -264,8 +270,7 @@ class BodyFormatter(ChunkedLLMJob):
             successful_chunks=successful,
             original_text=body_text,
             chunk_spans={
-                c.chunk_id: (c.start_pos, c.end_pos, c.metadata.get("type", ""))
-                for c in chunks
+                c.chunk_id: (c.start_pos, c.end_pos, c.metadata.get("type", "")) for c in chunks
             },
         )
 
@@ -317,7 +322,7 @@ class BodyFormatter(ChunkedLLMJob):
         result = self.processor.process_with_metadata(
             content=chunk.content,
             prompt_template=template,
-            max_tokens=get_config().unified_config.format_body.max_output_tokens,
+            max_tokens=self.max_output_tokens,
         )
         assert result.metadata is not None
         return chunk.chunk_id, result.content.rstrip(), result.metadata
@@ -479,8 +484,7 @@ class BodyFormatter(ChunkedLLMJob):
         all_ids = sorted(result_map.keys())
         final_chunks = [result_map[i] for i in all_ids]
         spans_map = {
-            d["chunk_id"]: (d["start"], d["end"], d.get("type", ""))
-            for d in checkpoint.chunk_spans
+            d["chunk_id"]: (d["start"], d["end"], d.get("type", "")) for d in checkpoint.chunk_spans
         }
         formatted_text: str | None = None
         if checkpoint.original_text and len(spans_map) >= len(all_ids) and all_ids:

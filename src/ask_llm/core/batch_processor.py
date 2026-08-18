@@ -14,7 +14,6 @@ if TYPE_CHECKING:
 from ask_llm.core.batch_models import (
     AttemptRecord,
     BatchResult,
-    BatchStatistics,
     BatchTask,
     ModelConfig,
     TaskStatus,
@@ -63,16 +62,6 @@ def estimate_output_tokens(task_kind: str, input_tokens: int) -> int:
         multiplier = OUTPUT_TOKEN_MULTIPLIERS[TaskKind.BATCH]
 
     return int(input_tokens * multiplier)
-
-
-def calculate_statistics_by_model(results: list[BatchResult]) -> dict[str, BatchStatistics]:
-    """Calculate per-model statistics from batch results.
-
-    Thin delegate to :meth:`BatchStatistics.from_results` (single source of
-    truth). Kept as a module-level function for import compatibility.
-    """
-    return BatchStatistics.from_results(results)
-
 
 
 class GlobalBatchProcessor:
@@ -221,9 +210,7 @@ class GlobalBatchProcessor:
             List of batch results
         """
         default_model = (
-            tasks[0].model_settings.model
-            if tasks and tasks[0].model_settings
-            else "gpt-3.5-turbo"
+            tasks[0].model_settings.model if tasks and tasks[0].model_settings else "gpt-3.5-turbo"
         )
         pending_tasks = sort_batch_tasks_by_estimated_input(tasks.copy(), default_model)
 
@@ -342,10 +329,3 @@ class GlobalBatchProcessor:
             presenter.stop()
 
         return results
-
-    def calculate_statistics(self, results: list[BatchResult]) -> dict[str, BatchStatistics]:
-        """Calculate statistics from batch results, grouped by model.
-
-        Thin delegate to the module-level :func:`calculate_statistics_by_model`.
-        """
-        return calculate_statistics_by_model(results)

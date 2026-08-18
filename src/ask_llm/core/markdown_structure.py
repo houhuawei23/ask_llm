@@ -25,7 +25,9 @@ CODE_FENCE_PATTERN = re.compile(r"^(```|~~~).*$", re.MULTILINE)
 
 # YAML frontmatter: a ``---`` line at document start, closed by the next
 # ``---`` (or ``...``) line. Only recognized at offset 0.
-_FRONTMATTER_PATTERN = re.compile(r"\A---[ \t]*\r?\n[\s\S]*?(?:\r?\n)(?:---|\.\.\.)[ \t]*(?:\r?\n|$)")
+_FRONTMATTER_PATTERN = re.compile(
+    r"\A---[ \t]*\r?\n[\s\S]*?(?:\r?\n)(?:---|\.\.\.)[ \t]*(?:\r?\n|$)"
+)
 
 
 @dataclass(frozen=True)

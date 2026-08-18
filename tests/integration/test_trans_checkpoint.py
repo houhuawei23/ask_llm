@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from ask_llm.core.batch import BatchResult, BatchTask, ModelConfig
+from ask_llm.core.batch_models import BatchResult, BatchTask, ModelConfig
 from ask_llm.core.batch_checkpoint import BatchCheckpoint
 from ask_llm.core.batch_models import TaskStatus
 

@@ -5,7 +5,7 @@ import typer
 
 from ask_llm.config.cli_session import resolve_provider_and_model_or_exit
 from ask_llm.config.manager import ConfigManager
-from ask_llm.core.batch import BatchTask, ModelConfig
+from ask_llm.core.batch_models import BatchTask, ModelConfig
 from ask_llm.core.models import AppConfig, ProviderConfig
 from ask_llm.core.tasks.builders import build_paper_explain_task
 

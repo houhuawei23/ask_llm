@@ -20,6 +20,14 @@ TResult = TypeVar("TResult")
 CHECKPOINT_VERSION = 1
 
 
+def atomic_write_text(path: str | Path, payload: str) -> None:
+    """Write *payload* to *path* atomically (tmp file + os.replace)."""
+    path = Path(path)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path.write_text(payload, encoding="utf-8")
+    tmp_path.replace(path)
+
+
 @dataclass
 class BaseCheckpoint(ABC, Generic[TTask, TResult]):
     """Generic checkpoint for commands that can resume after interruption.
@@ -88,11 +96,8 @@ class BaseCheckpoint(ABC, Generic[TTask, TResult]):
 
     def save(self, path: str | Path) -> None:
         """Atomically save checkpoint to JSON file."""
-        path = Path(path)
         payload = json.dumps(self.to_dict(), ensure_ascii=False, indent=2)
-        tmp_path = path.with_suffix(path.suffix + ".tmp")
-        tmp_path.write_text(payload, encoding="utf-8")
-        tmp_path.replace(path)
+        atomic_write_text(path, payload)
         logger.info(f"Checkpoint saved to {path}")
 
     @classmethod

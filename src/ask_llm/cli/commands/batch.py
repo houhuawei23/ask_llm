@@ -189,6 +189,9 @@ def batch(
         )
         service.export_report(report)
 
+    except typer.Exit:
+        # typer.Exit subclasses RuntimeError; re-raise before the RuntimeError handler
+        raise
     except FileNotFoundError as e:
         console.print_error(str(e))
         raise typer.Exit(1) from e

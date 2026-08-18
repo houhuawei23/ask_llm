@@ -29,7 +29,6 @@ ask_llm/
 │   │   ├── processor.py               # RequestProcessor (prompt format + LLM call)
 │   │   ├── chat.py                    # Interactive chat session
 │   │   ├── batch_models.py            # BatchTask, BatchResult, AttemptRecord, BatchStatistics, TaskStatus
-│   │   ├── batch.py                   # Backward-compatible re-exports (compat shim)
 │   │   ├── batch_processor.py         # GlobalBatchProcessor (thin orchestrator: escalation + pool sizing)
 │   │   ├── task_executor.py           # Single-config attempt: rate-limit + adapter + stream + metadata
 │   │   ├── stream_collector.py        # Streaming + token collection (pure)
@@ -493,4 +492,5 @@ Providers are handled externally by `llm-api-engine`. Update configuration in `p
 
 ## Contributors
 
-- Designed and implemented with assistance from **kimi-code** (agent) and **kimi-k2.7** (model).
+- Designed and implemented with assistance from **kimi-code** (agent) and **kimi-k2.7** (model). \
+  2.20.0 review & refactor with assistance from **ZCode** (agent) and **GLM-5.3** (model).

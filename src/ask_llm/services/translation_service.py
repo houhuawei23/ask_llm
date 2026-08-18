@@ -20,7 +20,7 @@ from loguru import logger
 
 from ask_llm.config.manager import ConfigManager
 from ask_llm.config.unified_config import UnifiedConfig
-from ask_llm.core.batch import BatchResult
+from ask_llm.core.batch_models import BatchResult
 from ask_llm.core.execution_report import build_report_from_batch_results
 from ask_llm.core.models import AppConfig
 from ask_llm.core.text_splitter import TextSplitter

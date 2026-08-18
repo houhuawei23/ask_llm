@@ -10,7 +10,7 @@ from pathlib import Path
 
 import typer
 
-from ask_llm.core.batch import BatchTask
+from ask_llm.core.batch_models import BatchTask
 from ask_llm.core.text_splitter import TextChunk
 from ask_llm.utils.console import console
 from ask_llm.utils.path_resolver import (  # noqa: F401  (re-export)

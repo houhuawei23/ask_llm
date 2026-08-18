@@ -5,7 +5,8 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from ask_llm.config.manager import ConfigManager
-from ask_llm.core.batch import BatchResult, BatchTask, GlobalBatchProcessor
+from ask_llm.core.batch_models import BatchResult, BatchTask
+from ask_llm.core.batch_processor import GlobalBatchProcessor
 from ask_llm.utils.api_key_gate import ensure_resolved_provider_keys
 
 
@@ -50,7 +51,9 @@ def run_global_batch_tasks(
         effective_workers = max(1, max_workers)
 
     # Extract rate_limit_config from config_manager's unified config
-    rate_limit_config = config_manager.unified_config.rate_limits if config_manager.unified_config else None
+    rate_limit_config = (
+        config_manager.unified_config.rate_limits if config_manager.unified_config else None
+    )
 
     processor = GlobalBatchProcessor(
         max_workers=effective_workers,

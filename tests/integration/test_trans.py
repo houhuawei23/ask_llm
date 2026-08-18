@@ -9,7 +9,7 @@ from ask_llm.cli import _is_directory_output, _offset_task_ids, _resolve_trans_i
 from ask_llm.config.context import set_config
 from ask_llm.config.loader import ConfigLoader
 from ask_llm.config.manager import ConfigManager
-from ask_llm.core.batch import BatchResult, BatchTask, ModelConfig, TaskStatus
+from ask_llm.core.batch_models import BatchResult, BatchTask, ModelConfig, TaskStatus
 from ask_llm.core.models import RequestMetadata
 from ask_llm.core.markdown_token_splitter import MarkdownTokenSplitter
 from ask_llm.utils.token_counter import TokenCounter

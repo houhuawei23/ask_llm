@@ -1,5 +1,48 @@
 # Changelog
 
+## 2.20.0 (2026-08-18)
+
+评审 V2 A9（清死代码/shim）+ 三处真实 bug 修复。删除 `core/batch.py` 兼容 shim
+（公开导入路径变更，故升 minor）。
+
+### Fixed（真实 bug）
+
+- **`typer.Exit` 被 `except RuntimeError` 吞掉**（`format_cmd.py` / `trans.py` / `batch.py`）：
+  `typer.Exit` 是 `RuntimeError` 子类，`format --resume` 成功路径的 `Exit(0)` 会被误标为
+  「API 错误」并以 exit 1 退出。三处均在 `except RuntimeError` 前补 `except typer.Exit: raise`
+  （与 `paper.py`、`cli/errors.py` 的既有模式对齐）。新增回归测试
+  `tests/unit/test_cli_exit_codes.py`。
+- **`md_body_formatter.py` 引用未导入的 `get_config`**：body 格式化每个 chunk 调用必触发
+  `NameError`。改为 `__init__`（主线程）捕获 `max_output_tokens` 为实例属性，同时消除
+  worker 线程读取全局配置的隐患。
+- **`format_cmd` bootstrap 绕过 API key gate**：内联重写了 config 加载且未做 key 预检。
+  改用 `load_cli_session` + `apply_cli_overrides_and_gate_api_key` 统一入口（与 ask/trans 一致）。
+
+### Changed（A9 死代码清理与收敛）
+
+- **删除 `core/batch.py` re-export shim**：26 处导入迁移至 `batch_models` / `batch_processor`。
+- **`markdown_token_splitter.py` 删死委托**：`_tok` / `_fits` / `_pos_in_code_fence` 与 3 个
+  pattern 别名移除；`md_body_formatter` 改直连 `TokenCounter.count_tokens`。
+- **`checkpoint.py` 提取 `atomic_write_text()`**：`format_checkpoint.save` 复用，从非原子
+  `write_text` 改为 tmp + `os.replace`。
+- **统计收敛单一来源**：删 `batch_processor` 两层 thin delegate（`calculate_statistics` /
+  `calculate_statistics_by_model`）；`paper_service` / `batch_service` 直连
+  `BatchStatistics.from_results`；`_export_single` 20 行手工求和替换为新增 classmethod
+  `BatchStatistics.combined_from_results`。
+- **providers.yml 收敛单一解析入口**：新增 `config/providers_catalog.load_first_providers_yml()`，
+  `utils/pricing.py` 与 `utils/model_limits.py` 各删约 30 行重复的路径候选 + YAML 解析 +
+  错误处理；显式路径优先级提升为最高。
+
+### Tests
+
+- 新增：`tests/unit/test_cli_exit_codes.py`（resume 成功 exit 0、错误类型消息不被误标、
+  key gate 经统一入口调用）。
+- 全量：458 passed, 1 skipped。`ruff check src/ tests/` 全过。
+
+### Version
+
+- `pyproject.toml`、`src/ask_llm/__init__.py`、`README.md` 升至 2.20.0。
+
 ## 2.19.3 (2026-07-19)
 
 D6 — 增量 checkpoint（评审 V2 §8 R1 item 3）。`batch`/`trans` 运行期间周期性落盘，

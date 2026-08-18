@@ -19,6 +19,8 @@ from typing import Any
 
 from loguru import logger
 
+from ask_llm.core.checkpoint import atomic_write_text
+
 CHECKPOINT_VERSION = 2
 
 
@@ -127,12 +129,9 @@ class FormatCheckpoint:
         )
 
     def save(self, path: str | Path) -> None:
-        """Save checkpoint to JSON file."""
-        path = Path(path)
-        path.write_text(
-            json.dumps(self.to_dict(), ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        """Atomically save checkpoint to JSON file."""
+        payload = json.dumps(self.to_dict(), ensure_ascii=False, indent=2)
+        atomic_write_text(path, payload)
         logger.info(f"Checkpoint saved to {path}")
 
     @classmethod

@@ -26,7 +26,7 @@
 en:
 
 ```markdown
-Next-token prediction has revolutionized the field of language models [1], enabling breakthroughs such as ChatGPT [7] and sparking discussions about the early signs of artificial general intelligence [8]. 
+Next-token prediction has revolutionized the field of language models [1], enabling breakthroughs such as ChatGPT [7] and sparking discussions about the early signs of artificial general intelligence [8].
 ```
 
 zh:

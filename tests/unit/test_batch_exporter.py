@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from ask_llm.core.batch import BatchResult, BatchStatistics, ModelConfig, TaskStatus
+from ask_llm.core.batch_models import BatchResult, BatchStatistics, ModelConfig, TaskStatus
 from ask_llm.core.models import RequestMetadata
 from ask_llm.utils.batch_exporter import BatchResultExporter
 

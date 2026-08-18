@@ -7,7 +7,8 @@ import nbformat
 from loguru import logger
 from nbformat import NotebookNode
 
-from ask_llm.core.batch import BatchResult, BatchTask, GlobalBatchProcessor, ModelConfig, TaskStatus
+from ask_llm.core.batch_models import BatchResult, BatchTask, ModelConfig, TaskStatus
+from ask_llm.core.batch_processor import GlobalBatchProcessor
 from ask_llm.core.markdown_token_splitter import MarkdownTokenSplitter
 from ask_llm.core.text_splitter import TextChunk
 from ask_llm.core.translator import Translator
@@ -21,7 +22,9 @@ def _split_markdown_cell_tokens(
     """Split long markdown cell text by token budget (structure-aware)."""
     if not text.strip():
         return []
-    splitter = MarkdownTokenSplitter(model, max_chunk_tokens, prompt_overhead_tokens=prompt_overhead)
+    splitter = MarkdownTokenSplitter(
+        model, max_chunk_tokens, prompt_overhead_tokens=prompt_overhead
+    )
     return [c.content for c in splitter.split(text)]
 
 
@@ -149,7 +152,9 @@ class NotebookTranslator:
 
         # Process with GlobalBatchProcessor
         # Extract rate_limit_config from config_manager's unified config
-        rate_limit_config = config_manager.unified_config.rate_limits if config_manager.unified_config else None
+        rate_limit_config = (
+            config_manager.unified_config.rate_limits if config_manager.unified_config else None
+        )
 
         processor = GlobalBatchProcessor(
             max_workers=max_workers,

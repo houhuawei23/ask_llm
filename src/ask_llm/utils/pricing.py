@@ -2,28 +2,11 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
-import yaml
 from loguru import logger
 
-from ask_llm.config.env import resolve_env_vars
-
-
-def _candidate_providers_yml_paths(explicit: str | Path | None = None) -> list[Path]:
-    paths: list[Path] = []
-    env_path = os.getenv("ASK_LLM_PROVIDERS_YML")
-    if env_path:
-        paths.append(Path(env_path).expanduser())
-    if explicit:
-        paths.append(Path(explicit).expanduser())
-    paths.append(Path.cwd() / "providers.yml")
-    # Package: .../ask_llm/utils/pricing.py -> ask_llm repo root often 3 levels up
-    pkg_root = Path(__file__).resolve().parent.parent.parent.parent
-    paths.append(pkg_root / "providers.yml")
-    paths.append(Path.home() / ".config" / "ask_llm" / "providers.yml")
-    return paths
+from ask_llm.config.providers_catalog import load_first_providers_yml
 
 
 def load_providers_pricing(
@@ -37,46 +20,31 @@ def load_providers_pricing(
         {"input", "output", "input_cache_hit"} in CNY per 1M tokens.
     """
     pricing: dict[tuple[str, str], dict[str, float]] = {}
-    used: Path | None = None
-    for p in _candidate_providers_yml_paths(explicit_path):
-        if not p.is_file():
-            continue
-        try:
-            with open(p, encoding="utf-8") as f:
-                data = yaml.safe_load(f)
-            if not data:
-                continue
-            data = resolve_env_vars(data)
-            providers = data.get("providers") or {}
-            for prov_id, prov_cfg in providers.items():
-                if not isinstance(prov_cfg, dict):
-                    continue
-                models = prov_cfg.get("models") or []
-                for m in models:
-                    if not isinstance(m, dict):
-                        continue
-                    name = m.get("name")
-                    if not name:
-                        continue
-                    ppm = m.get("pricing_per_million_tokens")
-                    if not isinstance(ppm, dict):
-                        continue
-                    inp = float(ppm.get("input", 0) or 0)
-                    out = float(ppm.get("output", 0) or 0)
-                    hit = float(ppm.get("input_cache_hit", 0) or 0)
-                    pricing[(str(prov_id), str(name))] = {
-                        "input": inp,
-                        "output": out,
-                        "input_cache_hit": hit,
-                    }
-            used = p.resolve()
-            logger.debug(f"Loaded API pricing from {used} ({len(pricing)} model entries)")
-            break
-        except OSError as e:
-            logger.warning(f"Could not read providers.yml at {p}: {e}")
-        except (yaml.YAMLError, TypeError, ValueError) as e:
-            logger.warning(f"Invalid YAML or pricing in {p}: {e}")
+    data, used = load_first_providers_yml(explicit_path)
+    if data is None:
+        return pricing, None
 
+    for prov_id, prov_cfg in data["providers"].items():
+        if not isinstance(prov_cfg, dict):
+            continue
+        for m in prov_cfg.get("models") or []:
+            if not isinstance(m, dict):
+                continue
+            name = m.get("name")
+            if not name:
+                continue
+            ppm = m.get("pricing_per_million_tokens")
+            if not isinstance(ppm, dict):
+                continue
+            inp = float(ppm.get("input", 0) or 0)
+            out = float(ppm.get("output", 0) or 0)
+            hit = float(ppm.get("input_cache_hit", 0) or 0)
+            pricing[(str(prov_id), str(name))] = {
+                "input": inp,
+                "output": out,
+                "input_cache_hit": hit,
+            }
+    logger.debug(f"Loaded API pricing from {used} ({len(pricing)} model entries)")
     return pricing, used
 
 

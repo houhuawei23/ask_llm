@@ -14,7 +14,13 @@ from loguru import logger
 
 from ask_llm.config.manager import ConfigManager
 from ask_llm.config.unified_config import UnifiedConfig
-from ask_llm.core.batch import BatchResult, BatchStatistics, BatchTask, ModelConfig, TaskStatus
+from ask_llm.core.batch_models import (
+    BatchResult,
+    BatchStatistics,
+    BatchTask,
+    ModelConfig,
+    TaskStatus,
+)
 from ask_llm.core.execution_report import ExecutionReport, build_report_from_batch_results
 from ask_llm.core.global_batch_runner import run_global_batch_tasks
 from ask_llm.core.models import AppConfig
@@ -270,7 +276,7 @@ class PaperService:
             f"Paper explain: {len(paper_tasks)} job(s), "
             f"up to {max_workers} concurrent worker(s) (GlobalBatchProcessor, same as trans)"
         )
-        results, processor = run_global_batch_tasks(
+        results, _processor = run_global_batch_tasks(
             paper_tasks,
             self.config_manager,
             max_workers=options.concurrency,
@@ -312,7 +318,7 @@ class PaperService:
             )
             session_result.job_results.append(job_result)
 
-        session_result.statistics = processor.calculate_statistics(results)
+        session_result.statistics = BatchStatistics.from_results(results)
         session_result.report = build_report_from_batch_results(
             "paper",
             results,

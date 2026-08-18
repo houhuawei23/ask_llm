@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from ask_llm.core.batch import BatchResult, BatchTask, ModelConfig
+from ask_llm.core.batch_models import BatchResult, BatchTask, ModelConfig
 from ask_llm.core.batch_checkpoint import BatchCheckpoint
 from ask_llm.core.batch_models import TaskStatus
 from ask_llm.services.batch_service import run_batch_from_config
@@ -60,7 +60,6 @@ def test_batch_run_creates_checkpoint_for_failed_task(tmp_path):
         status=TaskStatus.FAILED,
     )
     processor = MagicMock()
-    processor.calculate_statistics.return_value = {}
 
     with patch("ask_llm.core.command_runner.run_global_batch_tasks") as mock_run:
         mock_run.return_value = ([result], processor)
@@ -110,7 +109,6 @@ def test_batch_resume_skips_completed_tasks(tmp_path):
     config_manager.get_provider_config.return_value = app_config.providers["openai"]
 
     processor = MagicMock()
-    processor.calculate_statistics.return_value = {}
 
     with (
         patch("ask_llm.core.command_runner.run_global_batch_tasks") as mock_run,

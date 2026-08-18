@@ -20,9 +20,9 @@ from pathlib import Path
 from loguru import logger
 
 from ask_llm.config.manager import ConfigManager
-from ask_llm.core.batch import BatchResult, BatchTask, GlobalBatchProcessor
 from ask_llm.core.batch_checkpoint import BatchCheckpoint
-from ask_llm.core.batch_models import TaskStatus
+from ask_llm.core.batch_models import BatchResult, BatchTask, TaskStatus
+from ask_llm.core.batch_processor import GlobalBatchProcessor
 from ask_llm.core.global_batch_runner import run_global_batch_tasks
 
 # D6: persist incremental checkpoint progress every N successful results so a
