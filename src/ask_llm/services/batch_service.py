@@ -257,28 +257,7 @@ def run_batch_from_config(
 
     if outcome.all_previously_completed:
         console.print_info("All tasks already completed according to checkpoint.")
-        all_results_list = list(outcome.results)
-        model_statistics = BatchStatistics.from_results(all_results_list)
-        report = build_report_from_batch_results(
-            "batch",
-            all_results_list,
-            metadata={"config_file": config_file, "checkpoint": checkpoint_path},
-        )
-        return BatchRunResult(
-            all_results=all_results_list,
-            model_statistics=model_statistics,
-            validated_models=validation.validated,
-            skipped_models=validation.skipped,
-            original_tasks=tasks,
-            batch_mode=batch_mode,
-            batch_config=batch_config,
-            config_file=config_file,
-            report=report,
-        )
-
-    all_results_list = outcome.results
-
-    if outcome.interrupted:
+    elif outcome.interrupted:
         console.print_warning(
             f"Interrupted: progress saved to checkpoint {checkpoint_path}. "
             f"Re-run with --resume to continue."
@@ -286,15 +265,37 @@ def run_batch_from_config(
     elif outcome.checkpoint_deleted:
         console.print_info(f"All tasks succeeded. Removed checkpoint: {checkpoint_path}")
 
-    model_statistics = BatchStatistics.from_results(all_results_list)
-    report = build_report_from_batch_results(
-        "batch",
+    all_results_list = outcome.results
+    return _build_run_result(
         all_results_list,
-        metadata={"config_file": config_file, "checkpoint": checkpoint_path},
+        validation,
+        tasks=tasks,
+        batch_mode=batch_mode,
+        batch_config=batch_config,
+        config_file=config_file,
+        checkpoint_path=checkpoint_path,
     )
 
+
+def _build_run_result(
+    all_results: list[BatchResult],
+    validation: _ValidationResult,
+    *,
+    tasks: list[BatchTask],
+    batch_mode: str,
+    batch_config: dict[str, Any],
+    config_file: str,
+    checkpoint_path: str,
+) -> BatchRunResult:
+    """Aggregate run results into the export-ready :class:`BatchRunResult`."""
+    model_statistics = BatchStatistics.from_results(all_results)
+    report = build_report_from_batch_results(
+        "batch",
+        all_results,
+        metadata={"config_file": config_file, "checkpoint": checkpoint_path},
+    )
     return BatchRunResult(
-        all_results=all_results_list,
+        all_results=all_results,
         model_statistics=model_statistics,
         validated_models=validation.validated,
         skipped_models=validation.skipped,
@@ -428,9 +429,7 @@ class BatchService:
         grouped: dict[str, list[BatchResult]],
     ) -> BatchExportResult:
         """Export split files: one file per original task."""
-        combined_results: list[BatchResult] = []
-        for results in grouped.values():
-            combined_results.extend(results)
+        combined_results = [r for results in grouped.values() for r in results]
 
         task_groups: dict[tuple[str, str, str | None], list[BatchResult]] = defaultdict(list)
         for result in combined_results:

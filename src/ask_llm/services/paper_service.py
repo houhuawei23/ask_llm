@@ -18,7 +18,6 @@ from ask_llm.core.batch_models import (
     BatchResult,
     BatchStatistics,
     BatchTask,
-    ModelConfig,
     TaskStatus,
 )
 from ask_llm.core.execution_report import build_report_from_batch_results
@@ -44,7 +43,7 @@ from ask_llm.core.paper_explain_pipeline import (
     parse_section_job_key,
 )
 from ask_llm.utils.console import console
-from ask_llm.utils.fallback_chain import build_fallback_chain
+from ask_llm.utils.fallback_chain import model_config_with_fallback
 from ask_llm.utils.file_handler import FileHandler
 from ask_llm.utils.model_limits import (
     load_providers_model_limits,
@@ -217,15 +216,14 @@ class PaperService:
                 f"paper job: key={key!r} model={job_model!r} max_tokens={eff_max} "
                 f"(paper.max_output_tokens={paper_max_tokens})"
             )
-            model_config = ModelConfig(
-                provider=current_provider,
-                model=job_model,
+            model_config, fallback_configs = model_config_with_fallback(
+                current_provider,
+                job_model,
                 temperature=options.temperature,
                 max_tokens=eff_max,
+                app_config=self.app_config,
+                use_fallback=options.use_fallback,
             )
-            fallback_configs: list[ModelConfig] = []
-            if options.use_fallback and self.app_config is not None:
-                fallback_configs = build_fallback_chain(self.app_config, model_config)
             idx_to_meta[orig_idx] = (key, template, appendix_h2)
             paper_tasks.append(
                 BatchTask(

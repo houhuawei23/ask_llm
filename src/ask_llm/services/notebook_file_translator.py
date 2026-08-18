@@ -11,14 +11,17 @@ from __future__ import annotations
 from pathlib import Path
 
 from ask_llm.config.manager import ConfigManager
-from ask_llm.core.batch_models import ModelConfig
 from ask_llm.core.models import AppConfig
 from ask_llm.core.translator import Translator
-from ask_llm.services.translation_options import TranslationJobResult, TranslationOptions
+from ask_llm.services.translation_options import (
+    TranslationJobResult,
+    TranslationOptions,
+    failed_job_result,
+)
 from ask_llm.utils.console import console
-from ask_llm.utils.fallback_chain import build_fallback_chain
-from ask_llm.utils.file_handler import FileHandler
+from ask_llm.utils.fallback_chain import model_config_with_fallback
 from ask_llm.utils.notebook_translator import NotebookTranslator
+from ask_llm.utils.path_resolver import resolve_translation_output_path
 from ask_llm.utils.pricing import format_cost_estimate
 
 PricingMap = dict[tuple[str, str], dict[str, float]]
@@ -60,29 +63,16 @@ class NotebookFileTranslator:
         console.print()
         console.print(f"[bold]Processing: {file_path}[/bold]")
 
-        output_path: str
-        if output:
-            output_path = output
-            if output_is_dir or Path(output).is_dir():
-                input_file = Path(file_path)
-                output_name = f"{input_file.stem}{effective_suffix}{input_file.suffix}"
-                output_path = str(Path(output) / output_name)
-        else:
-            output_path = FileHandler.generate_output_path(file_path, suffix=effective_suffix)
+        output_path = resolve_translation_output_path(
+            file_path, output, output_is_dir, suffix=effective_suffix
+        )
 
         output_file = Path(output_path)
         if output_file.exists() and not force:
             console.print_error(
                 f"Output file already exists: {output_path}. Use --force to overwrite."
             )
-            return TranslationJobResult(
-                file_path=file_path,
-                output_path=output_path,
-                input_tokens=0,
-                output_tokens=0,
-                success=False,
-                error="Output file already exists",
-            )
+            return failed_job_result(file_path, output_path, "Output file already exists")
 
         translator = Translator(
             target_language=options.target_language,
@@ -92,16 +82,14 @@ class NotebookFileTranslator:
             prompt_file=options.prompt_file,
         )
 
-        model_config = ModelConfig(
-            provider=self.provider,
-            model=self.model,
+        model_config, fallback_configs = model_config_with_fallback(
+            self.provider,
+            self.model,
             temperature=options.temperature,
             max_tokens=options.max_output_tokens,
+            app_config=self.app_config,
+            use_fallback=options.use_fallback,
         )
-
-        fallback_configs: list[ModelConfig] = []
-        if options.use_fallback and self.app_config is not None:
-            fallback_configs = build_fallback_chain(self.app_config, model_config)
 
         notebook_translator = NotebookTranslator(
             translator=translator,
@@ -124,14 +112,7 @@ class NotebookFileTranslator:
         except RuntimeError as e:
             if "API authentication failed" in str(e):
                 console.print_error(str(e))
-                return TranslationJobResult(
-                    file_path=file_path,
-                    output_path=output_path,
-                    input_tokens=0,
-                    output_tokens=0,
-                    success=False,
-                    error=str(e),
-                )
+                return failed_job_result(file_path, output_path, str(e))
             raise
 
         total = successful + failed

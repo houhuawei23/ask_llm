@@ -28,6 +28,7 @@ from ask_llm.core.format_checkpoint import (
     generate_checkpoint_path,
 )
 from ask_llm.core.processor import RequestProcessor
+from ask_llm.utils.prompt_resolver import load_prompt_template
 
 UnitT = TypeVar("UnitT")
 WorkerResultT = TypeVar("WorkerResultT")
@@ -62,7 +63,7 @@ class ChunkedLLMJob:
 
         # Load prompt from file if specified
         if prompt_file:
-            self.prompt_template = self._load_prompt_from_file(prompt_file)
+            self.prompt_template = load_prompt_template(prompt_file)
 
     @staticmethod
     def _pick(override: Any, fallback: Any) -> Any:
@@ -77,25 +78,11 @@ class ChunkedLLMJob:
         """
         template = self.prompt_template
         if not template and self.prompt_file:
-            template = self._load_prompt_from_file(self.prompt_file)
+            template = load_prompt_template(self.prompt_file)
         if not template:
             raise ValueError(error_msg)
         self.prompt_template = template
         return template
-
-    @staticmethod
-    def _load_prompt_from_file(prompt_path: str) -> str:
-        """Load prompt template from file.
-
-        Supports @ prefix for relative paths from project root.
-
-        Raises:
-            FileNotFoundError: If prompt file not found
-            OSError: If file cannot be read
-        """
-        from ask_llm.utils.prompt_resolver import load_prompt_template
-
-        return load_prompt_template(prompt_path)
 
     def _run_units(
         self,

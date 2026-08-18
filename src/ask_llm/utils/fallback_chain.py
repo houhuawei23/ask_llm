@@ -48,3 +48,29 @@ def build_fallback_chain(
             )
         )
     return result
+
+
+def model_config_with_fallback(
+    provider: str,
+    model: str,
+    *,
+    temperature: float | None,
+    max_tokens: int | None,
+    app_config: AppConfig | None,
+    use_fallback: bool = True,
+) -> tuple[ModelConfig, list[ModelConfig]]:
+    """Build the primary ``ModelConfig`` and its fallback chain in one step.
+
+    Shared by the text/notebook translators and paper explain, which all
+    combine a primary config with an optional fallback chain the same way.
+    """
+    primary = ModelConfig(
+        provider=provider,
+        model=model,
+        temperature=temperature,
+        max_tokens=max_tokens,
+    )
+    fallbacks = (
+        build_fallback_chain(app_config, primary) if use_fallback and app_config is not None else []
+    )
+    return primary, fallbacks

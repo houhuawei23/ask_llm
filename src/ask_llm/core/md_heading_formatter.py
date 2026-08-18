@@ -214,8 +214,6 @@ class HeadingFormatter(ChunkedLLMJob):
         self,
         batch: list[HeadingMatch],
         template: str,
-        start_idx: int,
-        total: int,
         context_headings: list[str] | None = None,
     ) -> list[str]:
         """Process a single batch. When context_headings provided, prepend for level consistency."""
@@ -257,16 +255,16 @@ class HeadingFormatter(ChunkedLLMJob):
 
     def _process_batch_worker(
         self,
-        batch_item: tuple[int, list[HeadingMatch], list[str] | None, int],
+        batch_item: tuple[int, list[HeadingMatch], list[str] | None],
         retry_count: int,
     ) -> "HeadingFormatter._BatchResult":
         """Process a single batch. Retry/backoff is handled by the shared runner."""
-        batch_idx, batch, context_headings, total = batch_item
+        batch_idx, batch, context_headings = batch_item
         template = self.prompt_template
         assert template is not None
         batch_text = "\n".join(h.raw_text for h in batch)
         try:
-            formatted = self._process_batch(batch, template, batch_idx, total, context_headings)
+            formatted = self._process_batch(batch, template, context_headings)
             return HeadingFormatter._BatchResult(
                 batch_idx=batch_idx,
                 success=True,
@@ -335,7 +333,7 @@ class HeadingFormatter(ChunkedLLMJob):
             batches.append((i, batch, context))
 
         # Run batches through the shared bounded runner (single queue, unified retry/backoff).
-        batch_items = [(i, batch, ctx, len(headings)) for i, batch, ctx in batches]
+        batch_items = list(batches)
         max_workers = min(self.concurrency, len(batches))
 
         if max_workers <= 1:
@@ -434,37 +432,6 @@ class HeadingFormatter(ChunkedLLMJob):
             )
         return matches
 
-    def _resume_batch_worker(
-        self, unit: tuple[int, list[HeadingMatch]], retry_count: int
-    ) -> "HeadingFormatter._BatchResult":
-        """Re-process one failed batch from a checkpoint. Runner handles retry/backoff."""
-        offset, matches = unit
-        template = self.prompt_template
-        assert template is not None
-        try:
-            formatted = self._process_batch(matches, template, offset, 0, None)
-            return HeadingFormatter._BatchResult(
-                batch_idx=offset,
-                success=True,
-                formatted=formatted,
-                original_headings=[h.raw_text for h in matches],
-                retry_count=retry_count,
-            )
-        except Exception as e:
-            return HeadingFormatter._BatchResult(
-                batch_idx=offset,
-                success=False,
-                original_headings=[h.raw_text for h in matches],
-                retry_count=retry_count,
-                failed_info=FailedChunkInfo(
-                    chunk_id=offset,
-                    content="\n".join(h.raw_text for h in matches),
-                    prompt_template=template,
-                    error=str(e),
-                    retry_count=retry_count,
-                ),
-            )
-
     @classmethod
     def resume_from_checkpoint(
         cls,
@@ -497,16 +464,16 @@ class HeadingFormatter(ChunkedLLMJob):
 
         # Rebuild failed batches: failed content is "\n"-joined raw heading
         # lines; chunk_id is the first heading ordinal of the batch.
-        units: list[tuple[int, list[HeadingMatch]]] = []
+        units: list[tuple[int, list[HeadingMatch], list[str] | None]] = []
         for fc in checkpoint.failed_chunks:
             lines = [ln for ln in fc.content.split("\n") if ln.strip()]
             if lines:
-                units.append((fc.chunk_id, cls._lines_to_matches(lines)))
+                units.append((fc.chunk_id, cls._lines_to_matches(lines), None))
 
         retry_results = formatter._retry_failed_units(
             checkpoint,
             units,
-            formatter._resume_batch_worker,
+            formatter._process_batch_worker,
             is_failed=lambda r: not r.success,
             error_message=lambda r: r.failed_info.error or "",
             retry_count_from_result=lambda r: r.retry_count,
@@ -620,27 +587,6 @@ class HeadingFormatter(ChunkedLLMJob):
 
         logger.debug(f"Parsed {len(formatted_headings)} formatted headings")
         return formatted_headings
-
-    @staticmethod
-    def _load_prompt_from_file(prompt_path: str) -> str:
-        """
-        Load prompt template from file.
-
-        Supports @ prefix for relative paths from project root.
-
-        Args:
-            prompt_path: Path to prompt file (may start with @)
-
-        Returns:
-            Prompt template content
-
-        Raises:
-            FileNotFoundError: If prompt file not found
-            OSError: If file cannot be read
-        """
-        from ask_llm.utils.prompt_resolver import load_prompt_template
-
-        return load_prompt_template(prompt_path)
 
 
 class HeadingApplier:

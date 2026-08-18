@@ -460,8 +460,9 @@ class BodyFormatter(ChunkedLLMJob):
             retry_count_from_result=lambda r: r.retry_count,
             order_key=lambda r: r.chunk_id,
         )
+        failed_by_id = {f.chunk_id: f for f in checkpoint.failed_chunks}
         for res in retry_results:
-            fc = next(f for f in checkpoint.failed_chunks if f.chunk_id == res.chunk_id)
+            fc = failed_by_id[res.chunk_id]
             if res.success and res.meta is not None:
                 result_map[res.chunk_id] = res.formatted
                 stats.total_input_tokens += res.meta.input_tokens
@@ -513,10 +514,7 @@ class BodyFormatter(ChunkedLLMJob):
             successful_chunks=successful,
             checkpoint_path=checkpoint_path,
             original_text=checkpoint.original_text,
-            chunk_spans={
-                d["chunk_id"]: (d["start"], d["end"], d.get("type", ""))
-                for d in checkpoint.chunk_spans
-            },
+            chunk_spans=spans_map,
         )
 
         return BodyFormatResult(

@@ -90,7 +90,6 @@ class TokenBudget:
         return TokenCounter.split_hard_by_max_tokens(text, self._raw_content_cap, self.model)
 
 
-
 class BinarySplitter:
     """Split Markdown with the heading/paragraph binary strategy under a budget.
 

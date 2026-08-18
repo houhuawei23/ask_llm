@@ -36,6 +36,7 @@ from ask_llm.core.telemetry import (
     classify_error,
     should_fallback_for_error,
 )
+from ask_llm.utils.prompt_resolver import expand_prompt
 from ask_llm.utils.rate_limiter import get_global_rate_limiter
 from ask_llm.utils.token_counter import TokenCounter
 
@@ -63,6 +64,12 @@ def estimate_output_tokens(task_kind: str, input_tokens: int) -> int:
         multiplier = OUTPUT_TOKEN_MULTIPLIERS[TaskKind.BATCH]
 
     return int(input_tokens * multiplier)
+
+
+def rate_limit_config_from(config_manager: ConfigManager) -> RateLimitConfig | None:
+    """Extract the rate-limit section from the config manager's unified config."""
+    unified = config_manager.unified_config
+    return unified.rate_limits if unified else None
 
 
 class GlobalBatchProcessor:
@@ -99,10 +106,10 @@ class GlobalBatchProcessor:
         self.last_metrics: RunMetrics | None = None
 
     @property
-    def _auth_error_logged(self) -> bool:
-        # Delegates to the executor; translation_service inspects this to detect
+    def auth_error_logged(self) -> bool:
+        # Delegates to the executor; the translators inspect this to detect
         # a batch-wide authentication failure across parallel workers.
-        return self._task_executor._auth_error_logged
+        return self._task_executor.auth_error_logged
 
     def _effective_max_workers(self, tasks: list[BatchTask]) -> int:
         """Return ``max_workers`` capped by the tightest burst limit among tasks."""
@@ -234,11 +241,7 @@ class GlobalBatchProcessor:
             # the task up.
             task_meta: dict[int, tuple[int, int, str]] = {}
             for task in pending_tasks:
-                estimated_prompt = (
-                    task.prompt.replace("{content}", task.content)
-                    if "{content}" in task.prompt
-                    else f"{task.prompt}\n\n{task.content}"
-                )
+                estimated_prompt = expand_prompt(task.prompt, task.content)
                 input_token_estimate = TokenCounter.estimate_tokens(
                     estimated_prompt,
                     (

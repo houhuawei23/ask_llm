@@ -11,10 +11,6 @@ from pathlib import Path
 import typer
 
 from ask_llm.utils.console import console
-from ask_llm.utils.path_resolver import (  # noqa: F401  (re-export)
-    _is_directory_output,
-    _resolve_trans_input_paths,
-)
 
 
 def _config_init(output_path: str | None = None) -> None:

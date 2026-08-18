@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from ask_llm.cli import _is_directory_output, _resolve_trans_input_paths
+from ask_llm.utils.path_resolver import is_directory_output, resolve_trans_input_paths
 from ask_llm.config.context import set_config
 from ask_llm.config.loader import ConfigLoader
 from ask_llm.config.manager import ConfigManager
@@ -297,7 +297,7 @@ More content.
             (Path(tmpdir) / "c.ipynb").write_text("{}")
             (Path(tmpdir) / "d.py").write_text("# code")  # Not translatable
 
-            resolved = _resolve_trans_input_paths(
+            resolved = resolve_trans_input_paths(
                 [tmpdir],
                 translatable_extensions=[".md", ".markdown", ".txt", ".ipynb"],
                 recursive_dir=False,
@@ -316,7 +316,7 @@ More content.
             sub.mkdir()
             (sub / "nested.md").write_text("# Nested")
 
-            resolved = _resolve_trans_input_paths(
+            resolved = resolve_trans_input_paths(
                 [tmpdir],
                 translatable_extensions=[".md"],
                 recursive_dir=True,
@@ -327,36 +327,36 @@ More content.
     def test_is_directory_output_existing_directory(self):
         """Existing directory is always treated as directory."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            assert _is_directory_output(tmpdir, [], 1) is True
+            assert is_directory_output(tmpdir, [], 1) is True
 
     def test_is_directory_output_trailing_separator(self):
         """Output ending with path separator is treated as directory."""
-        assert _is_directory_output("/some/path/", [], 1) is True
-        assert _is_directory_output("/some/path\\", [], 1) is True
+        assert is_directory_output("/some/path/", [], 1) is True
+        assert is_directory_output("/some/path\\", [], 1) is True
 
     def test_is_directory_output_multiple_files_no_extension(self):
         """Non-existent path without extension is treated as directory for multiple files."""
         with tempfile.TemporaryDirectory() as tmpdir:
             out = str(Path(tmpdir) / "translated")
-            assert _is_directory_output(out, ["a.md", "b.md"], 2) is True
+            assert is_directory_output(out, ["a.md", "b.md"], 2) is True
 
     def test_is_directory_output_single_directory_input(self):
         """Non-existent path without extension is treated as directory when input is a directory."""
         with tempfile.TemporaryDirectory() as tmpdir:
             out = str(Path(tmpdir) / "translated")
-            assert _is_directory_output(out, [tmpdir], 1) is True
+            assert is_directory_output(out, [tmpdir], 1) is True
 
     def test_is_directory_output_with_extension_is_file(self):
         """Non-existent path with extension is treated as a file."""
         with tempfile.TemporaryDirectory() as tmpdir:
             out = str(Path(tmpdir) / "out.txt")
-            assert _is_directory_output(out, ["a.md", "b.md"], 2) is False
+            assert is_directory_output(out, ["a.md", "b.md"], 2) is False
 
     def test_is_directory_output_single_file_is_file(self):
         """Non-existent path without extension but single file input is treated as file."""
         with tempfile.TemporaryDirectory() as tmpdir:
             out = str(Path(tmpdir) / "out")
-            assert _is_directory_output(out, ["a.md"], 1) is False
+            assert is_directory_output(out, ["a.md"], 1) is False
 
 
 class TestTransPerFileBatching:
@@ -367,7 +367,7 @@ class TestTransPerFileBatching:
         from ask_llm.core.models import RequestMetadata
 
         class _FakeProcessor:
-            _auth_error_logged = False
+            auth_error_logged = False
 
         def fake_run_global_batch_tasks(tasks, *args, **kwargs):
             captured_calls.append(list(tasks))
@@ -453,7 +453,7 @@ class TestTransPerFileBatching:
         output_dir.mkdir()
 
         class _FakeProcessor:
-            _auth_error_logged = False
+            auth_error_logged = False
 
         def fake_run_global_batch_tasks(tasks, *args, **kwargs):
             results = []

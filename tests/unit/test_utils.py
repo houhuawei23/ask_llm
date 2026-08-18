@@ -104,6 +104,7 @@ class TestTokenCounter:
         # No chunk exceeds the (cl100k) 100-token budget.
         assert all(TokenCounter.count_tokens(c, "deepseek-chat") <= 100 for c in deepseek_chunks)
 
+
 class TestFileHandler:
     """Test FileHandler."""
 
@@ -203,4 +204,3 @@ class TestFileHandler:
         assert FileHandler.detect_type("file.txt") == ".txt"
         assert FileHandler.detect_type("file.MD") == ".md"
         assert FileHandler.detect_type("/path/to/file.py") == ".py"
-

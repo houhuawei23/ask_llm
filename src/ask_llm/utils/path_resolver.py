@@ -1,8 +1,7 @@
 """Input/output path resolution for translation-style commands (P4.3).
 
-Moved out of ``cli/common.py`` so the service layer can resolve paths without
-importing from the CLI layer. ``cli/common.py`` re-exports these for backward
-compatibility.
+Home of translation input resolution (files/globs/directories) and the shared
+output-path mapping used by the text and notebook translators.
 """
 
 from __future__ import annotations
@@ -11,9 +10,10 @@ import glob
 from pathlib import Path
 
 from ask_llm.utils.console import console
+from ask_llm.utils.file_handler import FileHandler
 
 
-def _resolve_trans_input_paths(
+def resolve_trans_input_paths(
     files: list[str],
     translatable_extensions: list[str],
     recursive_dir: bool,
@@ -49,7 +49,29 @@ def _resolve_trans_input_paths(
     return sorted(set(resolved))
 
 
-def _is_directory_output(output: str, files: list[str], resolved_count: int) -> bool:
+def resolve_translation_output_path(
+    file_path: str,
+    output: str | None,
+    output_is_dir: bool,
+    *,
+    suffix: str,
+) -> str:
+    """Resolve a translation output path (shared by text and notebook translators).
+
+    ``output`` that is (or is declared) a directory maps the input name into it
+    with ``suffix`` inserted before the extension; otherwise it is used as-is;
+    with no ``output`` a default is generated next to the input.
+    """
+    if output:
+        if output_is_dir or Path(output).is_dir():
+            input_file = Path(file_path)
+            output_name = f"{input_file.stem}{suffix}{input_file.suffix}"
+            return str(Path(output) / output_name)
+        return output
+    return FileHandler.generate_output_path(file_path, suffix=suffix)
+
+
+def is_directory_output(output: str, files: list[str], resolved_count: int) -> bool:
     """Heuristically decide whether ``output`` is meant as a directory.
 
     A path is considered a directory when:

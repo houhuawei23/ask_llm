@@ -8,7 +8,7 @@ from loguru import logger
 from nbformat import NotebookNode
 
 from ask_llm.core.batch_models import BatchResult, BatchTask, ModelConfig, TaskStatus
-from ask_llm.core.batch_processor import GlobalBatchProcessor
+from ask_llm.core.batch_processor import GlobalBatchProcessor, rate_limit_config_from
 from ask_llm.core.markdown_token_splitter import MarkdownTokenSplitter
 from ask_llm.core.text_splitter import TextChunk
 from ask_llm.core.translator import Translator
@@ -148,10 +148,7 @@ class NotebookTranslator:
             )
 
         # Process with GlobalBatchProcessor
-        # Extract rate_limit_config from config_manager's unified config
-        rate_limit_config = (
-            config_manager.unified_config.rate_limits if config_manager.unified_config else None
-        )
+        rate_limit_config = rate_limit_config_from(config_manager)
 
         processor = GlobalBatchProcessor(
             max_workers=max_workers,
@@ -164,7 +161,7 @@ class NotebookTranslator:
 
         successful = sum(1 for r in results if r.status == TaskStatus.SUCCESS)
         failed = len(results) - successful
-        if successful == 0 and failed > 0 and getattr(processor, "_auth_error_logged", False):
+        if successful == 0 and failed > 0 and getattr(processor, "auth_error_logged", False):
             raise RuntimeError("API authentication failed; no translated output.")
 
         # Build cell_index -> list of translated chunks (in order)

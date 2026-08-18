@@ -66,6 +66,18 @@ def resolve_prompt_file(prompt_path: str) -> Path:
     return prompt_file
 
 
+def expand_prompt(template: str, content: str) -> str:
+    """Substitute ``{content}`` into *template* using replace semantics.
+
+    Replace, not ``str.format``: prompts often contain literal ``{``/``}``
+    (LaTeX, JSON examples, ``{variable}`` in code samples). Only ``{content}``
+    is a placeholder; a template without it gets the content appended.
+    """
+    if "{content}" in template:
+        return template.replace("{content}", content)
+    return f"{template}\n\n{content}"
+
+
 def load_prompt_template(prompt_path: str) -> str:
     """Load and return the contents of a prompt file.
 

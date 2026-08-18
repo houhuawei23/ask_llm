@@ -94,9 +94,7 @@ def test_rebalance_keeps_fenced_block_atomic_when_it_fits() -> None:
         f"{fence}\n\n" + "mu nu xi omicron pi rho sigma tau upsilon phi chi psi omega alpha\n" * 6
     )
     chunks = [TextChunk(content=text, chunk_id=0, start_pos=0, end_pos=len(text), metadata={})]
-    out = rebalance_translation_chunks(
-        chunks, model, max_chunk_tokens=40, enabled=True
-    )
+    out = rebalance_translation_chunks(chunks, model, max_chunk_tokens=40, enabled=True)
     assert len(out) >= 2
     # The fenced block must appear intact inside exactly one chunk and no chunk
     # may carry an unbalanced fence marker.

@@ -68,7 +68,9 @@ class TestTranslator:
         )
         model = "deepseek-chat"
         instr = translator.count_prompt_template_tokens(model)
-        full = TokenCounter.count_tokens(translator.prompt_template_for_batch().replace("{content}", "word " * 200), model)
+        full = TokenCounter.count_tokens(
+            translator.prompt_template_for_batch().replace("{content}", "word " * 200), model
+        )
         assert instr > 0
         assert instr < full
 

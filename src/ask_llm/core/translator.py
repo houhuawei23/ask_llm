@@ -8,6 +8,7 @@ from loguru import logger
 
 from ask_llm.core.batch_models import BatchTask, ModelConfig
 from ask_llm.core.text_splitter import TextChunk
+from ask_llm.utils.prompt_resolver import load_prompt_template
 from ask_llm.utils.token_counter import TokenCounter
 
 
@@ -82,7 +83,7 @@ class Translator:
 
         # Load prompt from file if specified
         if prompt_file:
-            self.custom_prompt_template = self._load_prompt_from_file(prompt_file)
+            self.custom_prompt_template = load_prompt_template(prompt_file)
 
     def prompt_template_for_batch(self) -> str:
         """
@@ -153,27 +154,6 @@ class Translator:
 
         logger.debug(f"Created {len(tasks)} translation tasks from {len(chunks)} chunks")
         return tasks
-
-    @staticmethod
-    def _load_prompt_from_file(prompt_path: str) -> str:
-        """
-        Load prompt template from file.
-
-        Supports @ prefix for relative paths from project root.
-
-        Args:
-            prompt_path: Path to prompt file (may start with @)
-
-        Returns:
-            Prompt template content
-
-        Raises:
-            FileNotFoundError: If prompt file not found
-            OSError: If file cannot be read
-        """
-        from ask_llm.utils.prompt_resolver import load_prompt_template
-
-        return load_prompt_template(prompt_path)
 
     @staticmethod
     def load_glossary(path: str) -> list[tuple[str, str]]:

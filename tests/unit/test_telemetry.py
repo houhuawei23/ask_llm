@@ -64,6 +64,8 @@ def test_log_context_defaults():
     extra = ctx.to_extra()
     assert extra["task_id"] == 1
     assert extra["provider"] == "deepseek"
+
+
 def test_bind_context_returns_bound_logger():
     logger = bind_context(LogContext(task_id=42))
     assert logger is not None

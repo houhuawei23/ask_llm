@@ -69,7 +69,7 @@ class TaskExecutor:
         self.verbose = verbose
         self.stream_api = stream_api
         self._auth_error_lock = threading.Lock()
-        self._auth_error_logged = False
+        self.auth_error_logged = False
 
     def log_task_failure(
         self,
@@ -85,8 +85,8 @@ class TaskExecutor:
         bound = bind_context(ctx).bind(model_key=model_key, error_category=category.value)
         if category == ErrorCategory.AUTHENTICATION:
             with self._auth_error_lock:
-                if not self._auth_error_logged:
-                    self._auth_error_logged = True
+                if not self.auth_error_logged:
+                    self.auth_error_logged = True
                     bound.error(
                         f"API authentication failed ({model_key}): {error_msg}\n"
                         "(Further parallel tasks with the same auth error are logged at DEBUG only.)"
@@ -95,6 +95,55 @@ class TaskExecutor:
                     bound.debug(f"Task failed (auth): {error_msg}")
         else:
             bound.error(f"Task failed ({model_key}): {error_msg}")
+
+    @staticmethod
+    def _attempt_context(
+        task: BatchTask, model_config: ModelConfig, result: BatchResult
+    ) -> LogContext:
+        """Correlation context shared by both task kinds."""
+        return LogContext(
+            task_id=task.task_id,
+            provider=model_config.provider,
+            model=model_config.model,
+            attempt=result.retry_count + 1,
+            phase="global_batch",
+        )
+
+    @staticmethod
+    def _verbose_api_params(model_config: ModelConfig, *extra: str) -> str:
+        """Verbose API-call log line shared by both task kinds."""
+        parts = [
+            f"provider={model_config.provider}",
+            f"model={model_config.model}",
+        ]
+        if model_config.temperature is not None:
+            parts.append(f"temperature={model_config.temperature}")
+        if model_config.max_tokens is not None:
+            parts.append(f"max_tokens={model_config.max_tokens}")
+        parts.extend(extra)
+        return ", ".join(parts)
+
+    @staticmethod
+    def _success_metadata(
+        provider: LLMProviderProtocol,
+        model_config: ModelConfig,
+        input_stats: dict,
+        *,
+        output_words: int,
+        output_tokens: int,
+        latency: float,
+    ) -> RequestMetadata:
+        """Finalize a successful attempt's RequestMetadata."""
+        return RequestMetadata.from_execution(
+            provider_name=provider.name,
+            model=model_config.model,
+            temperature=model_config.temperature,
+            default_temperature=provider.config.api_temperature,
+            input_stats=input_stats,
+            output_words=output_words,
+            output_tokens=output_tokens,
+            latency=latency,
+        )
 
     def _run_paper_explain(
         self,
@@ -123,26 +172,17 @@ class TaskExecutor:
                 ),
             )
 
-        ctx = LogContext(
-            task_id=task.task_id,
-            provider=model_config.provider,
-            model=model_config.model,
-            attempt=result.retry_count + 1,
-            phase="global_batch",
-        )
+        ctx = self._attempt_context(task, model_config, result)
 
         if self.verbose:
-            api_params = [
-                f"provider={model_config.provider}",
-                f"model={model_config.model}",
-            ]
-            if model_config.temperature is not None:
-                api_params.append(f"temperature={model_config.temperature}")
-            if model_config.max_tokens is not None:
-                api_params.append(f"max_tokens={model_config.max_tokens}")
-            api_params.append(f"input_tokens={display_input_tokens}")
-            api_params.append(f"timeout={paper_timeout}s")
-            bind_context(ctx).info(f"Paper API: {', '.join(api_params)}")
+            bind_context(ctx).info(
+                "Paper API: "
+                + self._verbose_api_params(
+                    model_config,
+                    f"input_tokens={display_input_tokens}",
+                    f"timeout={paper_timeout}s",
+                )
+            )
 
         stream_iter = processor.iter_process_raw_stream(
             task.prompt,
@@ -166,12 +206,10 @@ class TaskExecutor:
             out_for_count = f"{reasoning_out}\n{response}"
         output_stats = TokenCounter.estimate_tokens(out_for_count, model_config.model)
 
-        metadata = RequestMetadata.from_execution(
-            provider_name=provider.name,
-            model=model_config.model,
-            temperature=model_config.temperature,
-            default_temperature=provider.config.api_temperature,
-            input_stats=input_stats,
+        metadata = self._success_metadata(
+            provider,
+            model_config,
+            input_stats,
             output_words=output_stats["word_count"],
             output_tokens=output_stats["token_count"],
             latency=latency,
@@ -214,27 +252,16 @@ class TaskExecutor:
         display_input_tokens = input_tokens if input_tokens is not None else input_token_count
         progress_tokens = f"body≈{body_tokens} input≈{display_input_tokens}"
 
-        ctx = LogContext(
-            task_id=task.task_id,
-            provider=model_config.provider,
-            model=model_config.model,
-            attempt=result.retry_count + 1,
-            phase="global_batch",
-        )
+        ctx = self._attempt_context(task, model_config, result)
 
         if self.verbose:
-            api_params = [
-                f"provider={model_config.provider}",
-                f"model={model_config.model}",
-            ]
-            if model_config.temperature is not None:
-                api_params.append(f"temperature={model_config.temperature}")
-            if model_config.max_tokens is not None:
-                api_params.append(f"max_tokens={model_config.max_tokens}")
-            if model_config.top_p is not None:
-                api_params.append(f"top_p={model_config.top_p}")
-            api_params.append(f"input_tokens={display_input_tokens}")
-            bind_context(ctx).info(f"API Call: {', '.join(api_params)}")
+            extra = [f"top_p={model_config.top_p}"] if model_config.top_p is not None else []
+            bind_context(ctx).info(
+                "API Call: "
+                + self._verbose_api_params(
+                    model_config, *extra, f"input_tokens={display_input_tokens}"
+                )
+            )
 
         if progress and progress_task_id is not None:
             progress.update(
@@ -262,12 +289,10 @@ class TaskExecutor:
             return_reasoning=False,
         )
 
-        metadata = RequestMetadata.from_execution(
-            provider_name=provider.name,
-            model=model_config.model,
-            temperature=model_config.temperature,
-            default_temperature=provider.config.api_temperature,
-            input_stats=input_stats,
+        metadata = self._success_metadata(
+            provider,
+            model_config,
+            input_stats,
             output_words=TokenCounter.count_words(response),
             output_tokens=output_token_count,
             latency=latency,

@@ -57,14 +57,14 @@ def test_rate_limit_acquire_timeout_yields_failed_result():
 def test_auth_error_dedup_flag_flips_once():
     """The batch-wide auth-error flag flips exactly once across parallel workers."""
     executor = TaskExecutor()
-    assert executor._auth_error_logged is False
+    assert executor.auth_error_logged is False
 
     executor.log_task_failure(1, "p/m", "401 Unauthorized", ErrorCategory.AUTHENTICATION)
-    assert executor._auth_error_logged is True
+    assert executor.auth_error_logged is True
 
     # A second parallel auth failure does not re-trigger (flag stays True).
     executor.log_task_failure(2, "p/m", "401 Unauthorized", ErrorCategory.AUTHENTICATION)
-    assert executor._auth_error_logged is True
+    assert executor.auth_error_logged is True
 
 
 def test_missing_provider_in_cache_yields_failed_result():

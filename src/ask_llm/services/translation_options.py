@@ -54,6 +54,25 @@ class TranslationJobResult:
     results: list[BatchResult] = field(default_factory=list)
 
 
+def failed_job_result(
+    file_path: str,
+    output_path: str | None,
+    error: str,
+    *,
+    results: list[BatchResult] | None = None,
+) -> TranslationJobResult:
+    """Failed single-file result with zero usage (shared failure shape)."""
+    return TranslationJobResult(
+        file_path=file_path,
+        output_path=output_path,
+        input_tokens=0,
+        output_tokens=0,
+        success=False,
+        error=error,
+        results=results or [],
+    )
+
+
 @dataclass
 class TranslationSessionResult:
     """Aggregate result of a full translation session."""

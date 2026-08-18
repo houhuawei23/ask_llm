@@ -13,11 +13,48 @@ from ask_llm.core.models import (
     RequestMetadata,
 )
 from ask_llm.core.protocols import LLMProviderProtocol, ReasoningChunk
+from ask_llm.utils.prompt_resolver import expand_prompt
 from ask_llm.utils.token_counter import TokenCounter
 
 # Built-in default matching default_config.yml so RequestProcessor works
 # without an active CLI config (e.g. library / embedded use).
 _DEFAULT_PROMPT_TEMPLATE = "Please process the following text:\n\n{content}"
+
+
+def _call_kwargs(
+    prompt: str,
+    *,
+    stream: bool,
+    temperature: float | None,
+    model: str | None,
+    max_tokens: int | None = None,
+    return_reasoning: bool = False,
+    system_prompt: str | None = None,
+) -> dict:
+    """Assemble ``provider.call`` kwargs: messages format when a system prompt is set."""
+    kwargs: dict = {"temperature": temperature, "model": model, "stream": stream}
+    if system_prompt:
+        kwargs["messages"] = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt},
+        ]
+    else:
+        kwargs["prompt"] = prompt
+    if max_tokens is not None:
+        kwargs["max_tokens"] = max_tokens
+    if return_reasoning:
+        kwargs["return_reasoning"] = True
+    return kwargs
+
+
+def _iter_provider_response(
+    gen: Iterator[str | ReasoningChunk] | str | ReasoningChunk,
+) -> Iterator[str | ReasoningChunk]:
+    """Yield chunks from a provider call result (single value or iterator)."""
+    if isinstance(gen, (str, ReasoningChunk)):
+        yield gen
+        return
+    yield from gen
 
 
 class RequestProcessor:
@@ -60,13 +97,7 @@ class RequestProcessor:
             Formatted prompt string
         """
         template = prompt_template or self._get_default_prompt_template()
-
-        # Use replace, not str.format: prompts often contain literal ``{``/``}`` (LaTeX,
-        # JSON examples, ``{variable}`` in code samples). Only ``{content}`` is a placeholder.
-        if "{content}" in template:
-            return template.replace("{content}", content)
-        else:
-            return f"{template}\n\n{content}"
+        return expand_prompt(template, content)
 
     def process(
         self,
@@ -97,31 +128,17 @@ class RequestProcessor:
         prompt = self.format_prompt(content, prompt_template)
         logger.debug(f"Processing request with {len(prompt)} characters")
 
-        # Prepare kwargs for provider.call()
-        call_kwargs: dict = {}
-        if max_tokens is not None:
-            call_kwargs["max_tokens"] = max_tokens
-
-        # Use messages format if system_prompt is provided
-        if system_prompt:
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt},
-            ]
-            call_kwargs["messages"] = messages
-        else:
-            call_kwargs["prompt"] = prompt
-
         response = self.provider.call(
-            temperature=temperature, model=model, stream=stream, **call_kwargs
+            **_call_kwargs(
+                prompt,
+                stream=stream,
+                temperature=temperature,
+                model=model,
+                max_tokens=max_tokens,
+                system_prompt=system_prompt,
+            )
         )
-        if isinstance(response, str):
-            yield response
-            return
-        if isinstance(response, ReasoningChunk):
-            yield response
-            return
-        yield from response
+        yield from _iter_provider_response(response)
 
     def iter_process_raw_stream(
         self,
@@ -142,32 +159,18 @@ class RequestProcessor:
         full_prompt = (prompt or "").strip()
         logger.debug(f"Streaming raw prompt request with {len(full_prompt)} characters")
 
-        call_kw: dict = {
-            "temperature": temperature,
-            "model": model,
-            "stream": True,
-        }
-
-        # Use messages format if system_prompt is provided
-        if system_prompt:
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": full_prompt},
-            ]
-            call_kw["messages"] = messages
-        else:
-            call_kw["prompt"] = full_prompt
-
-        if max_tokens is not None:
-            call_kw["max_tokens"] = max_tokens
-        if return_reasoning:
-            call_kw["return_reasoning"] = True
-
-        gen = self.provider.call(**call_kw)
-        if isinstance(gen, str):
-            yield gen
-            return
-        if isinstance(gen, ReasoningChunk):
+        gen = self.provider.call(
+            **_call_kwargs(
+                full_prompt,
+                stream=True,
+                temperature=temperature,
+                model=model,
+                max_tokens=max_tokens,
+                return_reasoning=return_reasoning,
+                system_prompt=system_prompt,
+            )
+        )
+        if isinstance(gen, (str, ReasoningChunk)):
             yield gen
             return
         for item in gen:
@@ -215,31 +218,21 @@ class RequestProcessor:
 
         # Call API
         start_time = time.time()
-        call_kw: dict = {
-            "temperature": temperature,
-            "model": model,
-            "stream": False,
-        }
-
-        # Use messages format if system_prompt is provided, otherwise use prompt
         if system_prompt:
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt},
-            ]
-            call_kw["messages"] = messages
             # Recalculate input tokens to include system prompt
-            full_input = f"{system_prompt}\n{prompt}"
-            input_stats = TokenCounter.estimate_tokens(full_input, model)
-        else:
-            call_kw["prompt"] = prompt
+            input_stats = TokenCounter.estimate_tokens(f"{system_prompt}\n{prompt}", model)
 
-        if max_tokens is not None:
-            call_kw["max_tokens"] = max_tokens
-        if return_reasoning:
-            call_kw["return_reasoning"] = True
-
-        raw = self.provider.call(**call_kw)
+        raw = self.provider.call(
+            **_call_kwargs(
+                prompt,
+                stream=False,
+                temperature=temperature,
+                model=model,
+                max_tokens=max_tokens,
+                return_reasoning=return_reasoning,
+                system_prompt=system_prompt,
+            )
+        )
         reasoning: str | None = None
         if isinstance(raw, ReasoningChunk):
             response, reasoning = raw.content, raw.reasoning

@@ -61,6 +61,7 @@ def test_cache_clear_resets_state():
 
     assert mock_create.call_count == 2
 
+
 def test_invalid_config_type_rejected():
     """Non-ProviderConfig inputs raise TypeError."""
     with pytest.raises(TypeError):

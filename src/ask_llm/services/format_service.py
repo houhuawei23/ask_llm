@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any
 
 from rich.progress import (
     BarColumn,
@@ -139,7 +138,7 @@ def _handle_outcome(outcome: FormatMarkdownOutcome, format_type: str) -> tuple[b
         return False, 0, 0
 
 
-def run_sequential_format(
+def run_format(
     resolved_files: list[str],
     *,
     format_type: str,
@@ -153,39 +152,25 @@ def run_sequential_format(
     output: str | None,
     inplace: bool,
     force: bool,
+    max_workers: int = 1,
     retries: int | None,
     retry_delay: float | None,
     retry_delay_max: float | None,
 ) -> None:
-    """Single-worker path: verbose per-file logging (legacy UX)."""
+    """Format all files sequentially (``max_workers <= 1``) or via a thread pool.
+
+    Sequential mode keeps the legacy verbose per-file logging; parallel mode
+    shows a single Rich progress bar.
+    """
     successful_count = 0
     failed_count = 0
     skipped_count = 0
     total_input_tokens = 0
     total_output_tokens = 0
 
-    for file_path in resolved_files:
-        console.print()
-        console.print(f"[bold]处理: {file_path}[/bold]")
-
-        outcome = format_one(
-            file_path,
-            format_type=format_type,
-            processor=processor,
-            model=model,
-            prompt_file_resolved=prompt_file_resolved,
-            heading_batch_size=heading_batch_size,
-            heading_concurrency=heading_concurrency,
-            body_max_chunk_tokens=body_max_chunk_tokens,
-            body_concurrency=body_concurrency,
-            output=output,
-            inplace=inplace,
-            force=force,
-            retries=retries,
-            retry_delay=retry_delay,
-            retry_delay_max=retry_delay_max,
-        )
-
+    def _record(outcome: FormatMarkdownOutcome) -> None:
+        nonlocal successful_count, failed_count, skipped_count, total_input_tokens
+        nonlocal total_output_tokens
         ok, in_toks, out_toks = _handle_outcome(outcome, format_type)
         if ok:
             successful_count += 1
@@ -196,94 +181,55 @@ def run_sequential_format(
         else:
             failed_count += 1
 
-    _print_format_summary(
-        successful_count, failed_count, skipped_count, total_input_tokens, total_output_tokens
-    )
+    format_kwargs = {
+        "format_type": format_type,
+        "processor": processor,
+        "model": model,
+        "prompt_file_resolved": prompt_file_resolved,
+        "heading_batch_size": heading_batch_size,
+        "heading_concurrency": heading_concurrency,
+        "body_max_chunk_tokens": body_max_chunk_tokens,
+        "body_concurrency": body_concurrency,
+        "output": output,
+        "inplace": inplace,
+        "force": force,
+        "retries": retries,
+        "retry_delay": retry_delay,
+        "retry_delay_max": retry_delay_max,
+    }
 
-
-def run_parallel_format(
-    resolved_files: list[str],
-    *,
-    format_type: str,
-    processor: RequestProcessor,
-    model: str,
-    prompt_file_resolved: str,
-    heading_batch_size: int | None,
-    heading_concurrency: int | None,
-    body_max_chunk_tokens: int | None,
-    body_concurrency: int | None,
-    output: str | None,
-    inplace: bool,
-    force: bool,
-    max_workers: int,
-    retries: int | None,
-    retry_delay: float | None,
-    retry_delay_max: float | None,
-) -> None:
-    """Process many files with a thread pool and a Rich progress bar."""
-    successful_count = 0
-    failed_count = 0
-    skipped_count = 0
-    total_input_tokens = 0
-    total_output_tokens = 0
-
-    workers = min(max_workers, len(resolved_files))
-
-    progress_columns = (
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        MofNCompleteColumn(),
-        TimeElapsedColumn(),
-    )
-
-    def _submit_file(pool: ThreadPoolExecutor, fp: str) -> Any:
-        return pool.submit(
-            format_one,
-            fp,
-            format_type=format_type,
-            processor=processor,
-            model=model,
-            prompt_file_resolved=prompt_file_resolved,
-            heading_batch_size=heading_batch_size,
-            heading_concurrency=heading_concurrency,
-            body_max_chunk_tokens=body_max_chunk_tokens,
-            body_concurrency=body_concurrency,
-            output=output,
-            inplace=inplace,
-            force=force,
-            retries=retries,
-            retry_delay=retry_delay,
-            retry_delay_max=retry_delay_max,
+    use_parallel = len(resolved_files) > 1 and max_workers > 1
+    if not use_parallel:
+        for file_path in resolved_files:
+            console.print()
+            console.print(f"[bold]处理: {file_path}[/bold]")
+            _record(format_one(file_path, **format_kwargs))
+    else:
+        workers = min(max_workers, len(resolved_files))
+        progress_columns = (
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            TimeElapsedColumn(),
         )
-
-    with Progress(*progress_columns, console=console.rich_console, transient=False) as progress:
-        task_id = progress.add_task(
-            "[cyan]格式化 Markdown[/cyan]",
-            total=len(resolved_files),
-        )
-        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="format-md") as pool:
-            future_map = {_submit_file(pool, fp): fp for fp in resolved_files}
-            for fut in as_completed(future_map):
-                fp = future_map[fut]
-                try:
-                    outcome = fut.result()
-                except Exception as exc:
-                    console.print_error(f"{fp}: {exc}")
-                    failed_count += 1
+        with Progress(*progress_columns, console=console.rich_console, transient=False) as progress:
+            task_id = progress.add_task("[cyan]格式化 Markdown[/cyan]", total=len(resolved_files))
+            with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="format-md") as pool:
+                future_map = {
+                    pool.submit(format_one, fp, **format_kwargs): fp for fp in resolved_files
+                }
+                for fut in as_completed(future_map):
+                    fp = future_map[fut]
+                    try:
+                        outcome = fut.result()
+                    except Exception as exc:
+                        console.print_error(f"{fp}: {exc}")
+                        failed_count += 1
+                        progress.advance(task_id)
+                        continue
+                    _record(outcome)
                     progress.advance(task_id)
-                    continue
-
-                ok, in_toks, out_toks = _handle_outcome(outcome, format_type)
-                if ok:
-                    successful_count += 1
-                    total_input_tokens += in_toks
-                    total_output_tokens += out_toks
-                elif outcome.skipped:
-                    skipped_count += 1
-                else:
-                    failed_count += 1
-                progress.advance(task_id)
 
     _print_format_summary(
         successful_count, failed_count, skipped_count, total_input_tokens, total_output_tokens

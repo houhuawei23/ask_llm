@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ask_llm.core.models import RequestMetadata
 from ask_llm.core.telemetry import ErrorCategory
+from ask_llm.utils.prompt_resolver import expand_prompt
 from ask_llm.utils.token_counter import TokenCounter
 
 
@@ -59,10 +60,7 @@ def sort_batch_tasks_by_estimated_input(
 
     def _estimate(t: BatchTask) -> int:
         model = t.model_settings.model if t.model_settings else default_model
-        if "{content}" in t.prompt:
-            full = t.prompt.replace("{content}", t.content)
-        else:
-            full = f"{t.prompt}\n\n{t.content}"
+        full = expand_prompt(t.prompt, t.content)
         return int(TokenCounter.estimate_tokens(full, model)["token_count"])
 
     return sorted(tasks, key=_estimate, reverse=True)

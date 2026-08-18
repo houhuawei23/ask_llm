@@ -34,12 +34,13 @@ from ask_llm.services.translation_options import (
     TranslationJobResult,
     TranslationOptions,
     TranslationSessionResult,
+    failed_job_result,
 )
 from ask_llm.utils.console import console
+from ask_llm.utils.path_resolver import is_directory_output, resolve_trans_input_paths
 from ask_llm.utils.pricing import format_cost_estimate
 
 PricingMap = dict[tuple[str, str], dict[str, float]]
-
 
 
 class TranslationService:
@@ -125,8 +126,6 @@ class TranslationService:
             FileNotFoundError: If no input files are found.
             ValueError: If input or configuration is invalid.
         """
-        from ask_llm.utils.path_resolver import _is_directory_output, _resolve_trans_input_paths
-
         session_result = TranslationSessionResult()
         _t0 = time.perf_counter()
 
@@ -137,7 +136,7 @@ class TranslationService:
                 f"Glossary: {len(glossary_pairs)} term pair(s) loaded from {glossary}"
             )
 
-        resolved_files = _resolve_trans_input_paths(
+        resolved_files = resolve_trans_input_paths(
             files,
             translatable_extensions=options.translatable_extensions,
             recursive_dir=options.recursive_dir,
@@ -153,7 +152,7 @@ class TranslationService:
             f"Chunk-level concurrency: up to {options.threads} concurrent API call(s) per file"
         )
 
-        if output and _is_directory_output(output, files, len(resolved_files)):
+        if output and is_directory_output(output, files, len(resolved_files)):
             output_is_dir = True
             Path(output).mkdir(parents=True, exist_ok=True)
         else:
@@ -245,14 +244,7 @@ class TranslationService:
                     except Exception as e:
                         console.print_error(f"Failed to translate {file_path}: {e}")
                         logger.exception("Translation error")
-                        result = TranslationJobResult(
-                            file_path=file_path,
-                            output_path=None,
-                            input_tokens=0,
-                            output_tokens=0,
-                            success=False,
-                            error=str(e),
-                        )
+                        result = failed_job_result(file_path, None, str(e))
                     self._accumulate(session_result, result)
 
         self._print_session_total(session_result)

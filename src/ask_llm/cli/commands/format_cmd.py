@@ -17,8 +17,7 @@ from ask_llm.config.cli_session import (
 from ask_llm.core.processor import RequestProcessor
 from ask_llm.services.format_service import (
     FormatService,
-    run_parallel_format,
-    run_sequential_format,
+    run_format,
 )
 from ask_llm.utils.console import console
 from ask_llm.utils.engine_facade import create_engine_adapter
@@ -296,42 +295,21 @@ def format_cmd(
             f"（类型={type_lower}，目录递归={recursive}{depth_str}，并行数={file_workers}）"
         )
 
-        use_parallel = len(resolved_files) > 1 and file_workers > 1
-
-        if use_parallel:
-            run_parallel_format(
-                resolved_files,
-                format_type=type_lower,
-                processor=processor,
-                model=final_model,
-                prompt_file_resolved=prompt_resolved,
-                heading_batch_size=heading_batch_size,
-                heading_concurrency=heading_concurrency,
-                body_max_chunk_tokens=body_max_chunk_tokens,
-                body_concurrency=body_concurrency,
-                output=output,
-                inplace=inplace,
-                force=force,
-                max_workers=file_workers,
-                retries=retries,
-                retry_delay=retry_delay,
-                retry_delay_max=retry_delay_max,
-            )
-        else:
-            run_sequential_format(
-                resolved_files,
-                format_type=type_lower,
-                processor=processor,
-                model=final_model,
-                prompt_file_resolved=prompt_resolved,
-                heading_batch_size=heading_batch_size,
-                heading_concurrency=heading_concurrency,
-                body_max_chunk_tokens=body_max_chunk_tokens,
-                body_concurrency=body_concurrency,
-                output=output,
-                inplace=inplace,
-                force=force,
-                retries=retries,
-                retry_delay=retry_delay,
-                retry_delay_max=retry_delay_max,
-            )
+        run_format(
+            resolved_files,
+            format_type=type_lower,
+            processor=processor,
+            model=final_model,
+            prompt_file_resolved=prompt_resolved,
+            heading_batch_size=heading_batch_size,
+            heading_concurrency=heading_concurrency,
+            body_max_chunk_tokens=body_max_chunk_tokens,
+            body_concurrency=body_concurrency,
+            output=output,
+            inplace=inplace,
+            force=force,
+            max_workers=file_workers,
+            retries=retries,
+            retry_delay=retry_delay,
+            retry_delay_max=retry_delay_max,
+        )

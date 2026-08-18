@@ -66,7 +66,6 @@ def test_merge_skips_duplicate_task_ids():
     assert len(checkpoint.successful_results) == 2
 
 
-
 def test_result_to_task():
     checkpoint = BatchCheckpoint.create(command="batch", config_digest="abc")
     result = _make_result(task_id=5)

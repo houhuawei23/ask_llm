@@ -18,7 +18,7 @@ from pathlib import Path
 from loguru import logger
 
 from ask_llm.config.manager import ConfigManager
-from ask_llm.core.batch_models import BatchResult, BatchTask, ModelConfig, TaskStatus
+from ask_llm.core.batch_models import BatchResult, BatchTask, TaskStatus
 from ask_llm.core.command_runner import run_with_checkpoint
 from ask_llm.core.markdown_token_splitter import MarkdownTokenSplitter
 from ask_llm.core.models import AppConfig
@@ -27,11 +27,13 @@ from ask_llm.core.translator import Translator
 from ask_llm.services.translation_options import (
     TranslationJobResult,
     TranslationOptions,
+    failed_job_result,
 )
 from ask_llm.utils.chunk_balance import plain_text_chunks_by_tokens, rebalance_translation_chunks
 from ask_llm.utils.console import console
-from ask_llm.utils.fallback_chain import build_fallback_chain
+from ask_llm.utils.fallback_chain import model_config_with_fallback
 from ask_llm.utils.file_handler import FileHandler
+from ask_llm.utils.path_resolver import resolve_translation_output_path
 from ask_llm.utils.pricing import format_cost_estimate
 from ask_llm.utils.token_counter import TokenCounter
 from ask_llm.utils.translation_exporter import TranslationExporter
@@ -147,18 +149,18 @@ class TextFileTranslator:
         else:
             console.print_info(f"Split into {len(chunks)} chunk(s)")
 
-        model_config = ModelConfig(
-            provider=self.provider,
-            model=self.model,
+        model_config, fallback_configs = model_config_with_fallback(
+            self.provider,
+            self.model,
             temperature=options.temperature,
             max_tokens=options.max_output_tokens,
+            app_config=self.app_config,
+            use_fallback=options.use_fallback,
         )
 
         tasks = translator.create_translation_tasks(chunks, model_config)
-        if options.use_fallback and self.app_config is not None:
-            fallback_configs = build_fallback_chain(self.app_config, model_config)
-            for task in tasks:
-                task.fallback_model_configs = fallback_configs
+        for task in tasks:
+            task.fallback_model_configs = fallback_configs
         output_path = self.resolve_output_path(
             file_path, output=output, output_is_dir=output_is_dir, suffix=effective_suffix
         )
@@ -180,13 +182,7 @@ class TextFileTranslator:
         suffix: str,
     ) -> str:
         """Resolve the output path for a text/markdown translation."""
-        if output:
-            if output_is_dir or Path(output).is_dir():
-                input_file = Path(file_path)
-                output_name = f"{input_file.stem}{suffix}{input_file.suffix}"
-                return str(Path(output) / output_name)
-            return output
-        return FileHandler.generate_output_path(file_path, suffix=suffix)
+        return resolve_translation_output_path(file_path, output, output_is_dir, suffix=suffix)
 
     @staticmethod
     def checkpoint_path(output_path: str) -> str:
@@ -228,14 +224,7 @@ class TextFileTranslator:
         except Exception as e:
             console.print_error(f"Failed to translate {job.file_path}: {e}")
             logger.exception("Translation error")
-            return TranslationJobResult(
-                file_path=job.file_path,
-                output_path=job.output_path,
-                input_tokens=0,
-                output_tokens=0,
-                success=False,
-                error=str(e),
-            )
+            return failed_job_result(job.file_path, job.output_path, str(e))
 
         if outcome.all_previously_completed:
             console.print_info("All chunks already translated according to checkpoint.")
@@ -259,17 +248,11 @@ class TextFileTranslator:
         if (
             successful_chunks == 0
             and failed_count > 0
-            and getattr(processor, "_auth_error_logged", False)
+            and getattr(processor, "auth_error_logged", False)
         ):
             console.print_error(f"翻译失败: API 认证错误, {job.file_path} 未产生有效译文。")
-            return TranslationJobResult(
-                file_path=job.file_path,
-                output_path=job.output_path,
-                input_tokens=0,
-                output_tokens=0,
-                success=False,
-                error="API authentication error",
-                results=results,
+            return failed_job_result(
+                job.file_path, job.output_path, "API authentication error", results=results
             )
 
         metrics = getattr(processor, "last_metrics", None)
@@ -307,14 +290,7 @@ class TextFileTranslator:
             console.print_warning(f"{failed_count} chunk(s) failed to translate")
         if successful_chunks == 0 and failed_count > 0:
             console.print_error(f"翻译失败: {job.file_path} 所有分块均失败。")
-            return TranslationJobResult(
-                file_path=job.file_path,
-                output_path=job.output_path,
-                input_tokens=0,
-                output_tokens=0,
-                success=False,
-                error="All chunks failed",
-            )
+            return failed_job_result(job.file_path, job.output_path, "All chunks failed")
 
         exporter = TranslationExporter(
             chunks=job.chunks,
@@ -377,22 +353,8 @@ class TextFileTranslator:
             console.print_error(
                 f"Output file already exists: {job.output_path}. Use --force to overwrite."
             )
-            return TranslationJobResult(
-                file_path=job.file_path,
-                output_path=job.output_path,
-                input_tokens=0,
-                output_tokens=0,
-                success=False,
-                error="Output file already exists",
-            )
+            return failed_job_result(job.file_path, job.output_path, "Output file already exists")
         except Exception as e:
             console.print_error(f"Failed to export translation: {e}")
             logger.exception("Export error")
-            return TranslationJobResult(
-                file_path=job.file_path,
-                output_path=job.output_path,
-                input_tokens=0,
-                output_tokens=0,
-                success=False,
-                error=str(e),
-            )
+            return failed_job_result(job.file_path, job.output_path, str(e))
