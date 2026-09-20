@@ -65,7 +65,18 @@ class GlobalRateLimiter:
         "anthropic": (1000, 100),
         "ollama": (10000, 1000),
         "qwen": (300, 30),
+        # Providers actually served by providers.yml previously fell through to
+        # the (60, 10) floor, throttling paper's default concurrency. Values
+        # are conservative estimates — override via `rate_limits` in config.
+        "siliconflow": (200, 30),
+        "aliyun": (200, 30),
+        "kimi-code": (60, 10),
     }
+
+    # Emit the "rate limiter waited" warning at most once per key per interval
+    # so long batch runs don't drown the log in per-request warnings.
+    _WARN_INTERVAL: ClassVar[float] = 60.0
+    _last_wait_warn: ClassVar[dict[str, float]] = {}
 
     _instance: ClassVar[GlobalRateLimiter | None] = None
     _instance_lock: ClassVar[threading.Lock] = threading.Lock()
@@ -139,11 +150,15 @@ class GlobalRateLimiter:
         acquired = limiter.acquire(timeout=timeout)
         elapsed = time.monotonic() - start
         if acquired and elapsed > 0.05:
-            rpm, burst = self._get_limit(provider, model)
-            logger.warning(
-                f"Rate limiter waited {elapsed:.2f}s for {key} "
-                f"(RPM={rpm}, burst={burst}). Consider lowering concurrency or raising limits."
-            )
+            now = time.monotonic()
+            if now - self._last_wait_warn.get(key, 0.0) >= self._WARN_INTERVAL:
+                self._last_wait_warn[key] = now
+                rpm, burst = self._get_limit(provider, model)
+                logger.warning(
+                    f"Rate limiter waited {elapsed:.2f}s for {key} "
+                    f"(RPM={rpm}, burst={burst}). Consider lowering concurrency "
+                    f"or raising limits."
+                )
         return acquired
 
 

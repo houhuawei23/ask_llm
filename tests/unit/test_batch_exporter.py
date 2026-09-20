@@ -328,3 +328,71 @@ class TestBatchResultExporter:
         # Should sanitize path separators
         assert ".." not in file_path.name
         assert file_path.parent == temp_dir  # Should be in output dir, not parent
+
+
+def _make_results():
+    model_config = ModelConfig(provider="test", model="test-model")
+    metadata = RequestMetadata(
+        provider="test",
+        model="test-model",
+        temperature=0.7,
+        input_tokens=10,
+        output_tokens=20,
+        latency=1.5,
+    )
+    return [
+        BatchResult(
+            task_id=1,
+            prompt="Test prompt",
+            content="Test content",
+            model_settings=model_config,
+            response="Test response",
+            metadata=metadata,
+            status=TaskStatus.SUCCESS,
+        ),
+        BatchResult(
+            task_id=2,
+            prompt="Test prompt 2",
+            content="Test content 2",
+            model_settings=model_config,
+            response=None,
+            metadata=None,
+            status=TaskStatus.FAILED,
+            error="Test error",
+        ),
+    ]
+
+
+class TestJSONExportAtomicity:
+    """H10: JSON export must match the other formats' FileHandler semantics —
+    create parent directories and write atomically (tmp + replace)."""
+
+    def _exporter(self):
+        return BatchResultExporter(_make_results(), BatchStatistics())
+
+    def test_export_json_creates_missing_parent_dirs(self, tmp_path):
+        exporter = self._exporter()
+        target = tmp_path / "deep" / "nested" / "out.json"
+        result = exporter.export(str(target), format_type="json")
+        assert Path(result).is_file()
+        data = json.loads(Path(result).read_text(encoding="utf-8"))
+        assert data  # non-empty payload
+
+    def test_export_json_leaves_no_tmp_on_success(self, tmp_path):
+        exporter = self._exporter()
+        target = tmp_path / "out.json"
+        exporter.export(str(target), format_type="json")
+        assert not (tmp_path / "out.json.tmp").exists()
+
+    def test_export_json_cleans_tmp_on_failure(self, tmp_path, monkeypatch):
+        exporter = self._exporter()
+        target = tmp_path / "out.json"
+
+        def exploding_prepare():
+            raise RuntimeError("prepare failed")
+
+        monkeypatch.setattr(exporter, "_prepare_data", exploding_prepare)
+        with pytest.raises(RuntimeError):
+            exporter.export(str(target), format_type="json")
+        assert not target.exists()
+        assert not (tmp_path / "out.json.tmp").exists()

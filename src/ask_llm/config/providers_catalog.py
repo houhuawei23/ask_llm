@@ -31,16 +31,29 @@ _RUNTIME_FIELDS = {
 
 
 def _candidate_providers_yml_paths() -> list[Path]:
-    """Return candidate paths for providers.yml (provider specs / pricing catalog)."""
+    """Return candidate paths for providers.yml (provider specs / pricing catalog).
+
+    Order matters (first match wins): explicit env override, cwd, the repo root
+    of a development checkout, the user's config directory, and finally the copy
+    packaged inside the wheel. The packaged copy must stay last so a dev
+    checkout and user overrides always shadow the (potentially stale) shipped
+    catalog.
+    """
     paths: list[Path] = []
     env_path = os.getenv("ASK_LLM_PROVIDERS_YML")
     if env_path:
         paths.append(Path(env_path).expanduser())
     paths.append(Path.cwd() / "providers.yml")
-    # Package: .../ask_llm/config/providers_catalog.py -> ask_llm repo root often 3 levels up
+    # Dev checkout: .../ask_llm/config/providers_catalog.py -> repo root is 4
+    # levels up. Only trust it when it actually looks like the repo; under a
+    # wheel install this path lands in ``.../site-packages/..`` where the file
+    # never exists, and the packaged copy below takes over instead.
     pkg_root = Path(__file__).resolve().parent.parent.parent.parent
-    paths.append(pkg_root / "providers.yml")
+    if (pkg_root / "pyproject.toml").is_file() or (pkg_root / "providers.yml").is_file():
+        paths.append(pkg_root / "providers.yml")
     paths.append(Path.home() / ".config" / "ask_llm" / "providers.yml")
+    # Packaged copy (pyproject.toml package-data), used by pip installs.
+    paths.append(Path(__file__).resolve().parent / "providers.yml")
     return paths
 
 

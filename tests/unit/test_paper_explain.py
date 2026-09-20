@@ -223,17 +223,38 @@ def test_build_bundle_from_minimal_file(tmp_path: Path):
     assert "methods" in b.sections
 
 
-@pytest.mark.skipif(
-    not Path(
-        "/home/hhw/Desktop/00_Personal/my_scripts/output2/20170612-Arxiv-Attention-Is-All-You-Need"
-    ).is_dir(),
-    reason="Sample arxiv2md directory not present",
-)
-def test_build_bundle_from_real_arxiv_dir():
-    d = Path(
-        "/home/hhw/Desktop/00_Personal/my_scripts/output2/20170612-Arxiv-Attention-Is-All-You-Need"
+def test_build_bundle_from_arxiv_dir(tmp_path: Path):
+    """build_bundle_from_directory on a minimal arxiv2md-style directory."""
+    d = tmp_path / "20170612-attention-is-all-you-need"
+    d.mkdir()
+    main = "20170612-attention-is-all-you-need.md"
+    (d / main).write_text(
+        textwrap.dedent(
+            """\
+            # Attention Is All You Need
+
+            Preamble paragraph with enough body text to pass the length assertion
+            applied to the assembled bundle full_text below.
+
+            ## Abstract
+
+            The dominant sequence transduction models are based on complex recurrent
+            or convolutional neural networks. We propose the Transformer, dispensing
+            with recurrence entirely and relying exclusively on attention.
+
+            ## Methods
+
+            Multi-head attention allows the model to jointly attend to information
+            from different representation subspaces at different positions.
+            """
+        ),
+        encoding="utf-8",
+    )
+    (d / f"{main[:-3]}-References.md").write_text(
+        "## References\n\nVaswani et al. 2017.\n", encoding="utf-8"
     )
     b = build_bundle_from_directory(d)
     assert "Attention" in b.paper_title
     assert len(b.full_text) > 100
     assert b.main_path is not None
+    assert b.main_path.name == main

@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 from ask_llm.core.batch_models import BatchResult, BatchTask, ModelConfig
 from ask_llm.core.batch_checkpoint import BatchCheckpoint
+from ask_llm.core.command_runner import compute_checkpoint_digest
 from ask_llm.core.batch_models import TaskStatus
 
 # Import CLI first to resolve the trans/service circular import at module load time.
@@ -111,7 +112,10 @@ def test_translation_resume_skips_completed_chunks(tmp_path):
         response="你好世界",
         status=TaskStatus.SUCCESS,
     )
-    checkpoint = BatchCheckpoint.create(command="trans", config_digest=job.file_path)
+    checkpoint = BatchCheckpoint.create(
+        command="trans",
+        config_digest=compute_checkpoint_digest(job.file_path, job.tasks),
+    )
     checkpoint.merge([prior_result])
     checkpoint.save(f"{job.output_path}.trans_checkpoint.json")
 

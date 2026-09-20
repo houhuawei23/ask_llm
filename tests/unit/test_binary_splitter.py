@@ -146,3 +146,38 @@ class TestChunkIdConvention:
         ]
         out = rebalance_translation_chunks(chunks, model=MODEL, max_chunk_tokens=40, enabled=True)
         assert [c.chunk_id for c in out] == list(range(len(out)))
+
+
+class TestSentenceSplitLosslessness:
+    """K1 regression guard: the sentence-pairing loop in
+    ``_split_long_paragraph`` used ``range(0, len(sentences) - 1, 2)``, which
+    dropped the final tail element of ``re.split`` with a capture group —
+    silently losing the last sentence of every budget-split paragraph."""
+
+    @staticmethod
+    def _long_paragraph(n_sentences: int, end_with_separator: bool) -> str:
+        parts = [
+            f"Sentence number {i} explains one more aspect of the topic in detail."
+            for i in range(n_sentences)
+        ]
+        text = " ".join(parts)
+        if end_with_separator:
+            text += " "
+        return text
+
+    @staticmethod
+    def _normalized_join(chunks) -> str:
+        return " ".join(" ".join(c.content.split()) for c in chunks).strip()
+
+    def test_tail_sentence_survives_without_trailing_separator(self):
+        para = self._long_paragraph(60, end_with_separator=False)
+        chunks = _split(para, 100)
+        assert len(chunks) > 1, "paragraph must actually hit the sentence-split path"
+        assert chunks[-1].content.rstrip().endswith("detail.")
+        assert self._normalized_join(chunks) == " ".join(para.split())
+
+    def test_trailing_separator_variant_is_lossless(self):
+        para = self._long_paragraph(60, end_with_separator=True)
+        chunks = _split(para, 100)
+        assert len(chunks) > 1
+        assert self._normalized_join(chunks) == " ".join(para.split())

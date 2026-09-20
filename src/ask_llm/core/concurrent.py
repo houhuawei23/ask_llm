@@ -11,6 +11,7 @@ reused across file/chunk layers without nesting executors.
 from __future__ import annotations
 
 import heapq
+import itertools
 import signal
 import threading
 import time
@@ -100,7 +101,13 @@ class BoundedRetryRunner(Generic[TTask, TResult]):
 
         results: list[TResult] = []
         pending: deque[tuple[TTask, int]] = deque((t, 0) for t in tasks)
-        retry_heap: list[tuple[float, TTask, int]] = []
+        # Heap entries carry a monotonic sequence between the due time and the
+        # task: when two retries share a due timestamp (coarse clocks, identical
+        # backoff), tuple comparison would otherwise fall through to the task
+        # object, and pydantic models / dataclasses do not support ``<`` — the
+        # resulting TypeError killed the whole run (H8).
+        retry_heap: list[tuple[float, int, TTask, int]] = []
+        _retry_seq = itertools.count()
         inflight: dict[Any, TTask] = {}
         lock = threading.Lock()
         exception_during_run: BaseException | None = None
@@ -147,7 +154,10 @@ class BoundedRetryRunner(Generic[TTask, TResult]):
                             on_retry_scheduled(task, result)
                         except BaseException as exc:
                             logger.warning(f"on_retry_scheduled raised: {exc}")
-                    heapq.heappush(retry_heap, (time.monotonic() + delay, task, next_retry))
+                    heapq.heappush(
+                        retry_heap,
+                        (time.monotonic() + delay, next(_retry_seq), task, next_retry),
+                    )
                     return
 
             results.append(result)
@@ -184,7 +194,7 @@ class BoundedRetryRunner(Generic[TTask, TResult]):
                     if not interrupted:
                         now = time.monotonic()
                         while retry_heap and retry_heap[0][0] <= now:
-                            _, task, retry_count = heapq.heappop(retry_heap)
+                            _, _, task, retry_count = heapq.heappop(retry_heap)
                             pending.append((task, retry_count))
 
                     # Submit as many pending tasks as the pool allows.

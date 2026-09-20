@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 
 from rich.progress import (
     BarColumn,
@@ -138,6 +139,18 @@ def _handle_outcome(outcome: FormatMarkdownOutcome, format_type: str) -> tuple[b
         return False, 0, 0
 
 
+@dataclass
+class FormatRunStats:
+    """F-lite convention: every long-running service returns a result carrying
+    a ``failed_count`` so the CLI can map it to a non-zero exit code (H2)."""
+
+    successful_count: int = 0
+    failed_count: int = 0
+    skipped_count: int = 0
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
+
+
 def run_format(
     resolved_files: list[str],
     *,
@@ -156,12 +169,19 @@ def run_format(
     retries: int | None,
     retry_delay: float | None,
     retry_delay_max: float | None,
-) -> None:
+) -> FormatRunStats:
     """Format all files sequentially (``max_workers <= 1``) or via a thread pool.
 
     Sequential mode keeps the legacy verbose per-file logging; parallel mode
     shows a single Rich progress bar.
+
+    Returns per-run counts so the CLI owns the exit code (P4.2/H2).
     """
+    successful_count = 0
+    failed_count = 0
+    skipped_count = 0
+    total_input_tokens = 0
+    total_output_tokens = 0
     successful_count = 0
     failed_count = 0
     skipped_count = 0
@@ -233,6 +253,13 @@ def run_format(
 
     _print_format_summary(
         successful_count, failed_count, skipped_count, total_input_tokens, total_output_tokens
+    )
+    return FormatRunStats(
+        successful_count=successful_count,
+        failed_count=failed_count,
+        skipped_count=skipped_count,
+        total_input_tokens=total_input_tokens,
+        total_output_tokens=total_output_tokens,
     )
 
 

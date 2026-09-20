@@ -225,6 +225,11 @@ def paper(
 
         # P4.2: service returns statuses; the CLI owns exit codes.
         if session_result.status == "failed":
+            if session_result.succeeded_count:
+                console.print_warning(
+                    f"Partial success: {session_result.succeeded_count} job(s) written, "
+                    f"{session_result.failed_count} failed. Re-run to retry the failed ones."
+                )
             console.print_error(f"Paper explain failed: {session_result.error}")
             raise typer.Exit(1)
         if session_result.status in ("dry_run", "nothing_to_do"):

@@ -84,6 +84,10 @@ class PaperSessionResult:
     # "ok" | "dry_run" | "nothing_to_do" | "failed"
     status: str = "ok"
     error: str | None = None
+    # H6: partial-success accounting for the "failed" status — successful jobs
+    # are written to disk before the failure is reported.
+    succeeded_count: int = 0
+    failed_count: int = 0
 
 
 class PaperService:
@@ -257,28 +261,37 @@ class PaperService:
         )
         self._last_results = list(results)
 
+        # H6: write every successful job's result before reporting failures —
+        # discarding paid-for successes forced a full re-run (double billing)
+        # when a single job exhausted its retries.
         failed = [r for r in results if r.status != TaskStatus.SUCCESS]
+        for result in sorted(results, key=lambda r: r.task_id):
+            if result.status == TaskStatus.SUCCESS:
+                self._write_result(
+                    result,
+                    idx_to_meta,
+                    bundle,
+                    explain_pipeline,
+                    explain_root,
+                    prompt_dir,
+                    full_model_name,
+                    options.include_metadata,
+                    options.force,
+                )
+
+        statistics = BatchStatistics.from_results(results)
+        self._print_usage(statistics)
+
         if failed:
             for r in failed:
                 console.print_error(f"Paper job {r.task_id} failed: {r.error or 'unknown error'}")
             errors = "; ".join(f"job {r.task_id}: {r.error or 'unknown'}" for r in failed)
-            return PaperSessionResult(status="failed", error=errors)
-
-        for result in sorted(results, key=lambda r: r.task_id):
-            self._write_result(
-                result,
-                idx_to_meta,
-                bundle,
-                explain_pipeline,
-                explain_root,
-                prompt_dir,
-                full_model_name,
-                options.include_metadata,
-                options.force,
+            return PaperSessionResult(
+                status="failed",
+                error=errors,
+                succeeded_count=len(results) - len(failed),
+                failed_count=len(failed),
             )
-
-        statistics = BatchStatistics.from_results(results)
-        self._print_usage(statistics)
         return PaperSessionResult()
 
     def _build_jobs(

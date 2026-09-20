@@ -19,13 +19,23 @@ _DEFAULT_PROJECT_ROOT_MARKERS = (
     "default_config.yml",
 )
 
+# Prompts shipped inside the package (``ask_llm/prompts``, package-data; a
+# symlink to the repo ``prompts/`` in a dev checkout). Used as the last-resort
+# fallback for ``@``-paths so pip-installed users get the built-in defaults
+# even when their cwd is not inside an ask_llm checkout.
+_PACKAGE_PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
+
 
 def resolve_prompt_file(prompt_path: str) -> Path:
     """Resolve a prompt file path.
 
     Paths starting with ``@`` are resolved relative to the project root, which is
     discovered using ``project_root_markers`` from the active configuration. If no
-    project root is found, the current working directory is used.
+    project root is found, the current working directory is used. When the
+    resolved path does not exist, the packaged ``ask_llm/prompts/`` copy is used
+    as a fallback so installed (non-checkout) environments keep working; the
+    project root always wins over the packaged copy so user-customized prompts
+    are never shadowed.
 
     Args:
         prompt_path: Prompt file path, optionally prefixed with ``@``.
@@ -57,6 +67,16 @@ def resolve_prompt_file(prompt_path: str) -> Path:
         prompt_file = (
             project_root / relative_path.lstrip("/") if project_root else Path(relative_path)
         )
+        if not prompt_file.exists():
+            # The package ships the prompts/ directory itself, so drop the
+            # leading ``prompts/`` component: ``@prompts/x.md`` maps to
+            # ``ask_llm/prompts/x.md``, mirroring ``<root>/prompts/x.md``.
+            pkg_relative = relative_path.lstrip("/")
+            if pkg_relative.startswith("prompts/"):
+                pkg_relative = pkg_relative[len("prompts/") :]
+            packaged = _PACKAGE_PROMPTS_DIR / pkg_relative
+            if packaged.exists():
+                return packaged.resolve()
     else:
         prompt_file = Path(prompt_path)
 

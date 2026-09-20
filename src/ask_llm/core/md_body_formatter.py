@@ -10,6 +10,7 @@ checkpoint save/resume) lives in :class:`ChunkedLLMJob` (P3.3).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from loguru import logger
 
@@ -272,6 +273,7 @@ class BodyFormatter(ChunkedLLMJob):
             chunk_spans={
                 c.chunk_id: (c.start_pos, c.end_pos, c.metadata.get("type", "")) for c in chunks
             },
+            frontmatter=frontmatter,
         )
 
         return BodyFormatResult(
@@ -498,6 +500,22 @@ class BodyFormatter(ChunkedLLMJob):
         if formatted_text is None:
             formatted_text = cls._join_chunks(final_chunks)
 
+        # H5: reattach the carved frontmatter. Pre-v3 checkpoints don't carry
+        # it — re-extract from the source file when that is still available.
+        frontmatter = checkpoint.frontmatter
+        if not frontmatter and checkpoint.source_file:
+            src = Path(checkpoint.source_file)
+            if src.is_file():
+                try:
+                    source_text = src.read_text(encoding="utf-8")
+                except OSError:
+                    source_text = ""
+                fm_range = MarkdownStructure.parse(source_text).frontmatter_range
+                if fm_range is not None:
+                    frontmatter = source_text[fm_range[0] : fm_range[1]]
+        if frontmatter:
+            formatted_text = frontmatter + formatted_text
+
         # Save updated checkpoint if still failing
         successful = [
             SuccessfulChunkInfo(chunk_id=cid, formatted_content=result_map[cid])
@@ -515,6 +533,7 @@ class BodyFormatter(ChunkedLLMJob):
             checkpoint_path=checkpoint_path,
             original_text=checkpoint.original_text,
             chunk_spans=spans_map,
+            frontmatter=frontmatter,
         )
 
         return BodyFormatResult(

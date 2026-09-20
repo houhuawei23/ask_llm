@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import signal
 import threading
+import time
 from dataclasses import dataclass
 
 import pytest
@@ -307,3 +308,67 @@ def test_on_result_exception_does_not_break_run():
         order_key=lambda r: r.task_id,
     )
     assert len(results) == 3  # run completed despite the callback raising
+
+
+@dataclass
+class _UnorderableTask:
+    """Plain dataclass: supports == but not <, like pydantic BatchTask."""
+
+    task_id: int
+
+
+def test_retry_heap_tolerates_identical_due_times(monkeypatch):
+    """H8 regression: retry heap entries used to be ``(due, task, retry)``;
+    with identical due timestamps (coarse clocks — Windows monotonic has
+    ~15ms granularity — or identical backoff) tuple comparison fell through
+    to the task object, and unorderable tasks (pydantic models, dataclasses)
+    raised ``TypeError``, killing the whole run.
+
+    A frozen-then-jump fake clock pins every due timestamp to the exact same
+    float (real monotonic() + (base - real) drifts by an ulp and silently
+    de-ties), while keeping the retries due only after the collision window.
+    Tasks 0/1 fail once together (barrier); task 3 sleeps long enough to keep
+    a future in flight across the failure window, so the runner cannot drain
+    the heap via its idle sleep path between the two pushes.
+    """
+    real_monotonic = time.monotonic  # captured before patching the module attr
+    clock_start = real_monotonic()
+
+    def frozen_then_jump() -> float:
+        # Frozen while the collision must happen, then jumps past the due
+        # time so the frozen retries get picked up instead of sleeping ~10s.
+        if real_monotonic() - clock_start < 0.2:
+            return 1000.0
+        return 1200.0
+
+    monkeypatch.setattr("ask_llm.core.concurrent.time.monotonic", frozen_then_jump)
+    barrier = threading.Barrier(2)
+    attempts: dict[int, int] = {}
+
+    def worker(task: _UnorderableTask, retry_count: int) -> _SimpleResult:
+        tid = task.task_id
+        attempts[tid] = attempts.get(tid, 0) + 1
+        if tid in (0, 1) and attempts[tid] == 1:
+            barrier.wait(timeout=5)
+            time.sleep(0.02)
+            return _SimpleResult(
+                task_id=tid, value=-1, retry_count=retry_count, error="rate limit"
+            )
+        if tid == 3 and attempts[tid] == 1:
+            time.sleep(0.1)
+        return _SimpleResult(task_id=tid, value=tid * 10, retry_count=retry_count)
+
+    results = run_bounded_with_retries(
+        [_UnorderableTask(i) for i in range(4)],
+        worker,
+        max_workers=4,
+        max_retries=3,
+        retry_delay=0.01,
+        retry_delay_max=0.01,
+        is_failed=lambda r: r.value == -1,
+        error_message=lambda r: r.error,
+        retry_count_from_result=lambda r: r.retry_count,
+        order_key=lambda r: r.task_id,
+    )
+    assert sorted(r.value for r in results) == [0, 10, 20, 30]
+    assert attempts == {0: 2, 1: 2, 2: 1, 3: 1}

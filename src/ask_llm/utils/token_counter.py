@@ -40,8 +40,15 @@ class TokenCounter:
     # Providers whose real BPE tokenizer differs from the cl100k_base fallback.
     # cl100k_base materially undercounts CJK text, so counts for these models are
     # approximate; chunk sizing applies APPROX_TOKEN_SAFETY_FACTOR to compensate.
-    _APPROXIMATE_PREFIXES: ClassVar[tuple[str, ...]] = ("deepseek", "qwen")
+    _APPROXIMATE_PREFIXES: ClassVar[tuple[str, ...]] = (
+        "deepseek",
+        "qwen",
+        "kimi",
+        "glm",
+        "minimax",
+    )
     _warned_approximate: ClassVar[set[str]] = set()
+    _warned_word_fallback: ClassVar[bool] = False
 
     # Model to encoding mapping (kept in code as models evolve frequently)
 
@@ -87,9 +94,10 @@ class TokenCounter:
     def is_approximate_model(cls, model: str | None) -> bool:
         """True if token counts for ``model`` rely on a non-native BPE approximation.
 
-        DeepSeek and Qwen ship their own tokenizers; we fall back to cl100k_base,
-        which undercounts CJK text. Callers that size against a provider context
-        window should apply :data:`APPROX_TOKEN_SAFETY_FACTOR`.
+        DeepSeek, Qwen, Kimi, GLM and MiniMax ship their own tokenizers; we fall
+        back to cl100k_base, which undercounts CJK text. Callers that size
+        against a provider context window should apply
+        :data:`APPROX_TOKEN_SAFETY_FACTOR`.
         """
         if not model:
             return False
@@ -170,20 +178,35 @@ class TokenCounter:
         cls._warn_approximate_once(model)
         return cls._count_tokens_cached(text, model)
 
+    @classmethod
+    def _warn_word_fallback_once(cls) -> None:
+        """One-shot WARNING: whitespace word counts are a bad token proxy for CJK."""
+        if not cls._warned_word_fallback:
+            cls._warned_word_fallback = True
+            logger.warning(
+                "tiktoken is unavailable or failing; token estimation fell back to "
+                "whitespace word counts, which badly undercount CJK text and can "
+                "oversize chunks until the provider rejects them. Install tiktoken "
+                "for accurate counts."
+            )
+
     @staticmethod
     @lru_cache(maxsize=TOKEN_COUNT_CACHE_SIZE)
     def _count_tokens_cached(text: str, model: str | None) -> int:
         """Cache-backed token count implementation. See :meth:`count_tokens`."""
         if not TIKTOKEN_AVAILABLE:
+            TokenCounter._warn_word_fallback_once()
             return TokenCounter.count_words(text)
 
         try:
             encoding = TokenCounter.get_encoding(model)
             if encoding is None:
+                TokenCounter._warn_word_fallback_once()
                 return TokenCounter.count_words(text)
             return len(encoding.encode(text))
         except Exception as e:
             logger.debug(f"Token counting failed: {e}, falling back to word count")
+            TokenCounter._warn_word_fallback_once()
             return TokenCounter.count_words(text)
 
     @classmethod
@@ -229,8 +252,12 @@ class TokenCounter:
         if model_lower in cls.ENCODING_MAP:
             return cls.ENCODING_MAP[model_lower]
 
-        # Check for partial match
-        for key, encoding in cls.ENCODING_MAP.items():
+        # Partial match, longest key first: insertion order made
+        # "gpt-4o-2024-08-06" hit "gpt-4" (cl100k_base) instead of "gpt-4o"
+        # (o200k_base) — a 10-20% CJK miscount fed straight into chunk budgets.
+        for key, encoding in sorted(
+            cls.ENCODING_MAP.items(), key=lambda kv: len(kv[0]), reverse=True
+        ):
             if key in model_lower:
                 return encoding
 

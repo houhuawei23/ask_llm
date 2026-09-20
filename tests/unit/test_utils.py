@@ -204,3 +204,27 @@ class TestFileHandler:
         assert FileHandler.detect_type("file.txt") == ".txt"
         assert FileHandler.detect_type("file.MD") == ".md"
         assert FileHandler.detect_type("/path/to/file.py") == ".py"
+
+
+class TestEncodingSelection:
+    """Encoding-map selection must prefer the longest matching key."""
+
+    @pytest.mark.parametrize(
+        "model,expected",
+        [
+            ("gpt-4", "cl100k_base"),
+            ("gpt-4o", "o200k_base"),
+            ("gpt-4o-2024-08-06", "o200k_base"),
+            ("gpt-4o-mini", "o200k_base"),
+            ("openai/gpt-4o-mini", "o200k_base"),
+            ("gpt-3.5-turbo", "cl100k_base"),
+            ("deepseek-chat", "cl100k_base"),
+        ],
+    )
+    def test_get_encoding_matches_longest_key(self, model, expected):
+        assert TokenCounter._get_encoding(model) == expected
+
+    @pytest.mark.parametrize("model", ["kimi-k2.6", "glm-5.1", "MiniMax-M2.5"])
+    def test_new_cjk_providers_are_approximate(self, model):
+        """Kimi/GLM/MiniMax must get the approximate-model safety factor."""
+        assert TokenCounter.is_approximate_model(model)

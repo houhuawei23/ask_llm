@@ -33,7 +33,15 @@ class ConfigManager:
                 f"providers; falling back to '{fallback}'"
             )
             self._current_provider = fallback
-        self._overrides: dict[str, Any] = {}
+        # H1: overrides are stored **per provider**. A single global slot made
+        # ``get_provider_config(other)`` silently inherit the current
+        # provider's api_key / sampling overrides (e.g. a key pasted into the
+        # interactive gate leaked into every fallback / batch provider).
+        self._overrides: dict[str, dict[str, Any]] = {}
+        # Model override is a run-level intent, not a provider field: it never
+        # belonged inside the ProviderConfig payload (it was previously smuggled
+        # in as a fake "_model_override" key that pydantic happened to ignore).
+        self._model_override: str | None = None
         # Track the source of each override for transparency/debugging.
         # Maps override key -> source label (e.g. "CLI", "ENV", "default_config.yml").
         self._override_sources: dict[str, str] = {}
@@ -73,7 +81,11 @@ class ConfigManager:
 
     def get_provider_config(self, provider_name: str | None = None) -> ProviderConfig:
         """
-        Get provider configuration with overrides applied.
+        Get provider configuration with that provider's own overrides applied.
+
+        Overrides recorded via :meth:`apply_overrides` are attributed to the
+        provider that was current when they were applied; requesting another
+        provider's config never inherits them (H1).
 
         Args:
             provider_name: Provider name (uses current if None)
@@ -84,9 +96,9 @@ class ConfigManager:
         name = provider_name or self._current_provider
         base = self._base_config.get_provider_config(name)
 
-        # Create a copy with overrides
+        # Create a copy with this provider's overrides only
         config_dict = base.model_dump()
-        config_dict.update(self._overrides)
+        config_dict.update(self._overrides.get(name, {}))
 
         return ProviderConfig.model_validate(config_dict)
 
@@ -101,40 +113,47 @@ class ConfigManager:
         **kwargs: Any,
     ) -> None:
         """
-        Apply CLI argument overrides.
+        Apply CLI argument overrides to the **current** provider.
+
+        Overrides are attributed to the provider that is current at call time
+        (every call site performs ``set_provider`` first). Field overrides never
+        leak to other providers (H1); the model override is run-level and stays
+        global.
 
         Args:
-            model: Override model name
+            model: Override model name (run-level, see :meth:`get_model_override`)
             temperature: Override temperature
             api_key: Override API key
             api_base: Override API base URL
             source: Origin label for traceability (e.g. "CLI", "ENV").
             **kwargs: Additional overrides
         """
+        bucket = self._overrides.setdefault(self._current_provider, {})
+
         if model is not None:
-            self._overrides["_model_override"] = model
+            self._model_override = model
             self._override_sources["model"] = f"{source}: {model}"
             logger.debug(f"Override: model = {model} (source={source})")
 
         if temperature is not None:
-            self._overrides["api_temperature"] = temperature
+            bucket["api_temperature"] = temperature
             self._override_sources["temperature"] = f"{source}: {temperature}"
             logger.debug(f"Override: temperature = {temperature} (source={source})")
 
         if api_key is not None:
-            self._overrides["api_key"] = api_key
+            bucket["api_key"] = api_key
             self._override_sources["api_key"] = f"{source}: ***"
             logger.debug(f"Override: api_key = *** (source={source})")
 
         if api_base is not None:
-            self._overrides["api_base"] = api_base
+            bucket["api_base"] = api_base
             self._override_sources["api_base"] = f"{source}: {api_base}"
             logger.debug(f"Override: api_base = {api_base} (source={source})")
 
         for key, value in kwargs.items():
             if value is not None:
                 display_value = "***" if "key" in key.lower() else str(value)
-                self._overrides[key] = value
+                bucket[key] = value
                 self._override_sources[key] = f"{source}: {display_value}"
                 logger.debug(f"Override: {key} = {display_value} (source={source})")
 
@@ -145,7 +164,7 @@ class ConfigManager:
         Returns:
             Model name override or None
         """
-        return self._overrides.get("_model_override")
+        return self._model_override
 
     def get_default_model(self, provider_name: str | None = None) -> str:
         """
@@ -176,8 +195,9 @@ class ConfigManager:
         )
 
     def clear_overrides(self) -> None:
-        """Clear all overrides."""
+        """Clear all overrides (every provider and the model override)."""
         self._overrides.clear()
+        self._model_override = None
         self._override_sources.clear()
         logger.debug("Cleared all configuration overrides")
 

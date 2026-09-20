@@ -12,6 +12,7 @@ from loguru import logger
 from tqdm import tqdm
 
 from ask_llm.config.context import get_config_or_none
+from ask_llm.core.checkpoint import atomic_write_text
 
 # Built-in defaults matching default_config.yml so FileHandler can be used
 # without an active CLI config (e.g. library / embedded use).
@@ -156,7 +157,10 @@ class FileHandler:
             if show_progress and len(content.encode("utf-8")) > cls._get_chunk_size():
                 cls._write_with_progress(file_path, content)
             else:
-                file_path.write_text(content, encoding="utf-8")
+                # Atomic (tmp + os.replace): a crash mid-write must never leave
+                # a truncated output — for --inplace the target IS the user's
+                # source document (H10).
+                atomic_write_text(file_path, content)
 
             logger.debug(f"Wrote {len(content)} characters to {path}")
 
@@ -171,13 +175,16 @@ class FileHandler:
         are never split mid-character) while reporting byte counts (B10).
         """
         file_path = Path(path)
+        # Stream into a tmp file and swap at the end so an interrupted write
+        # never truncates the target (H10).
+        tmp_path = file_path.with_suffix(file_path.suffix + ".tmp")
         try:
             file_path.parent.mkdir(parents=True, exist_ok=True)
             total_bytes = len(content.encode("utf-8"))
             char_written = 0
             byte_written = 0
             chunk_size = cls._get_chunk_size()
-            with open(file_path, "w", encoding="utf-8") as f:
+            with open(tmp_path, "w", encoding="utf-8") as f:
                 while byte_written < total_bytes:
                     chunk = content[char_written : char_written + chunk_size]
                     if not chunk:
@@ -188,7 +195,9 @@ class FileHandler:
                     byte_written += len(chunk_bytes)
                     if on_chunk is not None:
                         on_chunk(len(chunk_bytes))
+            tmp_path.replace(file_path)
         except Exception as e:
+            tmp_path.unlink(missing_ok=True)
             raise OSError(f"Failed to write file {path}: {e}") from e
 
     @classmethod

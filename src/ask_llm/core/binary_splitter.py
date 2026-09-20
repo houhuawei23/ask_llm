@@ -307,7 +307,13 @@ class BinarySplitter:
 
         sentences = re.split(r"([.!?]+\s+)", paragraph)
         combined_sentences: list[str] = []
-        for i in range(0, len(sentences) - 1, 2):
+        # re.split with a capture group returns [text, sep, text, ..., text]: the
+        # final element is the tail after the last separator. Stepping by 2 over
+        # the full length pairs each text with its following separator and lets
+        # the else branch pick up that tail. The former ``len(sentences) - 1``
+        # bound dropped it, silently losing the last sentence of every
+        # budget-split paragraph.
+        for i in range(0, len(sentences), 2):
             if i + 1 < len(sentences):
                 combined_sentences.append(sentences[i] + sentences[i + 1])
             else:

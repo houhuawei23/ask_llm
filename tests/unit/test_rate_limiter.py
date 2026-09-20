@@ -135,3 +135,20 @@ def test_acquire_timeout_reads_provider_config():
     assert limiter.acquire_timeout("deepseek", "deepseek-chat") == 120.0
     # Unconfigured provider falls back to default_limits (60s by default).
     assert limiter.acquire_timeout("qwen", "qwen-max") == 60.0
+
+
+@pytest.mark.parametrize(
+    "provider,expected",
+    [
+        ("siliconflow", (200, 30)),
+        ("aliyun", (200, 30)),
+        ("kimi-code", (60, 10)),
+    ],
+)
+def test_catalog_providers_have_real_defaults(provider, expected):
+    """Providers served by providers.yml must not fall through to the (60, 10)
+    floor, which throttled paper's default concurrency."""
+    from ask_llm.utils.rate_limiter import GlobalRateLimiter
+
+    limiter = GlobalRateLimiter()
+    assert limiter._get_limit(provider, None) == expected

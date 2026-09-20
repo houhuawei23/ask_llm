@@ -117,12 +117,22 @@ class BatchResultExporter:
         """Export results as JSON using a streaming encoder.
 
         For large result sets this avoids materializing the entire JSON string in
-        memory before writing it to disk.
+        memory before writing it to disk. Streams into a tmp file and swaps at
+        the end, matching FileHandler's atomic-write + parent-mkdir semantics
+        used by the yaml/csv/markdown exports (H10).
         """
+        output_file = Path(output_path)
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        tmp_file = output_file.with_suffix(output_file.suffix + ".tmp")
         encoder = json.JSONEncoder(indent=2, ensure_ascii=False, default=str)
-        with open(output_path, "w", encoding="utf-8") as f:
-            for chunk in encoder.iterencode(self._prepare_data()):
-                f.write(chunk)
+        try:
+            with open(tmp_file, "w", encoding="utf-8") as f:
+                for chunk in encoder.iterencode(self._prepare_data()):
+                    f.write(chunk)
+            tmp_file.replace(output_file)
+        except Exception:
+            tmp_file.unlink(missing_ok=True)
+            raise
 
     def _export_yaml(self) -> str:
         """Export results as YAML."""

@@ -7,6 +7,9 @@ items later via ``ask-llm format --resume``.
 v2 (D5): stores ``original_text`` + per-chunk ``chunk_spans`` so resume can
 re-assemble with the same position-aware joiner as a fresh run, instead of the
 lossy ``\\n\\n`` fallback. v1 files load unchanged (spans absent → legacy join).
+
+v3 (H5): stores the carved ``frontmatter`` so resume can reattach it; v2 files
+load unchanged (frontmatter absent → resume re-extracts from the source file).
 """
 
 from __future__ import annotations
@@ -21,7 +24,7 @@ from loguru import logger
 
 from ask_llm.core.checkpoint import atomic_write_text
 
-CHECKPOINT_VERSION = 2
+CHECKPOINT_VERSION = 3
 
 
 @dataclass
@@ -60,6 +63,9 @@ class FormatCheckpoint:
     # position-aware joiner (lossless) instead of the "\n\n" fallback.
     original_text: str = ""
     chunk_spans: list[dict[str, Any]] = field(default_factory=list)
+    # H5: the frontmatter carved out before chunking, reattached verbatim on
+    # resume. Empty for pre-v3 checkpoints (resume re-extracts it instead).
+    frontmatter: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize checkpoint to dictionary."""
@@ -90,6 +96,7 @@ class FormatCheckpoint:
             ],
             "original_text": self.original_text,
             "chunk_spans": list(self.chunk_spans),
+            "frontmatter": self.frontmatter,
         }
 
     @classmethod
@@ -126,6 +133,7 @@ class FormatCheckpoint:
             ],
             original_text=data.get("original_text", ""),
             chunk_spans=list(data.get("chunk_spans", [])),
+            frontmatter=data.get("frontmatter", ""),
         )
 
     def save(self, path: str | Path) -> None:

@@ -295,7 +295,7 @@ def format_cmd(
             f"（类型={type_lower}，目录递归={recursive}{depth_str}，并行数={file_workers}）"
         )
 
-        run_format(
+        run_stats = run_format(
             resolved_files,
             format_type=type_lower,
             processor=processor,
@@ -313,3 +313,7 @@ def format_cmd(
             retry_delay=retry_delay,
             retry_delay_max=retry_delay_max,
         )
+        # H2: the CLI owns the exit code — any failed file means exit 1 so
+        # scripts/CI don't see half-failed format runs as green.
+        if run_stats.failed_count:
+            raise typer.Exit(1)

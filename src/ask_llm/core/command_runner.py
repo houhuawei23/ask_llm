@@ -14,6 +14,8 @@ Canonical decisions where the copies drifted:
 
 from __future__ import annotations
 
+import hashlib
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -28,6 +30,36 @@ from ask_llm.core.global_batch_runner import run_global_batch_tasks
 # D6: persist incremental checkpoint progress every N successful results so a
 # hard kill (SIGKILL/OOM) loses at most ~N results instead of the whole run.
 _INCREMENTAL_SAVE_EVERY = 10
+
+
+def compute_checkpoint_digest(
+    config_path: str | Path | None = None,
+    tasks: Sequence[BatchTask] | None = None,
+) -> str:
+    """Digest the run's defining inputs for checkpoint consistency checks.
+
+    Hashes the config/input file *content* (never just its path — a path-only
+    digest made resume validation a no-op, H9) plus each task's prompt,
+    content and model, so editing any of them between runs invalidates the
+    old checkpoint instead of silently mis-mapping prior results onto new
+    tasks.
+    """
+    h = hashlib.sha256()
+    if config_path is not None:
+        p = Path(config_path)
+        if p.is_file():
+            h.update(p.read_bytes())
+        else:
+            h.update(str(config_path).encode("utf-8"))
+    for t in tasks or ():
+        h.update(b"\x1f")
+        h.update((t.prompt or "").encode("utf-8"))
+        h.update(b"\x1e")
+        h.update((t.content or "").encode("utf-8"))
+        h.update(b"\x1e")
+        model = t.model_settings.model if t.model_settings is not None else ""
+        h.update((model or "").encode("utf-8"))
+    return h.hexdigest()
 
 
 @dataclass
@@ -83,7 +115,17 @@ def run_with_checkpoint(
 
     # 1. Optional resume: load prior progress, filter completed tasks.
     if resume and Path(checkpoint_path).exists():
-        checkpoint = BatchCheckpoint.load(checkpoint_path)
+        loaded = BatchCheckpoint.load(checkpoint_path)
+        # H9: a checkpoint from a different command or a different input
+        # (digest mismatch — old checkpoints stored only the config *path*)
+        # must refuse to resume rather than mis-map old results onto new tasks.
+        if loaded.command != command or loaded.config_digest != config_digest:
+            raise ValueError(
+                f"Checkpoint {checkpoint_path} does not match this run "
+                f"(input or configuration changed since it was created). "
+                f"Delete it and re-run without --resume to start fresh."
+            )
+        checkpoint = loaded
         remaining = [t for t in tasks if not checkpoint.is_completed(t.task_id)]
         if len(remaining) < len(tasks):
             logger.info(

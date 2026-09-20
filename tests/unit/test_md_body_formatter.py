@@ -238,6 +238,72 @@ class TestBodyFormatter:
         assert "\n\n" not in result.text
         assert "alpha" in result.text and "beta" in result.text and "gamma" in result.text
 
+    def test_resume_reattaches_frontmatter(self, tmp_path):
+        """H5: body checkpoints (v3) carry the carved frontmatter and resume
+        must reattach it verbatim before the formatted body."""
+        frontmatter = "---\ntitle: My Doc\ntags: [a, b]\n---\n"
+        body = "para one\npara two\n"
+        source = tmp_path / "doc.md"
+        source.write_text(frontmatter + body, encoding="utf-8")
+        spans = [
+            {"chunk_id": 0, "start": 0, "end": 9, "type": "character_split"},
+            {"chunk_id": 1, "start": 9, "end": 18, "type": "character_split"},
+        ]
+        ckpt = FormatCheckpoint(
+            version=3,
+            source_file=str(source),
+            format_type="body",
+            model="gpt-4",
+            prompt_template=_TEST_PROMPT_TEMPLATE,
+            max_chunk_tokens=8,
+            created_at="2026-09-20T00:00:00",
+            failed_chunks=[FailedChunkInfo(1, "para two", _TEST_PROMPT_TEMPLATE, "boom", 0)],
+            successful_chunks=[SuccessfulChunkInfo(0, "para one")],
+            original_text=body,
+            chunk_spans=spans,
+            frontmatter=frontmatter,
+        )
+        path = str(tmp_path / "ckpt.json")
+        ckpt.save(path)
+
+        processor = self._create_mock_processor()
+        result = BodyFormatter.resume_from_checkpoint(path, processor, "gpt-4")
+
+        assert result.text.startswith(frontmatter)
+        assert "para one" in result.text and "para two" in result.text
+
+    def test_resume_v2_checkpoint_reextracts_frontmatter_from_source(self, tmp_path):
+        """H5: pre-v3 checkpoints carry no frontmatter; resume re-extracts it
+        from the source file so legacy resumes don't drop document metadata."""
+        frontmatter = "---\ntitle: Legacy\ndate: 2026-01-01\n---\n"
+        body = "alpha\nbeta\n"
+        source = tmp_path / "legacy.md"
+        source.write_text(frontmatter + body, encoding="utf-8")
+        spans = [
+            {"chunk_id": 0, "start": 0, "end": 6, "type": "character_split"},
+            {"chunk_id": 1, "start": 6, "end": 11, "type": "character_split"},
+        ]
+        ckpt = FormatCheckpoint(
+            version=2,
+            source_file=str(source),
+            format_type="body",
+            model="gpt-4",
+            prompt_template=_TEST_PROMPT_TEMPLATE,
+            max_chunk_tokens=8,
+            created_at="2026-07-19T00:00:00",
+            failed_chunks=[FailedChunkInfo(1, "beta", _TEST_PROMPT_TEMPLATE, "boom", 0)],
+            successful_chunks=[SuccessfulChunkInfo(0, "alpha")],
+            original_text=body,
+            chunk_spans=spans,
+        )
+        path = str(tmp_path / "ckpt.json")
+        ckpt.save(path)
+
+        processor = self._create_mock_processor()
+        result = BodyFormatter.resume_from_checkpoint(path, processor, "gpt-4")
+
+        assert result.text.startswith(frontmatter)
+
     def test_format_body_multi_chunk_merge_order(self):
         """Test that multi-chunk results are merged in correct order."""
         # Mock the splitter to return controlled chunks

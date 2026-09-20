@@ -1,5 +1,9 @@
 """Unit tests for FileHandler chunked I/O callbacks (P4.10)."""
 
+from pathlib import Path
+
+import pytest
+
 from ask_llm.utils.file_handler import FileHandler
 
 
@@ -36,3 +40,51 @@ class TestChunkedIO:
         f = tmp_path / "out.txt"
         FileHandler.write_chunked(f, "xyz")
         assert f.read_text(encoding="utf-8") == "xyz"
+
+
+class TestAtomicWrite:
+    """H10: writes must be atomic (tmp + os.replace) so a crash mid-write
+    never truncates the target — for --inplace the target is the user's
+    source document."""
+
+    def test_write_atomic_failure_preserves_original(self, tmp_path, monkeypatch):
+        target = tmp_path / "out.md"
+        target.write_text("original content", encoding="utf-8")
+
+        def boom(path, payload):
+            raise OSError("disk gone")
+
+        monkeypatch.setattr("ask_llm.utils.file_handler.atomic_write_text", boom)
+        with pytest.raises(OSError):
+            FileHandler.write(target, "new content", force=True)
+        assert target.read_text(encoding="utf-8") == "original content"
+        assert not (tmp_path / "out.md.tmp").exists()
+
+    def test_write_chunked_atomic_failure_preserves_original(self, tmp_path, monkeypatch):
+        target = tmp_path / "out.md"
+        target.write_text("original content", encoding="utf-8")
+
+        real_replace = Path.replace
+
+        def exploding_replace(self, target_path):
+            if self.suffix == ".tmp":
+                raise OSError("replace failed")
+            return real_replace(self, target_path)
+
+        monkeypatch.setattr(Path, "replace", exploding_replace)
+        with pytest.raises(OSError):
+            FileHandler.write_chunked(target, "new content")
+        assert target.read_text(encoding="utf-8") == "original content"
+        assert not (tmp_path / "out.md.tmp").exists()
+
+    def test_write_chunked_roundtrip_and_no_tmp_leftover(self, tmp_path):
+        target = tmp_path / "out.md"
+        content = "x" * 10_000
+        FileHandler.write_chunked(target, content)
+        assert target.read_text(encoding="utf-8") == content
+        assert not (tmp_path / "out.md.tmp").exists()
+
+    def test_write_roundtrip_content(self, tmp_path):
+        target = tmp_path / "nested" / "out.md"
+        FileHandler.write(target, "hello", force=True)
+        assert target.read_text(encoding="utf-8") == "hello"

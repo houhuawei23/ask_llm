@@ -122,6 +122,7 @@ class ChunkedLLMJob:
         checkpoint_path: str | None = None,
         original_text: str | None = None,
         chunk_spans: dict[int, tuple[int, int, str]] | None = None,
+        frontmatter: str = "",
     ) -> str | None:
         """Save a checkpoint for failed units; returns its path (or None).
 
@@ -130,6 +131,8 @@ class ChunkedLLMJob:
         ``original_text`` / ``chunk_spans`` (D5) are optional and currently
         supplied only by the body formatter, so resume can re-assemble with the
         lossless position-aware joiner instead of the ``\\n\\n`` fallback.
+        ``frontmatter`` (H5) carries the carved YAML frontmatter so resume can
+        reattach it.
         """
         if not failed_chunks or not source_file:
             return None
@@ -150,6 +153,7 @@ class ChunkedLLMJob:
             successful_chunks=successful_chunks,
             original_text=original_text or "",
             chunk_spans=spans,
+            frontmatter=frontmatter,
         )
         checkpoint.save(path)
         return path

@@ -568,8 +568,15 @@ class HeadingFormatter(ChunkedLLMJob):
             # matches is list of tuples: (hashes_string, title)
             formatted_headings = [f"{hashes} {title}" for hashes, title in matches]
 
-        if take_last_only and len(formatted_headings) > expected_count:
-            formatted_headings = formatted_headings[-expected_count:]
+        if len(formatted_headings) > expected_count:
+            if take_last_only:
+                formatted_headings = formatted_headings[-expected_count:]
+            else:
+                # H7: the LLM emitted extra heading-looking lines (commentary,
+                # echoed input). Truncate in order instead of letting the
+                # apply-stage count check fail the whole file — by this point
+                # every batch's API cost is already sunk.
+                formatted_headings = formatted_headings[:expected_count]
 
         # Validate count
         if len(formatted_headings) != expected_count:

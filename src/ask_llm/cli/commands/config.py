@@ -110,15 +110,27 @@ def config(
                 console.print(f"  Default Model: {default_model}")
                 if pc.models:
                     console.print(f"  Available Models: {', '.join(pc.models)}")
-                console.print(f"  API Key: {'✓ Configured' if pc.api_key else '✗ Not configured'}")
+                # H3: judge by the same rule as `config test` — an unresolved
+                # ${VAR} placeholder is NOT a configured key.
+                if api_key_is_missing_or_unresolved(pc.api_key):
+                    console.print("  API Key: ✗ Not configured")
+                else:
+                    console.print("  API Key: ✓ Configured")
                 console.print()
 
         elif action == "test":
             providers_to_test = [provider] if provider else list(config.providers.keys())
+            # H3: a failed connection check must yield a non-zero exit code so
+            # `config test` works as a health check in scripts/CI. A missing
+            # key is only fatal when the provider was requested explicitly —
+            # the default catalog sweep always includes unconfigured providers.
+            explicit_target = provider is not None
+            any_failed = False
 
             for name in providers_to_test:
                 if name not in config.providers:
                     console.print_error(f"Provider '{name}' not found")
+                    any_failed = True
                     continue
 
                 pc = config.providers[name]
@@ -127,18 +139,23 @@ def config(
                     pc.api_key
                 ):
                     console.print_warning(f"[{name}] API key not configured")
+                    if explicit_target:
+                        any_failed = True
                     continue
 
                 console.print(f"\nTesting [cyan]{name}[/cyan]...", end=" ")
 
                 try:
-                    # Get default model for this provider
-                    test_default_model = config.default_model or (
-                        pc.models[0] if pc.models else None
-                    )
+                    # Same priority as ConfigManager.get_default_model: the
+                    # provider's own models[0] first, global default_model only
+                    # as fallback (H3: the reversed order tested e.g. an
+                    # OpenAI-named model against DeepSeek and reported bogus
+                    # failures).
+                    test_default_model = pc.models[0] if pc.models else config.default_model
                     if not test_default_model:
                         console.print("[red]✗[/red]")
                         console.print("  Error: No default model available")
+                        any_failed = True
                         continue
 
                     llm_provider = create_engine_adapter(pc, default_model=test_default_model)
@@ -150,12 +167,16 @@ def config(
                     else:
                         console.print("[red]✗[/red]")
                         console.print(f"  Error: {message}")
+                        any_failed = True
 
                 except Exception as e:
                     console.print("[red]✗[/red]")
                     console.print_error(f"  {e}")
+                    any_failed = True
 
             console.print()
+            if any_failed:
+                raise typer.Exit(1)
 
         else:
             console.print_error(f"Unknown action: {action}")

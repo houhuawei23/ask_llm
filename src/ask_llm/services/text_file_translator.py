@@ -19,7 +19,7 @@ from loguru import logger
 
 from ask_llm.config.manager import ConfigManager
 from ask_llm.core.batch_models import BatchResult, BatchTask, TaskStatus
-from ask_llm.core.command_runner import run_with_checkpoint
+from ask_llm.core.command_runner import compute_checkpoint_digest, run_with_checkpoint
 from ask_llm.core.markdown_token_splitter import MarkdownTokenSplitter
 from ask_llm.core.models import AppConfig
 from ask_llm.core.text_splitter import TextChunk, TextSplitter
@@ -210,7 +210,7 @@ class TextFileTranslator:
         try:
             outcome = run_with_checkpoint(
                 command="trans",
-                config_digest=job.file_path,
+                config_digest=compute_checkpoint_digest(job.file_path, job.tasks),
                 checkpoint_path=checkpoint_path,
                 tasks=job.tasks,
                 config_manager=self.config_manager,

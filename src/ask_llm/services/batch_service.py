@@ -18,7 +18,7 @@ from loguru import logger
 from ask_llm.config.manager import ConfigManager
 from ask_llm.config.unified_config import BatchConfig as UnifiedBatchConfig
 from ask_llm.core.batch_models import BatchResult, BatchStatistics, BatchTask, ModelConfig
-from ask_llm.core.command_runner import run_with_checkpoint
+from ask_llm.core.command_runner import compute_checkpoint_digest, run_with_checkpoint
 from ask_llm.core.execution_report import ExecutionReport, build_report_from_batch_results
 from ask_llm.core.models import AppConfig
 from ask_llm.utils.api_key_gate import (
@@ -241,7 +241,7 @@ def run_batch_from_config(
     checkpoint_path = resume_checkpoint_path or _default_batch_checkpoint_path(config_file)
     outcome = run_with_checkpoint(
         command="batch",
-        config_digest=config_file,
+        config_digest=compute_checkpoint_digest(config_file, global_tasks),
         checkpoint_path=checkpoint_path,
         tasks=global_tasks,
         config_manager=config_manager,

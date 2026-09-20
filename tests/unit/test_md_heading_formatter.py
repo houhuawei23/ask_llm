@@ -233,6 +233,35 @@ That's all!"""
         assert result.formatted_headings[1] == "# Section"
         assert result.stats.batches_failed == 1
 
+    def test_parse_truncates_extra_headings_without_context(self):
+        """H7: with no context (take_last_only=False), extra heading-looking
+        lines in the LLM response are truncated in order instead of failing the
+        apply-stage count check and scrapping the whole paid-for file."""
+        mock_response = (
+            "# Title\n"
+            "# Section\n"
+            "Note: both headings above look good!\n"
+            "# Stray commentary heading\n"
+        )
+        processor = self._create_mock_processor(mock_response)
+        formatter = HeadingFormatter(processor=processor, prompt_template=_TEST_PROMPT_TEMPLATE)
+
+        result = formatter._parse_formatted_headings(
+            mock_response, expected_count=2, take_last_only=False
+        )
+        assert result == ["# Title", "# Section"]
+
+    def test_parse_take_last_only_keeps_last_window(self):
+        """Context-aware batches keep the LAST expected_count headings."""
+        mock_response = "# Context heading\n# Title\n# Section\n"
+        processor = self._create_mock_processor(mock_response)
+        formatter = HeadingFormatter(processor=processor, prompt_template=_TEST_PROMPT_TEMPLATE)
+
+        result = formatter._parse_formatted_headings(
+            mock_response, expected_count=2, take_last_only=True
+        )
+        assert result == ["# Title", "# Section"]
+
     def test_load_prompt_from_file(self):
         """Test loading prompt template from file."""
         with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:

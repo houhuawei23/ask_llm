@@ -9,6 +9,29 @@ import yaml
 from ask_llm.core.models import AppConfig, ProviderConfig, ChatHistory, ChatMessage, MessageRole
 
 
+@pytest.fixture(autouse=True)
+def _reset_process_globals():
+    """Reset process-wide mutable state around each test.
+
+    ``config.context._current`` and the ``GlobalRateLimiter`` singleton survive
+    across tests otherwise, making results order-dependent: any test that calls
+    ``set_config`` (or configures rate limits) leaks into every later test.
+    """
+    from ask_llm.config import context
+    from ask_llm.utils.rate_limiter import GlobalRateLimiter
+
+    def _clear() -> None:
+        context._current = None
+        limiter = GlobalRateLimiter()
+        with limiter._lock:
+            limiter._limiters.clear()
+            limiter._config = None
+
+    _clear()
+    yield
+    _clear()
+
+
 @pytest.fixture
 def temp_dir():
     """Create temporary directory."""
