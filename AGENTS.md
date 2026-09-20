@@ -103,8 +103,7 @@ ask_llm/
 │   └── conftest.py         # Pytest fixtures
 ├── docs/                   # Documentation
 ├── prompts/                # Prompt templates (paper/, md-*-format, trans, ...) — symlinked into src/ask_llm/prompts
-├── pyproject.toml          # Modern Python project config
-├── requirements.txt        # Dependencies
+├── pyproject.toml          # Modern Python project config (deps + dynamic version)
 ├── providers.yml           # Provider runtime catalog (base_url, models, pricing, specs)
 └── default_config.yml      # Unified configuration (run `ask-llm config init` to create)
 ```
@@ -416,21 +415,19 @@ console.print_table(headers=["Name", "Value"], rows=[["k1", "v1"]])
 
 ### Pytest Markers
 
-```python
-import pytest
+The `unit` / `integration` / `slow` markers are registered in `pyproject.toml`
+but optional — existing tests select by directory layout (`tests/unit/`,
+`tests/integration/`), so plain test functions are fine. Add a marker only
+when you need to filter within a file (`pytest -m slow`).
 
-@pytest.mark.unit
-def test_something():
-    pass
+### Test Isolation
 
-@pytest.mark.integration
-def test_api_call():
-    pass
-
-@pytest.mark.slow
-def test_heavy_computation():
-    pass
-```
+`tests/conftest.py` resets the `config.context` global and the
+`GlobalRateLimiter` singleton around every test (autouse). Do not rely on
+state set by a previous test; call `set_config(...)` explicitly when needed.
+Integration tests that exercise the real execution chain use the fake
+in-process adapter pattern from `tests/integration/test_global_runner_e2e.py`
+(mock `create_engine_adapter` at `ask_llm.utils.provider_cache`).
 
 ## Observability and Performance
 
@@ -499,4 +496,5 @@ Providers are handled externally by `llm-api-engine`. Update configuration in `p
 - Designed and implemented with assistance from **kimi-code** (agent) and **kimi-k2.7** (model). \
   2.20.0 review & refactor with assistance from **ZCode** (agent) and **GLM-5.3** (model). \
   2.21.0 bug fixes & consolidation with assistance from **ZCode** (agent) and **GLM-5.3** (model). \
-  2.22.0 correctness & dead-code sweep with assistance from **ZCode** (agent) and **GLM-5.3** (model).
+  2.22.0 correctness & dead-code sweep with assistance from **ZCode** (agent) and **GLM-5.3** (model). \
+  2.23.0 full-audit repair (3C+10H+~20M), test-chain backfill and repo hygiene with assistance from **Claude Code** (agent).

@@ -29,11 +29,8 @@ A modern command-line tool for calling multiple LLM APIs (DeepSeek, Qwen, etc.) 
 git clone <repository-url>
 cd ask_llm
 
-# Install dependencies
-pip install -r requirements.txt
-
-# Install in development mode
-pip install -e .
+# Install in development mode (deps come from pyproject.toml)
+pip install -e ".[dev]"
 ```
 
 ### Configuration

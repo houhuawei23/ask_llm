@@ -2,6 +2,26 @@
 
 Provides a base class that concrete checkpoints (batch, translation) can extend
 by implementing serialization hooks for their task and result types.
+
+## The checkpoint contract
+
+Every checkpoint in this package must uphold three invariants:
+
+1. **Versioned schema** — a ``version`` integer in the payload; readers use
+   ``.get()`` with defaults so older files stay loadable (see
+   ``FormatCheckpoint`` v1→v2→v3 for the pattern).
+2. **Input-content digest** — ``config_digest`` is a sha256 over the *content*
+   of the run's defining inputs (config file bytes + task payloads, see
+   ``command_runner.compute_checkpoint_digest``), never just a path. Resume
+   must refuse to load a checkpoint whose digest (or command name) does not
+   match the current run (H9): stale progress silently mis-mapping onto edited
+   inputs is worse than rerunning.
+3. **Atomic writes** — persistence goes through ``atomic_write_text``
+   (tmp + ``os.replace``); a crash mid-save leaves the previous checkpoint
+   intact, never a truncated file.
+
+Long-running formats additionally persist incrementally (every N successful
+results, D6) so a SIGKILL/OOM loses at most N results instead of the run.
 """
 
 from __future__ import annotations

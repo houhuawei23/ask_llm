@@ -1,5 +1,97 @@
 # Changelog
 
+## 2.23.0 (Unreleased)
+
+全面审计修复：3 Critical + 10 High + 约 20 Medium，测试链路补真实执行链覆盖，
+工程卫生（打包/钩子/版本单一源）。589 测试全绿，mypy 清零并开始真正把关。
+
+### 行为变更（脚本/CI 需关注）
+
+- **format / batch / config test 失败现在返回非零退出码**：此前 format 无论成败恒
+  exit 0，config test 对连接失败/未知 provider 也 exit 0。依赖"恒成功"的脚本需调整
+  （与 trans/paper 对齐）。
+- **旧 checkpoint 在 resume 时被拒绝**：`config_digest` 从"文件路径字符串"改为
+  "输入内容 + 任务负载的 sha256"，且 resume 时校验不一致即拒绝（提示删除重跑）。
+  2.22 及更早的 checkpoint 全部失效——宁可重跑，不可错拼。
+- **pre-commit ruff 钩子升级到 v0.8.4 且覆盖 tests/**：此前 v0.1.9 读不到
+  `[tool.ruff.lint]` 规则集（只跑默认规则），tests/ 从不被 lint。mypy 钩子摘掉
+  `|| true`，32 个存量类型错误已修复，mypy 现在真正把关提交。
+
+### Fixed（Critical）
+
+- **句子切分丢尾句（数据丢失）**：`binary_splitter` 的句对循环
+  `range(0, len-1, 2)` 丢掉 `re.split` 带捕获组返回的尾段元素——任何走句子切分路径的
+  超预算段落都会静默丢失最后一句。补"切分拼接（空白归一化）== 原文"不变式测试。
+- **pip 安装后默认提示词必炸**：`@prompts/...` 只按 cwd 向上找项目根。现项目根优先、
+  包内 `ask_llm/prompts/` 兜底（与 paper 管线先例一致），用户自定义永不被遮蔽。
+- **pip 安装后 providers.yml 全部静默失效**：包内 `config/providers.yml` 不在搜索
+  路径、repo 根启发式在 site-packages 下失效（provider 回退 + 成本估算双双失效且
+  开发环境无法复现）。现打包副本入搜索路径末端，repo 根启发式加 pyproject 哨兵。
+
+### Fixed（High）
+
+- **ConfigManager overrides 全局单槽跨 provider 串 key**：交互式 gate 粘贴的
+  api_key 与采样参数会泄漏到 batch/fallback 的其他 provider；`_model_override`
+  伪 key 混入 model_validate 输入。现 overrides 按 provider 隔离，model 覆盖独立
+  字段，对外 API 不变。
+- **paper 一败全弃**：单个 job 重试耗尽会丢弃全部已付费成功结果（不落盘）。现成功
+  job 照常写盘 + 失败计数入结果，CLI 打印部分成功提示。
+- **heading 格式化多一行即整文件报废**：LLM 夹带多余标题行触发 apply 数量校验
+  raise，此前所有 batch 花费作废。现按序截断到期望数（上下文批次仍取尾部窗口）。
+- **重试堆 TypeError 炸整批**：堆元组 `(due, task, retry)` 在 due 时间戳相同
+  （粗粒度时钟/同拍失败）时比较 task 对象——pydantic/数据类不支持 `<`。现插入单调
+  序列号；回归测试在旧代码上精确复现 TypeError。
+- **body 格式化 resume 丢 frontmatter**：checkpoint 现携带 carve 出的 frontmatter
+  （v3），resume 重新附着；v2 旧文件从源文件重提取兜底。
+- **`--inplace` 非原子写可损坏源文档**：`FileHandler.write`/`write_chunked` 与
+  batch JSON 导出统一走 tmp + `os.replace` 原子写，中断不再截断目标文件。
+
+### Fixed（Medium 精选）
+
+- token 计数：encoding 子串匹配改最长 key 优先（gpt-4o 曾命中 gpt-4 的 cl100k，
+  CJK 偏差 10-20%）；kimi/glm/minimax 纳入近似安全余量；tiktoken 缺失的空格分词
+  兜底从 DEBUG 升为一次性 WARNING。
+- 限流：siliconflow/aliyun/kimi-code 补真实默认值（原落 60rpm 兜底）；被限流
+  WARNING 每 key 每分钟至多一条。
+- 错误分类：瞬时服务端签名（500/502/503/overloaded/…）优先于宽泛校验词——
+  "502: invalid upstream response" 不再被判成终态；宽泛词（invalid/required/
+  missing）退居表尾兜底。
+- auth 错误去重改按 provider/model 维度：一个 provider 的 401 不再静音其他
+  provider 的鉴权报错。
+- 响应解析：`unwrap_translation_payload` 仅当响应以 JSON 对象开头（可带围栏）才
+  尝试解包——译文中合法出现的 JSON 示例不再被破坏性改写。
+- CLI 一致性：ask/chat `--prompt` 的 `@`/`~` 路径显式解析、缺失即报错（不再静默当
+  字面文本）；paper `--dry-run` 不再强制过 API-key gate；format `--type` 校验提前到
+  任何配置加载之前；`ask` 激活 `general.stream_default` 配置；交互式 key 注入收敛
+  为单一入口（含 adapter 缓存失效——interactive_config 路径此前缺失）。
+- 加固：非 resume 重跑覆写已有 checkpoint 前先警告；trans 输出存在性检查提前到
+  跑之前（原在全部 token 花完后）；串行翻译路径获得与并行路径一致的 per-file 容错；
+  paper `_split_by_h2` 尊重代码围栏（围栏内 `##` 不再切分 section）；batch 排序与
+  进度元数据共享一次 tokenize（原整批展开+编码两遍）。
+
+### Changed（工程卫生）
+
+- 删除过期文件：`build/`（幽灵模块会被打进 wheel）、`setup.py`（2.15.1/py3.8
+  旧元数据）、`demo.py`（2.15 API 遗物）、`requirements.txt`（与 pyproject 双维护）。
+- 版本单一源：pyproject `dynamic = ["version"]` 读 `ask_llm.__version__`。
+- `providers.yml` 打包副本改为指向仓库根的 symlink（沿 prompts 先例），终结双拷贝
+  漂移。
+- `.gitignore` 重整：去掉 `**/.**`（隐式吞掉一切点目录、也掩盖了本地数据）与全局
+  `*.txt`、`test/` 地雷，改为本地目录显式清单。
+- 测试：真实执行链端到端测试（假 in-process adapter 驱动真 runner + checkpoint
+  生命周期：SIGINT → 落盘 → digest 校验 resume）；config/env、engine_facade、
+  merge、format_markdown_file、chunked_llm_job 等零覆盖模块直测；conftest 增加
+  全局状态 autouse 复位。
+
+### Backlog（后续建议，本次未实施）
+
+- 架构项：不可变 `EffectiveConfig` 值对象（替代四处进程级可变全局协同）；统一并发
+  调度拓扑（trans 多文件嵌套线程池 × 全局令牌桶）；错误分类在 raise 点携带
+  `ErrorCategory`（关键词表退化兜底）；`exit_for(result)` 全量退出码协议。
+- 深修项：splitter strip 后 span 漂移的位置感知拼接深修；env 覆盖层按声明类型解析
+  （`_parse_env_value` 子串猜测已在本次局部收窄）；`--providers-pricing` 补 batch；
+  跨命令 CLI 短选项统一（`-p`/`-a` 等）。
+
 ## 2.22.0 (2026-08-18)
 
 第三轮重构：行为缺陷修复 + CLI 错误处理统一 + gate 分层净化 + 死代码清扫（净 −700 行）
