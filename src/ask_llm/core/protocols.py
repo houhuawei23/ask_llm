@@ -32,3 +32,7 @@ class LLMProviderProtocol(Protocol):
     ) -> str | ReasoningChunk | Generator[str | ReasoningChunk, None, None]:
         """Call the LLM API."""
         ...
+
+    def test_connection(self) -> tuple[bool, str, float]:
+        """Probe the provider API: (success, message, latency_seconds)."""
+        ...

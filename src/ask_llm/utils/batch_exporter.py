@@ -4,7 +4,7 @@ import csv
 import json
 import re
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 
 import yaml
 from loguru import logger
@@ -137,7 +137,9 @@ class BatchResultExporter:
     def _export_yaml(self) -> str:
         """Export results as YAML."""
         data = self._prepare_data()
-        return yaml.dump(data, default_flow_style=False, allow_unicode=True, sort_keys=False)
+        return cast(
+            str, yaml.dump(data, default_flow_style=False, allow_unicode=True, sort_keys=False)
+        )
 
     def _export_csv(self) -> str:
         """Export results as CSV."""

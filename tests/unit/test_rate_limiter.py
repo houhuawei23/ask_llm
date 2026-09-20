@@ -138,7 +138,7 @@ def test_acquire_timeout_reads_provider_config():
 
 
 @pytest.mark.parametrize(
-    "provider,expected",
+    ("provider", "expected"),
     [
         ("siliconflow", (200, 30)),
         ("aliyun", (200, 30)),
@@ -148,7 +148,6 @@ def test_acquire_timeout_reads_provider_config():
 def test_catalog_providers_have_real_defaults(provider, expected):
     """Providers served by providers.yml must not fall through to the (60, 10)
     floor, which throttled paper's default concurrency."""
-    from ask_llm.utils.rate_limiter import GlobalRateLimiter
 
     limiter = GlobalRateLimiter()
     assert limiter._get_limit(provider, None) == expected

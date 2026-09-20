@@ -95,9 +95,7 @@ class TestResumeValidation:
             captured["tasks"] = tasks
             return [_success(t.task_id) for t in tasks], None
 
-        monkeypatch.setattr(
-            "ask_llm.core.command_runner.run_global_batch_tasks", fake_runner
-        )
+        monkeypatch.setattr("ask_llm.core.command_runner.run_global_batch_tasks", fake_runner)
         outcome = run_with_checkpoint(
             command="batch",
             config_digest=digest,
@@ -116,9 +114,7 @@ class TestResumeValidation:
         input_file = tmp_path / "config.yml"
         input_file.write_text("tasks: 2", encoding="utf-8")
         checkpoint_path = tmp_path / "cp.json"
-        self._make_checkpoint(
-            checkpoint_path, compute_checkpoint_digest(input_file), completed=[0]
-        )
+        self._make_checkpoint(checkpoint_path, compute_checkpoint_digest(input_file), completed=[0])
         # Input edited after the checkpoint was written.
         input_file.write_text("tasks: 2 EDITED", encoding="utf-8")
 

@@ -21,7 +21,7 @@ from loguru import logger
 from ask_llm.config.manager import ConfigManager
 from ask_llm.config.unified_config import UnifiedConfig
 from ask_llm.core.batch_models import BatchResult
-from ask_llm.core.execution_report import build_report_from_batch_results
+from ask_llm.core.execution_report import ExecutionReport, build_report_from_batch_results
 from ask_llm.core.models import AppConfig
 from ask_llm.core.text_splitter import TextSplitter
 from ask_llm.core.translator import Translator
@@ -331,7 +331,7 @@ class TranslationService:
             session_result.failed_files += 1
         self._batch_results.extend(job_result.results)
 
-    def _build_report(self, files: list[str] | None = None):
+    def _build_report(self, files: list[str] | None = None) -> ExecutionReport:
         """Single construction point for the session/export execution report."""
         metadata: dict[str, object] = {"provider": self.provider, "model": self.model}
         if files:

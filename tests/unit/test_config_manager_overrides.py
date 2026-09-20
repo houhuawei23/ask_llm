@@ -44,9 +44,7 @@ class TestPerProviderOverrides:
         assert manager.get_provider_config("alpha").api_key.get_secret_value() == (
             "pasted-interactive-key"
         )
-        assert (
-            manager.get_provider_config("beta").api_key.get_secret_value() == "beta-key"
-        )
+        assert manager.get_provider_config("beta").api_key.get_secret_value() == "beta-key"
 
     def test_sampling_overrides_do_not_leak_across_batch_providers(self, two_providers):
         """batch_service flow: set_provider(B) then apply_overrides must not
@@ -73,21 +71,13 @@ class TestPerProviderOverrides:
         alpha_dump = manager.get_provider_config("alpha").model_dump()
         assert "_model_override" not in alpha_dump
 
-    def test_explicit_override_applies_to_named_provider_it_was_set_for(
-        self, two_providers
-    ):
+    def test_explicit_override_applies_to_named_provider_it_was_set_for(self, two_providers):
         manager = ConfigManager(two_providers)
         manager.set_provider("beta")
         manager.apply_overrides(api_base="https://override.example.com/v1")
 
-        assert (
-            manager.get_provider_config("beta").api_base
-            == "https://override.example.com/v1"
-        )
-        assert (
-            manager.get_provider_config("alpha").api_base
-            == "https://alpha.example.com/v1"
-        )
+        assert manager.get_provider_config("beta").api_base == "https://override.example.com/v1"
+        assert manager.get_provider_config("alpha").api_base == "https://alpha.example.com/v1"
 
     def test_clear_overrides_resets_everything(self, two_providers):
         manager = ConfigManager(two_providers)
@@ -96,8 +86,5 @@ class TestPerProviderOverrides:
         manager.clear_overrides()
 
         assert manager.get_model_override() is None
-        assert (
-            manager.get_provider_config("alpha").api_key.get_secret_value()
-            == "alpha-key"
-        )
+        assert manager.get_provider_config("alpha").api_key.get_secret_value() == "alpha-key"
         assert manager.get_override_sources() == {}

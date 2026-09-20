@@ -42,9 +42,16 @@ class TestCandidatePaths:
     def test_dev_repo_root_guarded_by_marker(self, tmp_path, monkeypatch):
         """A site-packages-like parent (no pyproject.toml/providers.yml) must not
         be treated as the repo root."""
-        fake_module = tmp_path / "venv" / "lib" / "py3" / "site-packages" / "ask_llm" / (
-            "config"
-        ) / "providers_catalog.py"
+        fake_module = (
+            tmp_path
+            / "venv"
+            / "lib"
+            / "py3"
+            / "site-packages"
+            / "ask_llm"
+            / ("config")
+            / "providers_catalog.py"
+        )
         fake_module.parent.mkdir(parents=True)
         fake_module.write_text("", encoding="utf-8")
         monkeypatch.setattr(providers_catalog, "__file__", str(fake_module))

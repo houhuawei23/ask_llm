@@ -210,7 +210,7 @@ class TestEncodingSelection:
     """Encoding-map selection must prefer the longest matching key."""
 
     @pytest.mark.parametrize(
-        "model,expected",
+        ("model", "expected"),
         [
             ("gpt-4", "cl100k_base"),
             ("gpt-4o", "o200k_base"),

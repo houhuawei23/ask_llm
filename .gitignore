@@ -1,4 +1,3 @@
-**/.**
 
 # Python
 __pycache__/
@@ -37,19 +36,22 @@ wheels/
 Thumbs.db
 
 # Project specific
-*.txt
-# *.md
 !README.md
-!requirements.txt
 config.json
 *_output.txt
 *_output.md
 
-# test
-test/
-
-# .xxx
-**/.**/
-
 # Academic Extension Cache
 .vscode/academic-cache
+
+# Local-only directories (previously swallowed by the removed `**/.**` rule)
+.claude/
+.claude.json
+.codegraph/
+.dev/
+.local/
+.benchmarks/
+.prompts.md
+
+# Local manual-test inputs (copyrighted book transcriptions)
+examples/test_*.md

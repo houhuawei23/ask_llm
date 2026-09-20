@@ -15,7 +15,7 @@ Exports:
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from llm_engine import create_provider_adapter as _create_provider_adapter
 from loguru import logger
@@ -74,7 +74,8 @@ def create_engine_adapter(
     For connection reuse, prefer ``ProviderAdapterCache.get``.
     """
     view = config if isinstance(config, EngineConfigView) else EngineConfigView(config)
-    return _create_provider_adapter(view, default_model=default_model)
+    # llm_engine is untyped; its adapter satisfies LLMProviderProtocol at runtime.
+    return cast(LLMProviderProtocol, _create_provider_adapter(view, default_model=default_model))
 
 
 def load_engine_providers_config() -> dict[str, Any]:

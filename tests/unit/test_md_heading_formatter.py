@@ -238,10 +238,7 @@ That's all!"""
         lines in the LLM response are truncated in order instead of failing the
         apply-stage count check and scrapping the whole paid-for file."""
         mock_response = (
-            "# Title\n"
-            "# Section\n"
-            "Note: both headings above look good!\n"
-            "# Stray commentary heading\n"
+            "# Title\n# Section\nNote: both headings above look good!\n# Stray commentary heading\n"
         )
         processor = self._create_mock_processor(mock_response)
         formatter = HeadingFormatter(processor=processor, prompt_template=_TEST_PROMPT_TEMPLATE)

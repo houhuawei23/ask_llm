@@ -71,8 +71,14 @@ class ProgressPresenter:
         )
         return progress_task_id, in_tok, slot_idx
 
-    def release(self, slot_idx: int) -> None:
-        """Return a worker slot to the pool."""
+    def release(self, slot_idx: int | None) -> None:
+        """Return a worker slot to the pool.
+
+        Accepts ``None`` for signature parity with ``NullProgressPresenter``
+        (whose ``acquire`` yields ``None`` slots); it is a no-op here.
+        """
+        if slot_idx is None:
+            return
         self.free_slots.put(slot_idx)
 
 

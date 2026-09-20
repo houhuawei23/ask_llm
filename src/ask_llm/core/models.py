@@ -5,7 +5,7 @@ from enum import Enum
 from typing import Any
 
 from loguru import logger
-from pydantic import BaseModel, Field, SecretStr, field_validator
+from pydantic import BaseModel, Field, SecretStr, ValidationInfo, field_validator
 
 
 class MessageRole(str, Enum):
@@ -113,7 +113,7 @@ class ProviderConfig(BaseModel):
 
     @field_validator("api_key")
     @classmethod
-    def validate_api_key(cls, v: SecretStr, info) -> SecretStr:
+    def validate_api_key(cls, v: SecretStr, info: ValidationInfo) -> SecretStr:
         """Validate API key: warn loudly if empty or carries an unresolved placeholder.
 
         ``resolve_env_vars`` leaves a literal ``${VAR}`` in place when the referenced

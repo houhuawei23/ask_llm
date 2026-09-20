@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from typing import Any
 
 from rich.progress import (
     BarColumn,
@@ -182,11 +183,6 @@ def run_format(
     skipped_count = 0
     total_input_tokens = 0
     total_output_tokens = 0
-    successful_count = 0
-    failed_count = 0
-    skipped_count = 0
-    total_input_tokens = 0
-    total_output_tokens = 0
 
     def _record(outcome: FormatMarkdownOutcome) -> None:
         nonlocal successful_count, failed_count, skipped_count, total_input_tokens
@@ -201,7 +197,7 @@ def run_format(
         else:
             failed_count += 1
 
-    format_kwargs = {
+    format_kwargs: dict[str, Any] = {
         "format_type": format_type,
         "processor": processor,
         "model": model,
@@ -315,31 +311,33 @@ class FormatService:
         )
 
         if checkpoint.format_type == "body":
-            result = BodyFormatter.resume_from_checkpoint(
+            body_result = BodyFormatter.resume_from_checkpoint(
                 checkpoint_path,
                 processor=self.processor,
                 model=self.model,
             )
-            final_text = result.text
-            still_failed = result.failed_chunks
-            updated_checkpoint = result.checkpoint_path
+            final_text = body_result.text
+            still_failed = body_result.failed_chunks
+            updated_checkpoint = body_result.checkpoint_path
         else:
             # Title resume (P3.5): re-process failed heading batches, then
             # re-apply the merged heading list onto the source document.
-            result = HeadingFormatter.resume_from_checkpoint(
+            heading_result = HeadingFormatter.resume_from_checkpoint(
                 checkpoint_path,
                 processor=self.processor,
             )
             source_text = FileHandler.read(source_file)
             headings = HeadingExtractor.extract(source_text)
-            if len(result.formatted_headings) != len(headings):
+            if len(heading_result.formatted_headings) != len(headings):
                 raise RuntimeError(
-                    f"恢复结果标题数 ({len(result.formatted_headings)}) 与源文件标题数 "
+                    f"恢复结果标题数 ({len(heading_result.formatted_headings)}) 与源文件标题数 "
                     f"({len(headings)}) 不一致，无法安全合并；请直接重新运行 format 命令。"
                 )
-            final_text = HeadingApplier().apply(source_text, headings, result.formatted_headings)
-            still_failed = result.failed_batches
-            updated_checkpoint = result.checkpoint_path
+            final_text = HeadingApplier().apply(
+                source_text, headings, heading_result.formatted_headings
+            )
+            still_failed = heading_result.failed_batches
+            updated_checkpoint = heading_result.checkpoint_path
 
         if inplace:
             out_path = source_file

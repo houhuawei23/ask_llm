@@ -302,9 +302,9 @@ def test_on_result_exception_does_not_break_run():
         is_failed=lambda r: False,
         error_message=lambda r: r.error,
         retry_count_from_result=lambda r: r.retry_count,
-        on_result=lambda r: calls.append(r.task_id)
-        if r.task_id != 1
-        else (_ for _ in ()).throw(ValueError("boom")),
+        on_result=lambda r: (
+            calls.append(r.task_id) if r.task_id != 1 else (_ for _ in ()).throw(ValueError("boom"))
+        ),
         order_key=lambda r: r.task_id,
     )
     assert len(results) == 3  # run completed despite the callback raising
@@ -351,9 +351,7 @@ def test_retry_heap_tolerates_identical_due_times(monkeypatch):
         if tid in (0, 1) and attempts[tid] == 1:
             barrier.wait(timeout=5)
             time.sleep(0.02)
-            return _SimpleResult(
-                task_id=tid, value=-1, retry_count=retry_count, error="rate limit"
-            )
+            return _SimpleResult(task_id=tid, value=-1, retry_count=retry_count, error="rate limit")
         if tid == 3 and attempts[tid] == 1:
             time.sleep(0.1)
         return _SimpleResult(task_id=tid, value=tid * 10, retry_count=retry_count)

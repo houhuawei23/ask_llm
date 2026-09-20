@@ -163,13 +163,14 @@ class InteractiveConfigHelper:
                 apply_interactive_key(self.config_manager, provider_name, env_key)
                 provider_config = self.config_manager.get_provider_config(provider_name)
             else:
-                # Prompt user for API key
-                api_key = console.input(f"Enter API key for {provider_name}: ").strip()
+                # Prompt user for API key (kept in a str variable: the outer
+                # ``api_key`` holds the ProviderConfig SecretStr field)
+                entered_key = console.input(f"Enter API key for {provider_name}: ").strip()
 
-                if not api_key:
+                if not entered_key:
                     raise ValueError(f"API key is required for provider '{provider_name}'")
 
-                apply_interactive_key(self.config_manager, provider_name, api_key)
+                apply_interactive_key(self.config_manager, provider_name, entered_key)
                 provider_config = self.config_manager.get_provider_config(provider_name)
 
                 # Ask if user wants to save to config file
@@ -179,7 +180,7 @@ class InteractiveConfigHelper:
                 )
 
                 if save_to_file:
-                    self._save_api_key_to_config(provider_name, api_key)
+                    self._save_api_key_to_config(provider_name, entered_key)
 
         # Test API key validity
         console.print()

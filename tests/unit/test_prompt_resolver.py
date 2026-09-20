@@ -43,9 +43,7 @@ class TestResolvePromptFile:
         (tmp_path / "pyproject.toml").write_text("", encoding="utf-8")
         prompts = tmp_path / "prompts"
         prompts.mkdir()
-        (prompts / "md-heading-format.md").write_text(
-            "user override", encoding="utf-8"
-        )
+        (prompts / "md-heading-format.md").write_text("user override", encoding="utf-8")
         assert load_prompt_template("@prompts/md-heading-format.md") == "user override"
 
     def test_missing_everywhere_still_raises(self):

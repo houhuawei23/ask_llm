@@ -18,6 +18,7 @@ import hashlib
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import cast
 
 from loguru import logger
 
@@ -123,7 +124,7 @@ def run_with_checkpoint(
 
     # 1. Optional resume: load prior progress, filter completed tasks.
     if resume and Path(checkpoint_path).exists():
-        loaded = BatchCheckpoint.load(checkpoint_path)
+        loaded = cast(BatchCheckpoint, BatchCheckpoint.load(checkpoint_path))
         # H9: a checkpoint from a different command or a different input
         # (digest mismatch — old checkpoints stored only the config *path*)
         # must refuse to resume rather than mis-map old results onto new tasks.

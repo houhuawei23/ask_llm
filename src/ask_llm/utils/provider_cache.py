@@ -12,7 +12,8 @@ Engine access goes through ``ask_llm.utils.engine_facade`` (P4.6); the
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Any
+
+from pydantic import SecretStr
 
 from ask_llm.core.models import ProviderConfig
 from ask_llm.core.protocols import LLMProviderProtocol
@@ -56,7 +57,7 @@ def _create_cached_adapter(
     provider_config = ProviderConfig(
         api_provider=provider,
         api_base=api_base,
-        api_key=api_key,
+        api_key=SecretStr(api_key),
         models=list(models),
         api_temperature=api_temperature,
         api_top_p=api_top_p,
@@ -77,23 +78,23 @@ class ProviderAdapterCache:
     @classmethod
     def get(
         cls,
-        config: ProviderConfig | dict[str, Any],
+        config: ProviderConfig,
         *,
         default_model: str | None = None,
     ) -> LLMProviderProtocol:
         """Get or create a cached provider adapter.
 
         Args:
-            config: Provider configuration. A ``ProviderConfig`` object is the
-                supported input; a ``dict`` is accepted for backward
-                compatibility (emits ``DeprecationWarning``).
+            config: Provider configuration object (the historically accepted
+                ``dict`` input was removed with the v2.15 crash path — the
+                signature said otherwise, which was misleading).
             default_model: Default model name for the adapter.
 
         Returns:
             A cached or newly created provider adapter.
 
         Raises:
-            TypeError: If ``config`` is neither a ``ProviderConfig`` nor a dict.
+            TypeError: If ``config`` is not a ``ProviderConfig``.
         """
         pc = _to_provider_config(config)
         return _create_cached_adapter(

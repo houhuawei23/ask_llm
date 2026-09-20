@@ -12,7 +12,7 @@ class TestUnwrapPayloadOpensWithObject:
         assert unwrap_translation_payload(response) == "你好"
 
     def test_fenced_payload_unwrapped_with_trailing_newline(self):
-        response = "```json\n{\"translation\": \"你好\"}\n```\n"
+        response = '```json\n{"translation": "你好"}\n```\n'
         assert unwrap_translation_payload(response) == "你好"
 
     def test_latex_escapes_repaired(self):

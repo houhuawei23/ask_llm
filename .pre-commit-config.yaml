@@ -12,20 +12,25 @@ repos:
       - id: check-merge-conflict
       - id: debug-statements
 
+  # v0.1.9 predates the [tool.ruff.lint] config namespace, so the hook ran
+  # only default rules — the pyproject rule set was silently ignored (C2).
+  # No `files` filter: tests/ is intentionally covered too (its
+  # per-file-ignores in pyproject exist precisely for that).
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.1.9
+    rev: v0.8.4
     hooks:
       - id: ruff
         args: [--fix, --exit-non-zero-on-fix]
-        files: ^src/ask_llm/
       - id: ruff-format
-        files: ^src/ask_llm/
 
   - repo: local
     hooks:
+      # C3: previously appended `|| true` (and weakened --no-strict-optional),
+      # so the hook could never fail — the type check was decorative. The
+      # 32-error backlog it was hiding has been fixed; this now gates commits.
       - id: mypy
         name: mypy
-        entry: bash -c 'mypy src/ask_llm --ignore-missing-imports --no-strict-optional || true'
+        entry: mypy src/ask_llm --ignore-missing-imports
         language: system
         types: [python]
         pass_filenames: false

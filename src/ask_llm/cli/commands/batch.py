@@ -191,8 +191,9 @@ def batch(
 
             # M7: align with trans/paper/format — failed tasks mean exit 1 so
             # scripts can detect partial batch failures.
-            if run_result.model_statistics.failed_tasks:
-                console.print_warning(f"{run_result.model_statistics.failed_tasks} task(s) failed.")
+            failed_tasks = sum(stats.failed_tasks for stats in run_result.model_statistics.values())
+            if failed_tasks:
+                console.print_warning(f"{failed_tasks} task(s) failed.")
                 raise typer.Exit(1)
 
     finally:

@@ -61,6 +61,8 @@ def _parse_env_value(value: str, key_path: tuple[str, ...]) -> Any:
         or "retries" in last_key
         or "max_chunk_tokens" in last_key
         or "max_output_tokens" in last_key
+        or "max_parallel_files" in last_key
+        or "max_concurrent_api_calls" in last_key
     ):
         return int(value)
     if "retry_delay" in last_key or "temperature" in last_key:

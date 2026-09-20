@@ -122,12 +122,12 @@ def test_batch_resume_skips_completed_tasks(tmp_path):
 
     processor = MagicMock()
     processor.last_metrics.interrupted = False
-    _RESULTS: list[list[BatchResult]] = []
+    queued_results: list[list[BatchResult]] = []
 
     def _fake_run(tasks, *args, **kwargs):
         # Mirror the real runner: stream each result through on_result so the
         # checkpoint's incremental merge (D6) actually happens.
-        results = _RESULTS.pop()
+        results = queued_results.pop()
         on_result = kwargs.get("on_result")
         if on_result is not None:
             for r in results:
@@ -153,7 +153,7 @@ def test_batch_resume_skips_completed_tasks(tmp_path):
             )
 
     # Phase A: task 0 succeeds, task 1 fails -> checkpoint kept (not deleted).
-    _RESULTS = [[_result(0, TaskStatus.SUCCESS), _result(1, TaskStatus.FAILED)]]
+    queued_results = [[_result(0, TaskStatus.SUCCESS), _result(1, TaskStatus.FAILED)]]
     with patch("ask_llm.core.command_runner.run_global_batch_tasks", side_effect=_fake_run):
         _run()
     assert checkpoint_path.exists()
@@ -161,8 +161,10 @@ def test_batch_resume_skips_completed_tasks(tmp_path):
     assert loaded.completed_task_ids == [0]
 
     # Phase B: resume -> only task 1 is executed; clean success unlinks.
-    _RESULTS = [[_result(1, TaskStatus.SUCCESS)]]
-    with patch("ask_llm.core.command_runner.run_global_batch_tasks", side_effect=_fake_run) as mock_run:
+    queued_results = [[_result(1, TaskStatus.SUCCESS)]]
+    with patch(
+        "ask_llm.core.command_runner.run_global_batch_tasks", side_effect=_fake_run
+    ) as mock_run:
         _run(resume_checkpoint_path=str(checkpoint_path))
         executed = list(mock_run.call_args[0][0])
     assert [t.task_id for t in executed] == [1]

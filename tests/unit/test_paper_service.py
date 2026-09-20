@@ -100,15 +100,18 @@ class TestPartialSuccessPersistence:
                 return_value=({}, None),
             ),
             patch.object(service, "_render_job_prompt", return_value=("tpl", "prompt")),
-        ):
-            with patch(
+            patch(
                 "ask_llm.services.paper_service.run_global_batch_tasks",
                 return_value=(
-                    [_result(0, TaskStatus.SUCCESS, "abstract answer"), _result(1, TaskStatus.FAILED)],
+                    [
+                        _result(0, TaskStatus.SUCCESS, "abstract answer"),
+                        _result(1, TaskStatus.FAILED),
+                    ],
                     MagicMock(last_metrics=MagicMock(interrupted=False)),
                 ),
-            ):
-                session = service.explain_paper(paper_md, _options())
+            ),
+        ):
+            session = service.explain_paper(paper_md, _options())
 
         assert session.status == "failed"
         assert session.succeeded_count == 1
