@@ -191,22 +191,34 @@ class TranslationService:
         self._print_prompt_preview(options, glossary_pairs)
 
         if options.max_parallel_files <= 1:
+            # M6: per-file try/except mirrors the parallel branch — one bad
+            # file used to abort the whole serial session, skipping the rest.
             for job in text_jobs:
-                result = self._text_translator.translate_and_export(
-                    job, options, force=force, stream=stream, stream_api=stream_api
-                )
+                try:
+                    result = self._text_translator.translate_and_export(
+                        job, options, force=force, stream=stream, stream_api=stream_api
+                    )
+                except Exception as e:
+                    console.print_error(f"Failed to translate {job.file_path}: {e}")
+                    logger.exception("Translation error")
+                    result = failed_job_result(job.file_path, None, str(e))
                 self._accumulate(session_result, result)
             for file_path in notebook_files:
-                result = self._notebook_file_translator.translate(
-                    file_path,
-                    options,
-                    output=output,
-                    output_is_dir=output_is_dir,
-                    effective_suffix=effective_suffix,
-                    force=force,
-                    stream=stream,
-                    stream_api=stream_api,
-                )
+                try:
+                    result = self._notebook_file_translator.translate(
+                        file_path,
+                        options,
+                        output=output,
+                        output_is_dir=output_is_dir,
+                        effective_suffix=effective_suffix,
+                        force=force,
+                        stream=stream,
+                        stream_api=stream_api,
+                    )
+                except Exception as e:
+                    console.print_error(f"Failed to translate {file_path}: {e}")
+                    logger.exception("Translation error")
+                    result = failed_job_result(file_path, None, str(e))
                 self._accumulate(session_result, result)
         else:
             with ThreadPoolExecutor(max_workers=options.max_parallel_files) as executor:

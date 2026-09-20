@@ -123,3 +123,33 @@ def load_prompt_template(prompt_path: str) -> str:
         raise OSError(f"Failed to read prompt file {prompt_file}: {e}") from e
 
     return content.strip()
+
+
+def resolve_prompt_or_template(prompt: str | None) -> str | None:
+    """Resolve a ``--prompt`` argument that may be a file path or a literal.
+
+    Shared by ask/chat, whose ``--prompt`` doubles as an inline template
+    (M4). Resolution rules:
+
+    - ``@path`` → project-root / packaged prompt file (missing ⇒ error)
+    - ``~/path`` → explicit home path (missing ⇒ error — previously the whole
+      quoted path string was silently sent to the LLM as literal text)
+    - existing file path → read as file
+    - anything else → returned verbatim as the literal template
+    """
+    if not prompt:
+        return None
+
+    if prompt.startswith("@"):
+        return load_prompt_template(prompt)
+
+    if prompt.startswith("~"):
+        expanded = Path(prompt).expanduser()
+        if not expanded.is_file():
+            raise FileNotFoundError(f"Prompt file not found: {expanded}")
+        return FileHandler.read(expanded).strip()
+
+    if Path(prompt).is_file():
+        return FileHandler.read(prompt).strip()
+
+    return prompt

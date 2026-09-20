@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import getpass
-import os
 import sys
 from pathlib import Path
 
@@ -20,6 +19,7 @@ from ask_llm.utils.api_key_gate import (
     provider_env_var_name,
 )
 from ask_llm.utils.console import console
+from ask_llm.utils.interactive_config import apply_interactive_key
 
 
 def load_cli_session(
@@ -151,15 +151,9 @@ def _interactive_api_key_gate(
         if api_key_is_missing_or_unresolved(key):
             console.print_error("密钥无效或为空, 已退出。")
             raise typer.Exit(1)
-        config_manager.apply_overrides(api_key=key)
-        # llm_engine reloads providers.yml via load_providers_config(); ${DEEPSEEK_API_KEY}
-        # must resolve there too — sync session key to the conventional env var.
-        os.environ[env_hint] = key
-        # Invalidate any cached adapter built from the old/empty key so the next
-        # call rebuilds with the new credential. See ARCHITECTURE_REVIEW.md (secrets).
-        from ask_llm.utils.provider_cache import ProviderAdapterCache
-
-        ProviderAdapterCache.clear()
+        # M12: single shared injection path (override + env sync + adapter
+        # cache invalidation) — identical to the interactive_config flow.
+        apply_interactive_key(config_manager, provider_name, key)
         return True
 
     console.print_error("无效选择, 已退出。")

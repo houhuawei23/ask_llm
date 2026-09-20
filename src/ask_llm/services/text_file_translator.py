@@ -202,6 +202,15 @@ class TextFileTranslator:
         console.print()
         console.print(f"[bold]Translating: {job.file_path}[/bold]")
 
+        # M9: refuse before spending API tokens — the only remaining existence
+        # check used to live in export_text_file, after the whole run finished.
+        # Resume runs are exempt: they legitimately append to prior progress.
+        output_file = Path(job.output_path)
+        if output_file.exists() and not force and not options.resume:
+            raise FileExistsError(
+                f"Output file already exists: {job.output_path}. Use --force to overwrite."
+            )
+
         checkpoint_path = self.checkpoint_path(job.output_path)
 
         # Shared checkpoint lifecycle (P4.1). Canonical drift resolution:

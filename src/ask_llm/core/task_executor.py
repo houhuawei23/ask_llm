@@ -69,7 +69,14 @@ class TaskExecutor:
         self.verbose = verbose
         self.stream_api = stream_api
         self._auth_error_lock = threading.Lock()
-        self.auth_error_logged = False
+        # M3: dedupe per provider/model — a single executor-level flag let the
+        # first failing provider silence every *other* provider's auth errors.
+        self._auth_error_logged_keys: set[str] = set()
+
+    @property
+    def auth_error_logged(self) -> bool:
+        """True once any provider's auth failure has been logged (flag view)."""
+        return bool(self._auth_error_logged_keys)
 
     def log_task_failure(
         self,
@@ -85,8 +92,8 @@ class TaskExecutor:
         bound = bind_context(ctx).bind(model_key=model_key, error_category=category.value)
         if category == ErrorCategory.AUTHENTICATION:
             with self._auth_error_lock:
-                if not self.auth_error_logged:
-                    self.auth_error_logged = True
+                if model_key not in self._auth_error_logged_keys:
+                    self._auth_error_logged_keys.add(model_key)
                     bound.error(
                         f"API authentication failed ({model_key}): {error_msg}\n"
                         "(Further parallel tasks with the same auth error are logged at DEBUG only.)"

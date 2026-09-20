@@ -182,7 +182,10 @@ def paper(
         gate_api_key_or_exit(
             config_manager,
             final_provider,
-            skip_api_key_check=skip_api_key_check,
+            # M2: --dry-run never touches the network, so it must not force an
+            # interactive API-key prompt (cli_session documents gate-after-
+            # pre-network-path; ask does this, paper didn't).
+            skip_api_key_check=skip_api_key_check or dry_run,
         )
         paper_cfg = load_result.unified_config.paper
         workers = concurrency if concurrency is not None else paper_cfg.concurrency

@@ -7,9 +7,30 @@ from loguru import logger
 
 from ask_llm.config.manager import ConfigManager
 from ask_llm.core.batch_models import ModelConfig
-from ask_llm.utils.api_key_gate import PROVIDERS_WITHOUT_API_KEYS, api_key_is_missing_or_unresolved
+from ask_llm.utils.api_key_gate import (
+    PROVIDERS_WITHOUT_API_KEYS,
+    api_key_is_missing_or_unresolved,
+    provider_env_var_name,
+)
 from ask_llm.utils.console import console
 from ask_llm.utils.engine_facade import create_engine_adapter
+
+
+def apply_interactive_key(config_manager: ConfigManager, provider_name: str, key: str) -> None:
+    """Apply an interactively obtained API key (M12: single shared path).
+
+    Does three things, all required for the key to actually take effect:
+    records the ConfigManager override for *this* provider, syncs the
+    conventional env var so llm-engine's providers.yml ``${VAR}`` resolution
+    matches, and invalidates cached provider adapters built from the old/empty
+    key (cli_session's gate did this; interactive_config previously didn't, so
+    batch flows could keep calling with a stale empty-key adapter).
+    """
+    config_manager.apply_overrides(api_key=key)
+    os.environ[provider_env_var_name(provider_name)] = key
+    from ask_llm.utils.provider_cache import ProviderAdapterCache
+
+    ProviderAdapterCache.clear()
 
 
 class InteractiveConfigHelper:
@@ -137,8 +158,9 @@ class InteractiveConfigHelper:
 
             if env_key:
                 console.print_info(f"Found API key in environment variable {env_var_name}")
-                # Update config manager with the API key
-                self.config_manager.apply_overrides(api_key=env_key)
+                # Shared injection path (M12): override + env sync + adapter
+                # cache invalidation.
+                apply_interactive_key(self.config_manager, provider_name, env_key)
                 provider_config = self.config_manager.get_provider_config(provider_name)
             else:
                 # Prompt user for API key
@@ -147,9 +169,7 @@ class InteractiveConfigHelper:
                 if not api_key:
                     raise ValueError(f"API key is required for provider '{provider_name}'")
 
-                # Update config manager and process env so llm_engine's providers.yml resolution matches
-                self.config_manager.apply_overrides(api_key=api_key)
-                os.environ[env_var_name] = api_key
+                apply_interactive_key(self.config_manager, provider_name, api_key)
                 provider_config = self.config_manager.get_provider_config(provider_name)
 
                 # Ask if user wants to save to config file

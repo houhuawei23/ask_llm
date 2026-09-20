@@ -101,12 +101,12 @@ def ask(
         ),
     ] = False,
     stream: Annotated[
-        bool,
+        bool | None,
         typer.Option(
             "--stream/--no-stream",
-            help="Stream response to console",
+            help="Stream response to console (default: general.stream_default)",
         ),
-    ] = True,
+    ] = None,
     skip_api_key_check: Annotated[
         bool,
         typer.Option(
@@ -167,6 +167,11 @@ def ask(
             unified_config=load_result.unified_config,
             model=final_model,
         )
+
+        # M3: honor general.stream_default instead of a hardcoded True — the
+        # config field existed but nothing read it.
+        if stream is None:
+            stream = load_result.unified_config.general.stream_default
 
         content, input_is_file = service.load_content(source, show_progress=not stream)
         if not content.strip():

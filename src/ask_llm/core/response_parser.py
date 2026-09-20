@@ -106,6 +106,11 @@ def unwrap_translation_payload(text: str) -> str:
     Note: Do not require ``raw.endswith("}")`` — that rejects valid JSON objects when
     the model adds characters after the closing brace, which previously left the file
     as raw JSON.
+
+    M4: the response is only treated as a JSON payload when it *opens* with the
+    object (optionally behind a fence). A translation that merely contains a
+    brace — e.g. a legitimate JSON example inside the translated text — used to
+    be destructively rewritten to the value of a key like ``"text"``.
     """
     original = text
     raw = text.strip()
@@ -115,15 +120,18 @@ def unwrap_translation_payload(text: str) -> str:
     if raw.startswith("\ufeff"):
         raw = raw.lstrip("\ufeff").strip()
 
-    # Strip optional fenced code block wrapper.
+    # Strip optional fenced code block wrapper (rstrip first: a trailing
+    # newline used to make lines[-1] "" and skip the strip entirely).
     if raw.startswith("```"):
-        lines = raw.splitlines()
+        lines = raw.rstrip().splitlines()
         if len(lines) >= 3 and lines[0].startswith("```") and lines[-1].strip() == "```":
             raw = "\n".join(lines[1:-1]).strip()
 
-    brace = raw.find("{")
-    if brace < 0:
+    # M4: require the payload to open with the object, not merely contain it.
+    if not raw.startswith("{"):
         return original
+
+    brace = 0
 
     obj = None
 

@@ -239,6 +239,13 @@ def format_cmd(
         ask-llm format doc.md --type body --resume doc.md.body_checkpoint.json
     """
     with cli_errors("format"):
+        # M1: validate --type BEFORE any config loading or the API-key gate, so
+        # a typo doesn't first walk the user through an interactive key prompt.
+        type_lower = type_.lower()
+        if type_lower not in ("title", "body"):
+            console.print_error(f"不支持的格式化类型: {type_}。请使用 title 或 body。")
+            raise typer.Exit(1)
+
         # Load config and resolve provider/model first so that --resume respects
         # --config, --provider, --model, and --temperature.
         load_result, config_manager = load_cli_session(config_path)
@@ -265,11 +272,6 @@ def format_cmd(
                 force=force,
             )
             raise typer.Exit(0)
-
-        type_lower = type_.lower()
-        if type_lower not in ("title", "body"):
-            console.print_error(f"不支持的格式化类型: {type_}。请使用 title 或 body。")
-            raise typer.Exit(1)
 
         resolved_paths = discover_markdown_files(files, recursive=recursive, max_depth=max_depth)
         resolved_files: list[str] = [str(p) for p in resolved_paths]

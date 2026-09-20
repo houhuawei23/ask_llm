@@ -17,7 +17,6 @@ from ask_llm.core.batch_models import (
     BatchTask,
     ModelConfig,
     TaskStatus,
-    sort_batch_tasks_by_estimated_input,
 )
 from ask_llm.core.concurrent import BoundedRetryRunner, RunMetrics
 from ask_llm.core.constants import (
@@ -95,7 +94,10 @@ class GlobalBatchProcessor:
             retry_delay_max: Maximum retry delay cap in seconds
             verbose: Enable verbose output with detailed API call information
             stream_api: Use streaming API calls; disable for higher batch throughput.
-            rate_limit_config: Optional rate-limit configuration. If None, rate limiting is disabled.
+            rate_limit_config: Optional rate-limit configuration. When None the
+                limiter falls back to ``GlobalRateLimiter.DEFAULT_LIMITS`` —
+                limiting is never fully off (M7: the docstring used to claim
+                ``None`` disabled rate limiting, which it does not).
         """
         self.max_workers = max_workers
         self.max_retries = max_retries
@@ -222,7 +224,22 @@ class GlobalBatchProcessor:
             if tasks and tasks[0].model_settings
             else DEFAULT_BATCH_FALLBACK_MODEL
         )
-        pending_tasks = sort_batch_tasks_by_estimated_input(tasks.copy(), default_model)
+        # M11: tokenize each task's full prompt exactly once. Sorting and the
+        # progress-meta build used to expand+encode the whole batch twice.
+        task_estimates: list[tuple[BatchTask, int]] = [
+            (
+                task,
+                int(
+                    TokenCounter.estimate_tokens(
+                        expand_prompt(task.prompt, task.content),
+                        (task.model_settings.model if task.model_settings else default_model),
+                    )["token_count"]
+                ),
+            )
+            for task in tasks
+        ]
+        task_estimates.sort(key=lambda pair: pair[1], reverse=True)
+        pending_tasks = [task for task, _ in task_estimates]
 
         # Pre-build provider cache to avoid per-task adapter creation and ConfigManager mutation
         provider_cache = ProviderManager(config_manager).build_provider_cache(pending_tasks)
@@ -240,16 +257,7 @@ class GlobalBatchProcessor:
             # model key) so a worker can relabel its bar instantly when it picks
             # the task up.
             task_meta: dict[int, tuple[int, int, str]] = {}
-            for task in pending_tasks:
-                estimated_prompt = expand_prompt(task.prompt, task.content)
-                input_token_estimate = TokenCounter.estimate_tokens(
-                    estimated_prompt,
-                    (
-                        task.model_settings.model
-                        if task.model_settings
-                        else DEFAULT_BATCH_FALLBACK_MODEL
-                    ),
-                )["token_count"]
+            for task, input_token_estimate in task_estimates:
                 estimated_output = estimate_output_tokens(
                     task.task_kind,
                     input_token_estimate,

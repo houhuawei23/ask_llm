@@ -7,9 +7,17 @@ One canonical mapping ``keyword -> (ErrorCategory, transient)`` consumed by:
 - ``retry_policy.DEFAULT_TRANSIENT_KEYWORDS`` — derived as the keywords of all
   transient rules, driving retry decisions in the bounded runner.
 
-Rule order matters: authentication is checked first, validation last, and the
-transient-but-uncategorized server-error keywords (500/502/503/overloaded/...)
-sit at the very end so they never hijack a more specific category.
+Rule order matters: authentication is checked first, then rate limits and the
+transient server-error signatures (500/502/503/overloaded/...), with the wide
+validation keywords (``invalid``/``required``/``missing``) at the very end.
+
+The server-vs-validation order is the M2 fix: first-match-wins substring
+matching used to classify e.g. ``"502: invalid upstream response"`` as
+VALIDATION_ERROR (terminal — never retried, never fell back) because
+``"invalid"`` matched before ``"502"``. Status-prefixed transient errors must
+win over the wide words. (Status codes deliberately stay *after* the specific
+categories: a bare ``"500"`` substring would otherwise hijack messages like
+``"context length is 1500"``.)
 """
 
 from __future__ import annotations
@@ -103,21 +111,25 @@ def _rules() -> tuple[KeywordRule, ...]:
         KeywordRule("ssl", n, False),
         KeywordRule("certificate", n, False),
         KeywordRule("proxy", n, False),
-        # Validation — terminal.
+        # Transient server/overload signatures without a more specific
+        # category. Deliberately BEFORE the wide validation words (M2):
+        # "502: invalid upstream response" must be treated as transient.
+        KeywordRule("overloaded_error", u, True),
+        KeywordRule("overloaded", u, True),
+        KeywordRule("temporarily unavailable", u, True),
+        KeywordRule("try again", u, True),
+        KeywordRule("internal server error", u, True),
+        KeywordRule("500", u, True),
+        KeywordRule("502", u, True),
+        KeywordRule("503", u, True),
+        KeywordRule("504", u, True),
+        # Validation — terminal, and intentionally LAST: these single words
+        # match far too broadly to preempt the transient signatures above.
         KeywordRule("validation", v, False),
         KeywordRule("invalid", v, False),
         KeywordRule("required", v, False),
         KeywordRule("missing", v, False),
         KeywordRule("not found in cache", v, False),
-        # Transient server/overload signatures without a more specific
-        # category (listed last so they never shadow the categories above).
-        KeywordRule("overloaded_error", u, True),
-        KeywordRule("overloaded", u, True),
-        KeywordRule("temporarily unavailable", u, True),
-        KeywordRule("try again", u, True),
-        KeywordRule("500", u, True),
-        KeywordRule("502", u, True),
-        KeywordRule("503", u, True),
     )
 
 

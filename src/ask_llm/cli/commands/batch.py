@@ -189,5 +189,11 @@ def batch(
             )
             service.export_report(report)
 
+            # M7: align with trans/paper/format — failed tasks mean exit 1 so
+            # scripts can detect partial batch failures.
+            if run_result.model_statistics.failed_tasks:
+                console.print_warning(f"{run_result.model_statistics.failed_tasks} task(s) failed.")
+                raise typer.Exit(1)
+
     finally:
         logger.debug("batch CLI wall time: {:.2f}s", time.perf_counter() - _t0)

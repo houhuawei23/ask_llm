@@ -17,6 +17,7 @@ from ask_llm.core.models import ProcessingResult, RequestMetadata
 from ask_llm.core.processor import RequestProcessor
 from ask_llm.core.protocols import ReasoningChunk
 from ask_llm.utils.file_handler import FileHandler
+from ask_llm.utils.prompt_resolver import resolve_prompt_or_template
 from ask_llm.utils.token_counter import TokenCounter
 
 
@@ -101,20 +102,22 @@ class AskService:
     def load_prompt_template(self, prompt: str | None) -> str | None:
         """Load prompt template from file or string, ensuring a {content} placeholder.
 
+        Path-like arguments (``@``-prefixed, ``~/...``) are resolved through the
+        shared prompt resolver and raise when missing instead of being silently
+        treated as literal text (M4).
+
         Args:
             prompt: Prompt template file path or raw template string.
 
         Returns:
             Normalized prompt template or None.
-        """
-        if not prompt:
-            return None
 
-        prompt_path = Path(prompt)
-        if prompt_path.exists() and prompt_path.is_file():
-            template = FileHandler.read(prompt)
-        else:
-            template = prompt
+        Raises:
+            FileNotFoundError: If a path-like prompt does not resolve to a file.
+        """
+        template = resolve_prompt_or_template(prompt)
+        if template is None:
+            return None
 
         if "{content}" not in template:
             template = template + "\n\n{content}"

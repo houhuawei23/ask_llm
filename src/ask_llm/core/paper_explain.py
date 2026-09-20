@@ -10,6 +10,7 @@ from pathlib import Path
 import yaml
 from loguru import logger
 
+from ask_llm.core.markdown_structure import MarkdownStructure
 from ask_llm.core.paper_explain_pipeline import (
     PaperExplainPipelineConfig,
     merged_section_labels_zh,
@@ -88,18 +89,27 @@ def _split_by_h2(text: str, *, keep_leading: bool) -> list[tuple[str, str]]:
     Deeper headings (``###``, ``####``, …) stay inside the same section body so one
     explain job covers a whole logical section.
 
+    A ``##`` line inside a code fence (or frontmatter) is content, not a split
+    point (M10): protected ranges come from the shared
+    :class:`MarkdownStructure` parser.
+
     ``keep_leading`` prepends lines before the first ``##`` to the first block's body
     (appendix context); otherwise leading lines are dropped (main-body preamble).
     When the text has no ``##`` at all, returns ``[("", stripped_text)]`` (empty when
     blank) so callers can treat it as a single unsplit block.
     """
+    structure = MarkdownStructure.parse(text)
+
     blocks: list[tuple[str, list[str]]] = []
     cur_title: str | None = None
     cur_lines: list[str] = []
     leading: list[str] = []
 
+    offset = 0
     for line in text.splitlines():
-        m = _H2_SECTION_LINE_RE.match(line)
+        line_start = offset
+        offset += len(line) + 1  # +1 for the newline splitlines() dropped
+        m = _H2_SECTION_LINE_RE.match(line) if not structure.is_protected(line_start) else None
         if m:
             if cur_title is None:
                 cur_title = m.group(1).strip()

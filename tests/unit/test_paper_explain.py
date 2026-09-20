@@ -258,3 +258,33 @@ def test_build_bundle_from_arxiv_dir(tmp_path: Path):
     assert len(b.full_text) > 100
     assert b.main_path is not None
     assert b.main_path.name == main
+
+
+def test_split_by_h2_ignores_headings_inside_code_fences():
+    """M10: a ``##`` line inside a code fence is content, not a section split —
+    the fenced example used to be chopped out of its section into a phantom job."""
+    md = textwrap.dedent(
+        """\
+        ## Methods
+
+        We use the following markdown example:
+
+        ```
+        ## This is NOT a real section
+        ```
+
+        More method text after the fence.
+        """
+    )
+    blocks = _split_by_h2_raw(md)
+    assert len(blocks) == 1
+    heading, body = blocks[0]
+    assert heading == "Methods"
+    assert "## This is NOT a real section" in body
+    assert "More method text after the fence." in body
+
+
+def _split_by_h2_raw(text: str):
+    from ask_llm.core.paper_explain import _split_by_h2
+
+    return _split_by_h2(text, keep_leading=False)

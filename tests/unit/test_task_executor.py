@@ -90,3 +90,14 @@ def test_missing_provider_in_cache_yields_failed_result():
 
     assert result.status == TaskStatus.FAILED
     assert "Provider not found" in (result.error or "")
+
+
+def test_auth_error_dedup_is_per_provider():
+    """M3: a second *different* provider's auth failure must log at ERROR —
+    the old executor-wide flag silenced it after the first provider failed."""
+    executor = TaskExecutor()
+    executor.log_task_failure(1, "p/a", "401 Unauthorized", ErrorCategory.AUTHENTICATION)
+    executor.log_task_failure(2, "p/b", "401 Unauthorized", ErrorCategory.AUTHENTICATION)
+    # Both keys are recorded; a repeat of either one is deduped.
+    assert executor._auth_error_logged_keys == {"p/a", "p/b"}
+    assert executor.auth_error_logged is True

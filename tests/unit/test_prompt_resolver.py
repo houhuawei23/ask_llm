@@ -9,6 +9,7 @@ from ask_llm.utils.prompt_resolver import (
     expand_prompt,
     load_prompt_template,
     resolve_prompt_file,
+    resolve_prompt_or_template,
 )
 
 
@@ -68,3 +69,29 @@ class TestExpandPrompt:
 
     def test_literal_braces_preserved(self):
         assert expand_prompt("JSON {key} {content}", "v") == "JSON {key} v"
+
+
+class TestResolvePromptOrLiteral:
+    """M4: ask/chat --prompt path resolution must error on missing path-like
+    inputs instead of silently sending the path string to the LLM."""
+
+    def test_missing_home_path_raises(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        with pytest.raises(FileNotFoundError):
+            resolve_prompt_or_template("~/prompts/missing.md")
+
+    def test_home_path_reads_file(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        target = tmp_path / "p.md"
+        target.write_text("tpl {content}", encoding="utf-8")
+        assert resolve_prompt_or_template("~/p.md") == "tpl {content}"
+
+    def test_literal_template_passthrough(self):
+        assert resolve_prompt_or_template("Translate: {content}") == "Translate: {content}"
+
+    def test_atpath_missing_everywhere_raises(self):
+        with pytest.raises(FileNotFoundError):
+            resolve_prompt_or_template("@prompts/definitely-not-here.md")
+
+    def test_none_passthrough(self):
+        assert resolve_prompt_or_template(None) is None

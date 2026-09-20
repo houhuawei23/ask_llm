@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Annotated
 
 import typer
@@ -17,6 +16,7 @@ from ask_llm.core.chat import ChatSession
 from ask_llm.utils.console import console
 from ask_llm.utils.engine_facade import create_engine_adapter
 from ask_llm.utils.file_handler import FileHandler
+from ask_llm.utils.prompt_resolver import resolve_prompt_or_template
 
 
 def chat(
@@ -94,52 +94,49 @@ def chat(
         ask-llm chat -i context.txt
         ask-llm chat -s "You are a helpful assistant"
     """
-    try:
-        with cli_errors("chat"):
-            # Load configuration
-            _load_result, config_manager = load_cli_session(config_path)
+    # M9: the outer ``except KeyboardInterrupt`` here was unreachable —
+    # cli_errors already converts KI to a message + exit 1, and the REPL
+    # handles its own Ctrl-C (core/chat.py). Removed the dead wrapper.
+    with cli_errors("chat"):
+        # Load configuration
+        _load_result, config_manager = load_cli_session(config_path)
 
-            final_provider, final_model = resolve_and_prepare(
-                config_manager,
-                cli_provider=provider,
-                cli_model=model,
-                temperature=temperature,
-            )
+        final_provider, final_model = resolve_and_prepare(
+            config_manager,
+            cli_provider=provider,
+            cli_model=model,
+            temperature=temperature,
+        )
 
-            gate_api_key_or_exit(
-                config_manager,
-                final_provider,
-                skip_api_key_check=skip_api_key_check,
-            )
+        gate_api_key_or_exit(
+            config_manager,
+            final_provider,
+            skip_api_key_check=skip_api_key_check,
+        )
 
-            provider_config = config_manager.get_provider_config()
+        provider_config = config_manager.get_provider_config()
 
-            # Initialize provider using llm_engine factory
-            llm_provider = create_engine_adapter(provider_config, default_model=final_model)
+        # Initialize provider using llm_engine factory
+        llm_provider = create_engine_adapter(provider_config, default_model=final_model)
 
-            # Load initial context
-            initial_context = None
-            if input_file:
-                initial_context = FileHandler.read(input_file)
-                console.print_info(f"Loaded context: {len(initial_context)} characters")
+        # Load initial context
+        initial_context = None
+        if input_file:
+            initial_context = FileHandler.read(input_file)
+            console.print_info(f"Loaded context: {len(initial_context)} characters")
 
-            # Load prompt template (file path or literal template string)
-            prompt_template = None
-            if prompt:
-                prompt_path = Path(prompt)
-                prompt_template = FileHandler.read(prompt) if prompt_path.is_file() else prompt
+        # Load prompt template (file path or literal template string).
+        # M4: @/~ paths resolve explicitly and error when missing instead
+        # of silently becoming literal prompt text.
+        prompt_template = resolve_prompt_or_template(prompt)
 
-            session = ChatSession.from_initial_context(
-                llm_provider,
-                model=final_model,
-                temperature=temperature,
-                system_prompt=system,
-                initial_context=initial_context,
-                prompt_template=prompt_template,
-                config_manager=config_manager,
-            )
-            session.start()
-
-    except KeyboardInterrupt:
-        console.print("\nGoodbye!", style="green")
-        raise typer.Exit(0) from None
+        session = ChatSession.from_initial_context(
+            llm_provider,
+            model=final_model,
+            temperature=temperature,
+            system_prompt=system,
+            initial_context=initial_context,
+            prompt_template=prompt_template,
+            config_manager=config_manager,
+        )
+        session.start()
