@@ -55,3 +55,4 @@ config.json
 
 # Local manual-test inputs (copyrighted book transcriptions)
 examples/test_*.md
+.coverage
