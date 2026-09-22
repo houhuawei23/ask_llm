@@ -208,9 +208,11 @@ class NotebookTranslator:
         with open(output_path, "w", encoding="utf-8") as f:
             nbformat.write(translated_notebook, f)
 
-        ok = [r for r in results if r.status == TaskStatus.SUCCESS and r.metadata]
-        total_in = sum(r.metadata.input_tokens for r in ok if r.metadata)
-        total_out = sum(r.metadata.output_tokens for r in ok if r.metadata)
+        # Audit 2.8: totals reflect ALL attempts (what the user actually paid),
+        # matching ExecutionReport — not just successful chunks.
+        with_meta = [r for r in results if r.metadata]
+        total_in = sum(r.metadata.input_tokens for r in with_meta if r.metadata)
+        total_out = sum(r.metadata.output_tokens for r in with_meta if r.metadata)
         logger.info(f"Translated notebook saved to: {output_path}")
         logger.info(f"Statistics: {successful} chunks translated, {failed} failed")
 

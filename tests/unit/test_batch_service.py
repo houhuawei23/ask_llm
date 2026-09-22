@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from ask_llm.core.batch_models import BatchResult, BatchTask, ModelConfig
+from ask_llm.core.batch_models import BatchResult, BatchTask, ModelConfig, TaskStatus
 from ask_llm.core.batch_models import BatchStatistics
 from ask_llm.services.batch_service import BatchExportResult, BatchRunResult, BatchService
 
@@ -324,3 +325,97 @@ def test_run_batch_from_config_skips_fallback_when_disabled(tmp_path):
     tasks = mock_run.call_args.args[0]
     assert len(tasks) == 1
     assert tasks[0].fallback_model_configs == []
+
+
+class TestValidationAndSplit:
+    """Audit 2.5: validation must not mutate the shared manager; --split must
+    keep every model's paid answer."""
+
+    def test_validate_models_does_not_mutate_shared_config(self, capsys):
+        from ask_llm.config.manager import ConfigManager
+        from ask_llm.core.models import AppConfig, FallbackConfig, ProviderConfig
+        from ask_llm.services.batch_service import _validate_models
+        from ask_llm.utils.provider_cache import ProviderAdapterCache
+
+        app_config = AppConfig(
+            default_provider="openai",
+            providers={
+                "openai": ProviderConfig(
+                    api_provider="openai",
+                    api_key="sk-test",
+                    api_base="https://api.openai.com/v1",
+                    models=["gpt-4", "gpt-4o"],
+                ),
+            },
+        )
+        manager = ConfigManager(app_config)
+        before = manager.get_provider_config("openai")
+        models = [
+            ModelConfig(provider="openai", model="gpt-4", temperature=0.2, max_tokens=512),
+            ModelConfig(provider="openai", model="gpt-4o"),
+        ]
+
+        class _FakeAdapter:
+            def test_connection(self):
+                return True, "", 0.01
+
+        with patch.object(ProviderAdapterCache, "get", return_value=_FakeAdapter()):
+            result = _validate_models(models, app_config, manager)
+
+        assert len(result.validated) == 2
+        # The shared manager must be untouched: no current-provider switch, no
+        # leftover sampling overrides, no polluted model override.
+        assert manager.current_provider_name == app_config.default_provider
+        assert manager.get_model_override() is None
+        assert manager.get_override_sources() == {}
+        # Provider view identical to pre-validation (defaults, no overrides).
+        assert manager.get_provider_config("openai") == before
+
+    def _two_model_run_result(self):
+        mc_a = ModelConfig(provider="openai", model="gpt-4")
+        mc_b = ModelConfig(provider="openai", model="gpt-4o")
+        task = BatchTask(
+            task_id=0,
+            prompt="p {content}",
+            content="c",
+            model_settings=mc_a,
+        )
+        results = [
+            BatchResult(
+                task_id=0,
+                prompt="p {content}",
+                content="c",
+                output_filename="out.md",
+                model_settings=mc_a,
+                response="answer-A",
+                status=TaskStatus.SUCCESS,
+            ),
+            BatchResult(
+                task_id=1,
+                prompt="p {content}",
+                content="c",
+                output_filename="out.md",
+                model_settings=mc_b,
+                response="answer-B",
+                status=TaskStatus.SUCCESS,
+            ),
+        ]
+        run_result = _make_run_result(
+            all_results=results,
+            original_tasks=[task],
+            validated_models=[mc_a, mc_b],
+        )
+        return run_result, results
+
+    def test_split_preserves_all_models_results(self, tmp_path):
+        run_result, _results = self._two_model_run_result()
+        service = BatchService(run_result, _make_batch_config(), pricing_map={})
+        out_dir = tmp_path / "split_out"
+        out_dir.mkdir()
+
+        exported = service.export_results(str(out_dir), "json", split=True, separate_files=False)
+
+        # Both paid answers survive as separate files (old code kept only one).
+        assert len(exported.exported_paths) == 2
+        contents = sorted(Path(p).read_text(encoding="utf-8") for p in exported.exported_paths)
+        assert contents == ["answer-A", "answer-B"]

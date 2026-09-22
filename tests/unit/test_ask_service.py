@@ -276,3 +276,48 @@ def test_iter_stream_requires_processor(service):
     )
     with pytest.raises(RuntimeError, match="RequestProcessor is not set"):
         list(service_no_proc.iter_stream("hello"))
+
+
+class TestValidateInputSource:
+    """Audit 1.4: a missing path-looking input must fail before any spend."""
+
+    def test_missing_input_file_fails_fast_before_prompt_build(self):
+        from ask_llm.services.ask_service import validate_input_source
+
+        with pytest.raises(FileNotFoundError, match=r"typo\.md"):
+            validate_input_source("typo.md", from_input_option=True)
+
+    def test_missing_positional_path_like_source_rejected(self):
+        from ask_llm.services.ask_service import validate_input_source
+
+        with pytest.raises(FileNotFoundError):
+            validate_input_source("missing_dir/notes.md", from_input_option=False)
+
+    def test_plain_text_positional_still_accepted(self):
+        from ask_llm.services.ask_service import validate_input_source
+
+        validate_input_source("Translate to Chinese: Hello world", from_input_option=False)
+        validate_input_source("What is 3.5 times 12?", from_input_option=False)
+        validate_input_source("Sentence ending with a dot.", from_input_option=False)
+
+    def test_existing_file_passes(self, tmp_path):
+        from ask_llm.services.ask_service import validate_input_source
+
+        f = tmp_path / "input.txt"
+        f.write_text("hi", encoding="utf-8")
+        validate_input_source(str(f), from_input_option=True)
+
+    def test_tilde_path_expands(self, tmp_path, monkeypatch):
+        from ask_llm.services.ask_service import validate_input_source
+
+        monkeypatch.setenv("HOME", str(tmp_path))
+        f = tmp_path / "notes.md"
+        f.write_text("hi", encoding="utf-8")
+        validate_input_source("~/notes.md", from_input_option=True)
+
+    def test_load_content_expands_tilde(self, service, tmp_path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        f = tmp_path / "notes.md"
+        f.write_text("body", encoding="utf-8")
+        content, is_file = service.load_content("~/notes.md", show_progress=False)
+        assert content == "body" and is_file

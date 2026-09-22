@@ -56,7 +56,13 @@ def test_burst_for_uses_configured_limits():
     assert limiter.burst_for("deepseek", "deepseek-chat") == 7
 
 
-def test_effective_max_workers_capped_by_min_burst():
+def test_tight_provider_lane_does_not_throttle_other_lanes():
+    """Audit 3.3 (M6): lanes are sized per (provider, model) burst.
+
+    The old global min-burst cap let deepseek's burst=3 pin the whole batch
+    (qwen included) to 3 workers. Now deepseek's lane is 3 and qwen's lane
+    runs at the user's max_workers.
+    """
     rate_config = RateLimitConfig(
         deepseek={"requests_per_minute": 100, "burst_size": 3},
         qwen={"requests_per_minute": 300, "burst_size": 30},
@@ -76,7 +82,11 @@ def test_effective_max_workers_capped_by_min_burst():
             model_settings=ModelConfig(provider="qwen", model="qwen-max"),
         ),
     ]
-    assert processor._effective_max_workers(tasks) == 3
+    lanes = processor._build_lanes(tasks)
+    assert lanes["deepseek:deepseek-chat"][0] == 3
+    assert lanes["qwen:qwen-max"][0] == 20  # capped by user's max_workers, not qwen's burst
+    # Summary view: total slots across lanes.
+    assert processor._effective_max_workers(tasks) == 23
 
 
 def test_effective_max_workers_respects_user_max():
@@ -151,3 +161,43 @@ def test_catalog_providers_have_real_defaults(provider, expected):
 
     limiter = GlobalRateLimiter()
     assert limiter._get_limit(provider, None) == expected
+
+
+class TestAudit33LimiterHygiene:
+    """Audit 3.3: bucket reconfigure in place; wait-warn state is instance-safe."""
+
+    def test_reconfigure_preserves_accumulated_tokens(self):
+        """A config change must not hand out a free full burst (A6)."""
+        from ask_llm.utils.rate_limiter import _SyncTokenBucket
+
+        bucket = _SyncTokenBucket(requests_per_minute=60, burst_size=2)
+        assert bucket.acquire(timeout=1.0)
+        assert bucket.acquire(timeout=1.0)
+        # Bucket empty. Reconfigure to a bigger capacity: the leftover token
+        # level carries over — no immediate full refill.
+        bucket.reconfigure(requests_per_minute=6000, burst_size=50)
+        assert bucket.acquire(timeout=0.0) is False
+
+    def test_reconfigure_updates_limits_in_place(self):
+        from ask_llm.utils.rate_limiter import _SyncTokenBucket
+
+        bucket = _SyncTokenBucket(requests_per_minute=60, burst_size=2)
+        bucket.reconfigure(requests_per_minute=120, burst_size=7)
+        assert bucket.matches(120, 7)
+        assert not bucket.matches(60, 2)
+
+    def test_acquire_uses_reconfigured_bucket(self):
+        """A live singleton bucket follows a configure() change without reset."""
+        limiter = get_global_rate_limiter(
+            RateLimitConfig(deepseek={"requests_per_minute": 6000, "burst_size": 3})
+        )
+        assert limiter.acquire("deepseek", "deepseek-chat", timeout=1.0)
+        # Tighten the config; the same bucket object keeps serving.
+        limiter.configure(RateLimitConfig(deepseek={"requests_per_minute": 6000, "burst_size": 5}))
+        assert limiter.acquire("deepseek", "deepseek-chat", timeout=1.0)
+
+    def test_last_wait_warn_is_instance_state(self):
+        """Audit 3.3: the wait-warn de-dup map is per-instance, not a ClassVar."""
+        limiter = get_global_rate_limiter()
+        assert "_last_wait_warn" not in GlobalRateLimiter.__dict__
+        assert isinstance(limiter._last_wait_warn, dict)

@@ -284,6 +284,9 @@ class HeadingFormatter(ChunkedLLMJob):
                     prompt_template=template,
                     error=str(e),
                     retry_count=retry_count,
+                    # Audit 3.5: keep the level-reference context so resume
+                    # re-processes this batch exactly as a fresh run would.
+                    context_headings=list(context_headings) if context_headings else [],
                 ),
             )
 
@@ -463,12 +466,17 @@ class HeadingFormatter(ChunkedLLMJob):
         }
 
         # Rebuild failed batches: failed content is "\n"-joined raw heading
-        # lines; chunk_id is the first heading ordinal of the batch.
+        # lines; chunk_id is the first heading ordinal of the batch. The
+        # recorded context_headings (audit 3.5) restore the level reference
+        # and the take_last_only parse of the original batch; empty for
+        # pre-3.5 checkpoints (legacy behavior: no context).
         units: list[tuple[int, list[HeadingMatch], list[str] | None]] = []
         for fc in checkpoint.failed_chunks:
             lines = [ln for ln in fc.content.split("\n") if ln.strip()]
             if lines:
-                units.append((fc.chunk_id, cls._lines_to_matches(lines), None))
+                units.append(
+                    (fc.chunk_id, cls._lines_to_matches(lines), fc.context_headings or None)
+                )
 
         retry_results = formatter._retry_failed_units(
             checkpoint,

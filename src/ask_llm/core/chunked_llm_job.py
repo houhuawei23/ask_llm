@@ -25,6 +25,7 @@ from ask_llm.core.format_checkpoint import (
     FailedChunkInfo,
     FormatCheckpoint,
     SuccessfulChunkInfo,
+    compute_format_digest,
     generate_checkpoint_path,
 )
 from ask_llm.core.processor import RequestProcessor
@@ -154,6 +155,13 @@ class ChunkedLLMJob:
             original_text=original_text or "",
             chunk_spans=spans,
             frontmatter=frontmatter,
+            config_digest=compute_format_digest(
+                source_file,
+                prompt_template=prompt_template,
+                model=model,
+                max_chunk_tokens=max_chunk_tokens,
+                format_type=format_type,
+            ),
         )
         checkpoint.save(path)
         return path

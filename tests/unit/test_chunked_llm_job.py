@@ -14,6 +14,7 @@ import pytest
 
 from ask_llm.core.chunked_llm_job import ChunkedLLMJob
 from ask_llm.core.format_checkpoint import (
+    CHECKPOINT_VERSION,
     FailedChunkInfo,
     FormatCheckpoint,
     SuccessfulChunkInfo,
@@ -219,7 +220,8 @@ class TestSaveCheckpoint:
 
         assert path == str(cp)
         loaded = FormatCheckpoint.load(cp)
-        assert loaded.version == 3
+        assert loaded.version == CHECKPOINT_VERSION
+        assert loaded.config_digest  # v4: digest always present
         assert loaded.format_type == "body"
         assert loaded.model == "gpt-4o"
         assert loaded.prompt_template == "PROMPT"

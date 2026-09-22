@@ -37,7 +37,12 @@ from ask_llm.services.translation_options import (
     failed_job_result,
 )
 from ask_llm.utils.console import console
-from ask_llm.utils.path_resolver import is_directory_output, resolve_trans_input_paths
+from ask_llm.utils.path_resolver import (
+    is_directory_output,
+    resolve_trans_input_paths,
+    resolve_translation_output_path,
+    validate_output_targets,
+)
 from ask_llm.utils.pricing import format_cost_estimate
 
 PricingMap = dict[tuple[str, str], dict[str, float]]
@@ -188,6 +193,15 @@ class TranslationService:
         if not text_jobs and not notebook_files:
             raise FileNotFoundError("No translatable files found")
 
+        # Audit 2.1: refuse colliding/pre-existing targets before ANY job
+        # spends — multi-input runs with a single-file -o used to collide only
+        # at export time (after the full API spend, or last-writer-wins).
+        output_targets = [job.output_path for job in text_jobs] + [
+            resolve_translation_output_path(fp, output, output_is_dir, suffix=effective_suffix)
+            for fp in notebook_files
+        ]
+        validate_output_targets(output_targets, force=force, resume=bool(options.resume))
+
         self._print_prompt_preview(options, glossary_pairs)
 
         if options.max_parallel_files <= 1:
@@ -299,10 +313,15 @@ class TranslationService:
         if processed_file_count > 1:
             console.print()
             console.print("[bold]Session total (all files)[/bold]")
+            partial_note = (
+                f"（其中 {session_result.partial_files} 个部分失败，失败 chunk 按原文导出）"
+                if session_result.partial_files
+                else ""
+            )
             console.print(
                 f"  Files: {session_result.successful_files} succeeded, "
                 f"{session_result.failed_files} failed, "
-                f"{session_result.total_retries} retries"
+                f"{session_result.total_retries} retries{partial_note}"
             )
             console.print(
                 format_cost_estimate(
@@ -329,6 +348,14 @@ class TranslationService:
             session_result.total_output_tokens += job_result.output_tokens
         else:
             session_result.failed_files += 1
+            if job_result.partial:
+                # Audit 2.2: partial exports are tracked separately, but they
+                # still count as failures so the CLI exits non-zero.
+                session_result.partial_files += 1
+            # The tokens a partial file actually spent still count toward the
+            # session total (audit 2.8: totals reflect all attempts).
+            session_result.total_input_tokens += job_result.input_tokens
+            session_result.total_output_tokens += job_result.output_tokens
         self._batch_results.extend(job_result.results)
 
     def _build_report(self, files: list[str] | None = None) -> ExecutionReport:

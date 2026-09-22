@@ -15,13 +15,16 @@ The server-vs-validation order is the M2 fix: first-match-wins substring
 matching used to classify e.g. ``"502: invalid upstream response"`` as
 VALIDATION_ERROR (terminal — never retried, never fell back) because
 ``"invalid"`` matched before ``"502"``. Status-prefixed transient errors must
-win over the wide words. (Status codes deliberately stay *after* the specific
-categories: a bare ``"500"`` substring would otherwise hijack messages like
-``"context length is 1500"``.)
+win over the wide words.
+
+Numeric status keywords (``"401"``, ``"500"``, ...) match on word boundaries
+only (audit 3.1): a bare ``"500"`` substring used to hijack messages like
+``"context length is 15000"`` into a phantom server-error retry.
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from enum import Enum
 
@@ -32,6 +35,7 @@ class ErrorCategory(str, Enum):
     SUCCESS = "success"
     AUTHENTICATION = "authentication"
     RATE_LIMIT = "rate_limit"
+    BILLING = "billing"
     TIMEOUT = "timeout"
     CONTENT_FILTER = "content_filter"
     MODEL_ERROR = "model_error"
@@ -76,8 +80,12 @@ def _rules() -> tuple[KeywordRule, ...]:
         KeywordRule("rate_limit", r, True),
         KeywordRule("too many requests", r, True),
         KeywordRule("throttled", r, True),
-        KeywordRule("quota exceeded", r, True),
-        KeywordRule("insufficient_quota", r, True),
+        # Quota/billing exhaustion — terminal (audit 3.1): retrying the same
+        # key never succeeds; escalation to fallback providers still applies.
+        KeywordRule("quota exceeded", ErrorCategory.BILLING, False),
+        KeywordRule("your current quota", ErrorCategory.BILLING, False),
+        KeywordRule("insufficient_quota", ErrorCategory.BILLING, False),
+        KeywordRule("billing", ErrorCategory.BILLING, False),
         # Timeout — transient.
         KeywordRule("timeout", t, True),
         KeywordRule("timed out", t, True),
@@ -138,6 +146,21 @@ ERROR_KEYWORD_RULES: tuple[KeywordRule, ...] = _rules()
 # Derived: retryable keywords (drives retry_policy.DEFAULT_TRANSIENT_KEYWORDS).
 TRANSIENT_KEYWORDS: tuple[str, ...] = tuple(r.keyword for r in ERROR_KEYWORD_RULES if r.transient)
 
+# Numeric keywords ("401", "500", ...) match on word boundaries only, so
+# "context length is 15000" no longer trips the "500" server-error rule.
+_BOUNDARY_CACHE: dict[str, re.Pattern[str]] = {}
+
+
+def keyword_matches(keyword: str, lower_text: str) -> bool:
+    """Boundary-aware keyword containment against an already-lowercased text."""
+    if not keyword.isdigit():
+        return keyword in lower_text
+    pattern = _BOUNDARY_CACHE.get(keyword)
+    if pattern is None:
+        pattern = re.compile(rf"(?<!\w){re.escape(keyword)}(?!\w)")
+        _BOUNDARY_CACHE[keyword] = pattern
+    return bool(pattern.search(lower_text))
+
 
 def classify_error_message(error_message: str | None) -> ErrorCategory:
     """Classify a raw error message; first matching rule in table order wins."""
@@ -145,6 +168,6 @@ def classify_error_message(error_message: str | None) -> ErrorCategory:
         return ErrorCategory.UNKNOWN
     text = error_message.lower()
     for rule in ERROR_KEYWORD_RULES:
-        if rule.keyword in text:
+        if keyword_matches(rule.keyword, text):
             return rule.category
     return ErrorCategory.UNKNOWN

@@ -29,7 +29,12 @@ def _patch_tokens():
 
 
 def test_rate_limit_acquire_timeout_yields_failed_result():
-    """When the rate limiter times out, the attempt fails (not raises)."""
+    """When the rate limiter times out, the attempt fails (not raises).
+
+    Audit 3.3: the result is flagged ``throttled`` so the runner tail-requeues
+    the task without consuming its retry budget, instead of re-blocking a
+    worker on every backoff round.
+    """
     executor = TaskExecutor()
     limiter = MagicMock()
     limiter.acquire_timeout.return_value = 5.0
@@ -51,7 +56,9 @@ def test_rate_limit_acquire_timeout_yields_failed_result():
         )
 
     assert result.status == TaskStatus.FAILED
-    assert "Rate limit timeout" in (result.error or "")
+    assert "Rate limit wait timeout" in (result.error or "")
+    assert result.throttled is True
+    assert result.error_category == ErrorCategory.RATE_LIMIT
 
 
 def test_auth_error_dedup_flag_flips_once():

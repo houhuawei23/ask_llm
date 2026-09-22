@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import signal
+import threading
 from collections.abc import Callable, Mapping
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from rich.progress import Progress, TaskID
 
@@ -114,18 +116,47 @@ class GlobalBatchProcessor:
         return self._task_executor.auth_error_logged
 
     def _effective_max_workers(self, tasks: list[BatchTask]) -> int:
-        """Return ``max_workers`` capped by the tightest burst limit among tasks."""
+        """Total worker slots across all (provider, model) lanes (audit 3.3).
+
+        Sum of the per-lane caps — each lane is bounded by its own burst limit
+        instead of every lane inheriting the tightest burst in the batch.
+        Retained as a summary for callers/tests; scheduling uses
+        :meth:`_build_lanes`.
+        """
+        return sum(workers for workers, _ in self._build_lanes(tasks).values()) or self.max_workers
+
+    def _build_lanes(self, tasks: list[BatchTask]) -> dict[str, tuple[int, list[BatchTask]]]:
+        """Partition tasks into per-(provider, model) lanes (audit 3.3 / M6).
+
+        Each lane gets its own worker pool sized ``min(max_workers, burst)``
+        for THAT provider/model, so a tight provider only throttles its own
+        concurrency. The previous global min-burst cap let a single
+        low-burst provider in a mixed batch drag every other provider down to
+        its limit (and a single-provider batch to the same effective cap).
+        """
         limiter = get_global_rate_limiter(self.rate_limit_config)
-        min_burst: int | None = None
+        grouped: dict[str, list[BatchTask]] = {}
+        lane_bounds: dict[str, tuple[str, str]] = {}
         for task in tasks:
             if task.model_settings is None:
-                continue
-            burst = limiter.burst_for(task.model_settings.provider, task.model_settings.model)
-            if min_burst is None or burst < min_burst:
-                min_burst = burst
-        if min_burst is None:
-            return self.max_workers
-        return max(1, min(self.max_workers, min_burst))
+                key = "unknown:unknown"
+                provider: str | None = None
+                model: str | None = None
+            else:
+                provider = task.model_settings.provider
+                model = task.model_settings.model
+                key = f"{provider.lower()}:{model.lower()}"
+            grouped.setdefault(key, []).append(task)
+            if provider is not None and model is not None:
+                lane_bounds[key] = (provider, model)
+
+        lanes: dict[str, tuple[int, list[BatchTask]]] = {}
+        for key, lane_tasks in grouped.items():
+            bound = lane_bounds.get(key)
+            burst = limiter.burst_for(*bound) if bound else self.max_workers
+            workers = max(1, min(self.max_workers, burst))
+            lanes[key] = (workers, lane_tasks)
+        return lanes
 
     def _process_single_global_task(
         self,
@@ -244,9 +275,12 @@ class GlobalBatchProcessor:
         # Pre-build provider cache to avoid per-task adapter creation and ConfigManager mutation
         provider_cache = ProviderManager(config_manager).build_provider_cache(pending_tasks)
 
-        # Cap the thread pool size to the smallest configured burst limit so that
-        # workers do not sit blocked on the rate limiter waiting for tokens.
-        effective_max_workers = self._effective_max_workers(pending_tasks)
+        # Audit 3.3 (M6): per-(provider, model) lanes. Each lane runs its own
+        # bounded pool sized by its own burst limit, so a tight provider no
+        # longer pins the whole batch to its concurrency ceiling. Lanes execute
+        # concurrently; the longest-first ordering is preserved within a lane.
+        lanes = self._build_lanes(pending_tasks)
+        total_slots = sum(min(workers, len(lane_tasks)) for workers, lane_tasks in lanes.values())
 
         # B6 / P1.3: progress UI is a pool of per-worker bars, owned by a
         # presenter. Bars scale with the worker count, not the task count -- N=1000
@@ -268,7 +302,7 @@ class GlobalBatchProcessor:
                     else "unknown/model"
                 )
                 task_meta[task.task_id] = (input_token_estimate, estimated_output, model_key)
-            num_slots = max(1, min(effective_max_workers, len(pending_tasks)))
+            num_slots = max(1, min(total_slots, len(pending_tasks)))
             presenter: ProgressPresenter | NullProgressPresenter = ProgressPresenter(
                 task_meta, num_slots
             )
@@ -277,12 +311,82 @@ class GlobalBatchProcessor:
 
         presenter.start()
 
-        # Flat attempt records accumulated across runner retries (B1 / P1.1). The
-        # worker is stateless between calls; this side channel threads history so
-        # the final result's attempt_history captures every preceding attempt.
+        # Flat attempt records accumulated across runner retries (B1 / P1.1).
+        # Shared across lanes; keys are disjoint per task so concurrent
+        # setdefault/append from lane threads never interleave on one entry.
         attempt_history_by_task: dict[int, list[AttemptRecord]] = {}
 
-        try:
+        # Audit 3.3: cooperative interrupt. The SIGINT handler lives on the
+        # main thread and sets a shared stop event; every lane runner observes
+        # it, stops scheduling, drains in-flight work, and reports abandoned
+        # tasks. The prior handler is restored immediately so a second Ctrl-C
+        # hard-kills.
+        stop_event = threading.Event()
+        install_handler = threading.current_thread() is threading.main_thread()
+        prev_handler = signal.getsignal(signal.SIGINT) if install_handler else None
+
+        def _request_stop(_signum: int, _frame: Any) -> None:
+            stop_event.set()
+            if prev_handler is not None:
+                signal.signal(signal.SIGINT, prev_handler)
+
+        if install_handler:
+            signal.signal(signal.SIGINT, _request_stop)
+
+        def _on_retry_scheduled(task: BatchTask, failed_result: BatchResult) -> None:
+            bind_context(LogContext(task_id=task.task_id, phase="global_batch")).debug(
+                f"Task will be retried (attempt {failed_result.retry_count + 1}/{self.max_retries})"
+            )
+
+        def _on_worker_exception(task: BatchTask, exc: BaseException) -> BatchResult:
+            error_msg = f"Unexpected error: {exc!s}"
+            category = classify_error(error_msg)
+            bind_context(LogContext(task_id=task.task_id, phase="global_batch")).bind(
+                error_category=category.value
+            ).error(f"Unexpected error processing task: {exc}")
+            # Note: progress update is handled by _process_single_task/_process_single_global_task exception handler
+            # This callback is for exceptions that escape before any progress is set
+            return BatchResult(
+                task_id=task.task_id,
+                prompt=task.prompt,
+                content=task.content,
+                output_filename=task.output_filename,
+                model_settings=task.model_settings
+                or ModelConfig(provider="unknown", model="unknown"),
+                status=TaskStatus.FAILED,
+                error=error_msg,
+                error_category=category,
+            )
+
+        def _make_interrupted_result(task: BatchTask) -> BatchResult:
+            # Audit 3.2: an explicit failure record for every task the
+            # interrupt abandoned, so summaries/reports/checkpoint all see
+            # it (resume re-runs it via mark_all_failed_for_retry).
+            return BatchResult(
+                task_id=task.task_id,
+                prompt=task.prompt,
+                content=task.content,
+                output_filename=task.output_filename,
+                model_settings=task.model_settings
+                or ModelConfig(provider="unknown", model="unknown"),
+                status=TaskStatus.FAILED,
+                error="Interrupted (Ctrl-C) before completion",
+                error_category=classify_error("interrupted"),
+            )
+
+        lane_results: list[BatchResult] = []
+        lane_metrics: list[RunMetrics] = []
+        lane_errors: list[BaseException] = []
+        lane_lock = threading.Lock()
+
+        def _run_lane(lane_tasks: list[BatchTask], lane_workers: int) -> None:
+            runner: BoundedRetryRunner[BatchTask, BatchResult] = BoundedRetryRunner(
+                max_workers=lane_workers,
+                max_retries=self.max_retries,
+                retry_delay=self.retry_delay,
+                retry_delay_max=self.retry_delay_max,
+                stop_event=stop_event,
+            )
 
             def _worker(task: BatchTask, retry_count: int) -> BatchResult:
                 progress_task_id, input_tokens, slot_idx = presenter.acquire(task.task_id)
@@ -299,51 +403,66 @@ class GlobalBatchProcessor:
                 finally:
                     presenter.release(slot_idx)
 
-            def _on_retry_scheduled(task: BatchTask, failed_result: BatchResult) -> None:
-                bind_context(LogContext(task_id=task.task_id, phase="global_batch")).debug(
-                    f"Task will be retried "
-                    f"(attempt {failed_result.retry_count + 1}/{self.max_retries})"
+            try:
+                results, metrics = runner.run_with_metrics(
+                    lane_tasks,
+                    _worker,
+                    is_failed=lambda r: r.status == TaskStatus.FAILED,
+                    error_message=lambda r: r.error or "",
+                    retry_count_from_result=lambda r: r.retry_count,
+                    is_throttled=lambda r: r.throttled,
+                    on_worker_exception=_on_worker_exception,
+                    on_retry_scheduled=_on_retry_scheduled,
+                    on_result=on_result,
+                    order_key=lambda r: r.task_id,
+                    make_interrupted_result=_make_interrupted_result,
                 )
+            except BaseException as exc:
+                with lane_lock:
+                    lane_errors.append(exc)
+                return
+            with lane_lock:
+                lane_results.extend(results)
+                lane_metrics.append(metrics)
 
-            def _on_worker_exception(task: BatchTask, exc: BaseException) -> BatchResult:
-                error_msg = f"Unexpected error: {exc!s}"
-                category = classify_error(error_msg)
-                bind_context(LogContext(task_id=task.task_id, phase="global_batch")).bind(
-                    error_category=category.value
-                ).error(f"Unexpected error processing task: {exc}")
-                # Note: progress update is handled by _process_single_task/_process_single_global_task exception handler
-                # This callback is for exceptions that escape before any progress is set
-                return BatchResult(
-                    task_id=task.task_id,
-                    prompt=task.prompt,
-                    content=task.content,
-                    output_filename=task.output_filename,
-                    model_settings=task.model_settings
-                    or ModelConfig(provider="unknown", model="unknown"),
-                    status=TaskStatus.FAILED,
-                    error=error_msg,
-                    error_category=category,
-                )
-
-            runner: BoundedRetryRunner[BatchTask, BatchResult] = BoundedRetryRunner(
-                max_workers=effective_max_workers,
-                max_retries=self.max_retries,
-                retry_delay=self.retry_delay,
-                retry_delay_max=self.retry_delay_max,
-            )
-            results, self.last_metrics = runner.run_with_metrics(
-                pending_tasks,
-                _worker,
-                is_failed=lambda r: r.status == TaskStatus.FAILED,
-                error_message=lambda r: r.error or "",
-                retry_count_from_result=lambda r: r.retry_count,
-                on_worker_exception=_on_worker_exception,
-                on_retry_scheduled=_on_retry_scheduled,
-                on_result=on_result,
-                order_key=lambda r: r.task_id,
-            )
-
+        try:
+            if len(lanes) == 1:
+                # Single lane: run inline (no extra thread, SIGINT via the
+                # runner's own main-thread handler is irrelevant — the shared
+                # stop_event path above already covers it).
+                _workers, only_tasks = next(iter(lanes.values()))
+                _run_lane(only_tasks, _workers)
+            else:
+                lane_threads = [
+                    threading.Thread(
+                        target=_run_lane,
+                        args=(lane_tasks, workers),
+                        name=f"ask-llm-lane-{key}",
+                        daemon=False,
+                    )
+                    for key, (workers, lane_tasks) in lanes.items()
+                ]
+                for thread in lane_threads:
+                    thread.start()
+                for thread in lane_threads:
+                    thread.join()
         finally:
+            if install_handler and prev_handler is not None:
+                signal.signal(signal.SIGINT, prev_handler)
             presenter.stop()
 
-        return results
+        if lane_errors:
+            raise lane_errors[0]
+
+        self.last_metrics = RunMetrics(
+            total_tasks=len(pending_tasks),
+            successful=sum(1 for r in lane_results if r.status != TaskStatus.FAILED),
+            failed=sum(1 for r in lane_results if r.status == TaskStatus.FAILED),
+            retried=sum(m.retried for m in lane_metrics),
+            total_latency=max((m.total_latency for m in lane_metrics), default=0.0),
+            interrupted=any(m.interrupted for m in lane_metrics),
+            abandoned=sum(m.abandoned for m in lane_metrics),
+        )
+
+        lane_results.sort(key=lambda r: r.task_id)
+        return lane_results

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Annotated
 
 import typer
@@ -14,7 +15,7 @@ from ask_llm.config.cli_session import (
 )
 from ask_llm.core.processor import RequestProcessor
 from ask_llm.core.protocols import ReasoningChunk
-from ask_llm.services.ask_service import AskService
+from ask_llm.services.ask_service import AskService, validate_input_source
 from ask_llm.utils.console import console
 from ask_llm.utils.engine_facade import create_engine_adapter
 
@@ -152,6 +153,10 @@ def ask(
         console.print_error("No input provided. Use positional argument or -i/--input")
         raise typer.Exit(1)
 
+    # Fail fast before config load or prompt build: a path-looking source that
+    # does not exist must not be billed as literal prompt text (audit 1.4).
+    validate_input_source(source, from_input_option=input_source is None and input_file is not None)
+
     with cli_errors("ask"):
         load_result, config_manager = load_cli_session(config_path)
 
@@ -209,6 +214,14 @@ def ask(
         output_to_file = input_is_file or output
 
         if output_to_file:
+            # Audit 2.1: resolve the target and refuse overwrites BEFORE the
+            # paid call — the check used to run after process_to_file.
+            output_path = service.determine_output_path(source, input_is_file, output)
+            if Path(output_path).expanduser().exists() and not force:
+                console.print_error(
+                    f"Output file already exists: {output_path}. Use --force to overwrite."
+                )
+                raise typer.Exit(1)
             result = service.process_to_file(
                 content,
                 prompt_template=prompt_template,
@@ -216,7 +229,6 @@ def ask(
                 include_metadata=metadata,
                 return_reasoning=include_reasoning,
             )
-            output_path = service.determine_output_path(source, input_is_file, output)
             service.write_output(output_path, result.output_content, force=force)
             console.print_success(f"Output saved to: {output_path}")
             if metadata and result.metadata:

@@ -166,8 +166,17 @@ def test_sigint_interrupt_preserves_checkpoint_and_resume_completes(monkeypatch,
 
     assert outcome.interrupted is True
     assert os.path.exists(checkpoint_path), "interrupted run must persist the checkpoint"
-    assert 1 <= len(outcome.results) < 20
+    # Audit 3.2: abandoned tasks get explicit "Interrupted" results, so every
+    # task is accounted for — but only the pre-interrupt successes did work.
+    assert len(outcome.results) == 20
     interrupted_results = {r.task_id for r in outcome.results if r.status == TaskStatus.SUCCESS}
+    assert 1 <= len(interrupted_results) < 20
+    abandoned = {
+        r.task_id
+        for r in outcome.results
+        if r.status == TaskStatus.FAILED and "Interrupted" in (r.error or "")
+    }
+    assert abandoned == set(range(20)) - interrupted_results
 
     # Resume: fast adapter, same digest -> only the remainder runs.
     def fast_factory(config, default_model=None):

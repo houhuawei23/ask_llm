@@ -10,7 +10,12 @@ from dataclasses import dataclass
 
 import pytest
 
-from ask_llm.core.concurrent import BoundedRetryRunner, RunMetrics, run_bounded_with_retries
+from ask_llm.core.concurrent import (
+    BoundedRetryRunner,
+    RunMetrics,
+    exponential_backoff_seconds,
+    run_bounded_with_retries,
+)
 
 
 @dataclass
@@ -370,3 +375,211 @@ def test_retry_heap_tolerates_identical_due_times(monkeypatch):
     )
     assert sorted(r.value for r in results) == [0, 10, 20, 30]
     assert attempts == {0: 2, 1: 2, 2: 1, 3: 1}
+
+
+class TestAudit31Jitter:
+    """Audit 3.1: full-jitter backoff, bounded and seedable."""
+
+    def test_jitter_bounded_and_seeded(self):
+        import random as _random
+
+        rng = _random.Random(42)
+        delays = [
+            exponential_backoff_seconds(n, initial=1.0, maximum=8.0, rng=rng) for n in range(1, 8)
+        ]
+        for d in delays:
+            assert 0.0 <= d <= 8.0
+        # Deterministic with the same seed.
+        rng2 = _random.Random(42)
+        again = [
+            exponential_backoff_seconds(n, initial=1.0, maximum=8.0, rng=rng2) for n in range(1, 8)
+        ]
+        assert delays == again
+        # Attempt 1 raw delay is 1.0; jitter lives in [0, 1].
+        rng3 = _random.Random(7)
+        first = [
+            exponential_backoff_seconds(1, initial=1.0, maximum=8.0, rng=rng3) for _ in range(20)
+        ]
+        assert all(0.0 <= d <= 1.0 for d in first)
+
+    def test_retry_delays_differ_between_workers(self):
+        """Two simultaneous failures must not reschedule at the same instant."""
+        import random as _random
+
+        rng = _random.Random(123)
+        d1 = exponential_backoff_seconds(1, initial=2.0, maximum=10.0, rng=rng)
+        d2 = exponential_backoff_seconds(1, initial=2.0, maximum=10.0, rng=rng)
+        assert d1 != d2
+
+
+class TestAudit32InterruptedDrain:
+    """Audit 3.2: abandoned tasks appear as explicit results."""
+
+    def test_interrupt_reports_queued_retries(self):
+        """Tasks left pending/queued at interrupt get fabricated results via
+        make_interrupted_result and count in metrics."""
+        if threading.current_thread() is not threading.main_thread():
+            pytest.skip("SIGINT graceful-drain requires the main thread")
+
+        triggered = threading.Event()
+
+        def worker(task: int, retry_count: int) -> _SimpleResult:
+            if task >= 2 and not triggered.is_set():
+                triggered.set()
+                os.kill(os.getpid(), signal.SIGINT)
+            return _SimpleResult(task_id=task, value=task, retry_count=retry_count)
+
+        def make_interrupted(task: int) -> _SimpleResult:
+            return _SimpleResult(task_id=task, value=-1, retry_count=0, error="interrupted")
+
+        runner = BoundedRetryRunner(
+            max_workers=1,
+            max_retries=0,
+            retry_delay=0.01,
+            retry_delay_max=0.05,
+        )
+        results, metrics = runner.run_with_metrics(
+            list(range(10)),
+            worker,
+            is_failed=lambda r: bool(r.error),
+            error_message=lambda r: r.error,
+            retry_count_from_result=lambda r: r.retry_count,
+            order_key=lambda r: r.task_id,
+            make_interrupted_result=make_interrupted,
+        )
+
+        assert metrics.interrupted is True
+        seen_ids = {r.task_id for r in results}
+        # Every task accounted for: no silent drops (audit 3.2 core claim).
+        assert seen_ids == set(range(10))
+        assert metrics.successful + metrics.failed == metrics.total_tasks
+        assert metrics.abandoned > 0  # abandoned tasks are always reported
+
+
+class TestAudit33ThrottleAndStopEvent:
+    """Audit 3.3: tail-requeue for throttled results; cooperative stop_event."""
+
+    @staticmethod
+    def _runner(stop_event=None, max_retries=2, max_workers=2):
+        return BoundedRetryRunner(
+            max_workers=max_workers,
+            max_retries=max_retries,
+            retry_delay=0.01,
+            retry_delay_max=0.05,
+            stop_event=stop_event,
+        )
+
+    def test_throttled_result_tail_requeued_without_retry_cost(self):
+        """A throttled failure requeues at the tail; the retry budget is untouched."""
+        calls: dict[int, int] = {}
+
+        def worker(task: int, retry_count: int) -> _SimpleResult:
+            calls[task] = calls.get(task, 0) + 1
+            if calls[task] <= 2 and task == 1:
+                # Non-retryable message: only the throttle path may requeue it.
+                return _SimpleResult(
+                    task_id=task, value=-1, retry_count=retry_count, error="auth failed"
+                )
+            return _SimpleResult(task_id=task, value=task * 10, retry_count=retry_count)
+
+        results, metrics = self._runner().run_with_metrics(
+            [1],
+            worker,
+            is_failed=lambda r: r.value == -1,
+            error_message=lambda r: r.error,
+            retry_count_from_result=lambda r: r.retry_count,
+            is_throttled=lambda r: r.error == "auth failed",
+            order_key=lambda r: r.task_id,
+        )
+
+        assert calls[1] == 3  # two throttle deferrals, then success
+        assert metrics.retried == 0  # retry budget untouched
+        assert len(results) == 1
+        assert results[0].value == 10
+
+    def test_throttled_deferrals_bounded_then_terminal(self):
+        """A permanently throttled task terminates after max_retries+1 deferrals."""
+        calls: dict[int, int] = []
+
+        def worker(task: int, retry_count: int) -> _SimpleResult:
+            calls.append(1)
+            return _SimpleResult(task_id=task, value=-1, retry_count=retry_count, error="throttled")
+
+        results, metrics = self._runner(max_retries=1).run_with_metrics(
+            [1],
+            worker,
+            is_failed=lambda r: r.value == -1,
+            error_message=lambda r: r.error,
+            retry_count_from_result=lambda r: r.retry_count,
+            is_throttled=lambda r: r.error == "throttled",
+            order_key=lambda r: r.task_id,
+        )
+
+        # Deferrals: used=0,1 requeued (<= max_retries); then the normal
+        # escalation path runs once (retry_count 1), and after that the task
+        # terminates — total visits bounded by 2 * (max_retries + 1).
+        assert len(calls) == 4
+        assert len(results) == 1
+        assert results[0].value == -1
+        assert metrics.failed == 1
+
+    def test_throttled_task_keeps_retry_budget_for_real_failures(self):
+        """After a throttle deferral, a genuine transient error still retries."""
+        calls: list[int] = []
+
+        def worker(task: int, retry_count: int) -> _SimpleResult:
+            calls.append(retry_count)
+            if len(calls) == 1:
+                return _SimpleResult(
+                    task_id=task, value=-1, retry_count=retry_count, error="throttled"
+                )
+            if len(calls) == 2:
+                return _SimpleResult(
+                    task_id=task, value=-1, retry_count=retry_count, error="connection reset"
+                )
+            return _SimpleResult(task_id=task, value=task * 10, retry_count=retry_count)
+
+        results, metrics = self._runner().run_with_metrics(
+            [1],
+            worker,
+            is_failed=lambda r: r.value == -1,
+            error_message=lambda r: r.error,
+            retry_count_from_result=lambda r: r.retry_count,
+            is_throttled=lambda r: r.error == "throttled",
+            order_key=lambda r: r.task_id,
+        )
+
+        assert results[0].value == 10
+        assert metrics.retried == 1  # only the genuine failure consumed budget
+
+    def test_stop_event_interrupts_runner(self):
+        """A shared stop_event (lane threads) drains like a SIGINT interrupt."""
+        if threading.current_thread() is not threading.main_thread():
+            pytest.skip("timing-sensitive drain check kept on the main thread")
+
+        stop_event = threading.Event()
+
+        def worker(task: int, retry_count: int) -> _SimpleResult:
+            if task == 0:
+                stop_event.set()  # cooperative stop while task 0 runs
+            return _SimpleResult(task_id=task, value=task, retry_count=retry_count)
+
+        def make_interrupted(task: int) -> _SimpleResult:
+            return _SimpleResult(task_id=task, value=-1, retry_count=0, error="interrupted")
+
+        # max_workers=1 keeps task 1 pending until task 0 observes the stop.
+        runner = self._runner(stop_event=stop_event, max_workers=1)
+        results, metrics = runner.run_with_metrics(
+            [0, 1],
+            worker,
+            is_failed=lambda r: bool(r.error),
+            error_message=lambda r: r.error,
+            retry_count_from_result=lambda r: r.retry_count,
+            order_key=lambda r: r.task_id,
+            make_interrupted_result=make_interrupted,
+        )
+
+        assert metrics.interrupted is True
+        seen_ids = {r.task_id for r in results}
+        assert seen_ids == {0, 1}  # abandoned task 1 explicitly reported
+        assert metrics.abandoned == 1

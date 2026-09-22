@@ -122,6 +122,14 @@ class BatchResult(BaseModel):
         default=None,
         description="Classified failure category when status is FAILED",
     )
+    throttled: bool = Field(
+        default=False,
+        description=(
+            "Audit 3.3: the attempt failed only because the rate limiter's "
+            "acquire timed out — the runner tail-requeues the task instead of "
+            "burning its retry budget waiting for a token."
+        ),
+    )
     attempt_history: list[AttemptRecord] = Field(
         default_factory=list,
         description=(

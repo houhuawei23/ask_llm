@@ -64,7 +64,14 @@ def _validate_models(
     app_config: AppConfig,
     config_manager: ConfigManager,
 ) -> _ValidationResult:
-    """Validate provider/model list and test connections."""
+    """Validate provider/model list and test connections.
+
+    Builds each overridden provider view on a detached ``model_copy`` — the
+    loop must never ``set_provider`` / ``apply_overrides`` on the *shared*
+    manager (audit 2.5): it used to return with the manager left pointing at
+    the last validated model, its sampling overrides installed and the
+    run-level model override polluted.
+    """
     result = _ValidationResult()
 
     for model_config in provider_models:
@@ -91,18 +98,22 @@ def _validate_models(
                 result.skipped.append(model_key)
                 continue
 
-            config_manager.set_provider(model_config.provider)
-            config_manager.apply_overrides(
-                model=model_config.model,
-                temperature=model_config.temperature,
-                max_tokens=model_config.max_tokens,
-                top_p=model_config.top_p,
+            overrides: dict[str, Any] = {}
+            if model_config.temperature is not None:
+                overrides["api_temperature"] = model_config.temperature
+            if model_config.top_p is not None:
+                overrides["api_top_p"] = model_config.top_p
+            if model_config.max_tokens is not None:
+                overrides["max_tokens"] = model_config.max_tokens
+            provider_config_with_overrides = (
+                provider_config.model_copy(update=overrides) if overrides else provider_config
             )
 
-            provider_config_with_overrides = config_manager.get_provider_config()
-            default_model = (
-                config_manager.get_model_override() or config_manager.get_default_model()
+            default_model = model_config.model or (
+                provider_config.models[0] if provider_config.models else ""
             )
+            if not default_model:
+                raise ValueError(f"No model available for provider '{model_config.provider}'")
 
             try:
                 test_provider = ProviderAdapterCache.get(
@@ -428,7 +439,15 @@ class BatchService:
         output_format: str,
         grouped: dict[str, list[BatchResult]],
     ) -> BatchExportResult:
-        """Export split files: one file per original task."""
+        """Export split files: one file per (task, model) answer.
+
+        Audit 2.5: the old code kept only the lowest task_id per (prompt,
+        content, output_filename) group — silently discarding every other
+        validated model's paid answer and collapsing duplicate tasks. Filename
+        conflicts are resolved by ``export_split_files`` (``_N`` suffixes), so
+        keeping every distinct result is safe and lossless; a warning notes
+        when one task produced several files.
+        """
         combined_results = [r for results in grouped.values() for r in results]
 
         task_groups: dict[tuple[str, str, str | None], list[BatchResult]] = defaultdict(list)
@@ -440,10 +459,25 @@ class BatchService:
         deduped_results: list[BatchResult] = []
         for task_key in sorted(
             task_groups.keys(),
-            key=lambda k: min(r.task_id % num_original_tasks for r in task_groups[k]),
+            key=lambda k: (
+                min(r.task_id % num_original_tasks for r in task_groups[k])
+                if num_original_tasks
+                else 0
+            ),
         ):
-            task_results = sorted(task_groups[task_key], key=lambda r: r.task_id)
-            deduped_results.append(task_results[0])
+            # Collapse exact duplicates (same task_id re-merged on resume);
+            # keep every distinct (task, model) answer.
+            seen_ids: set[int] = set()
+            for result in sorted(task_groups[task_key], key=lambda r: r.task_id):
+                if result.task_id in seen_ids:
+                    continue
+                seen_ids.add(result.task_id)
+                deduped_results.append(result)
+            if len(seen_ids) > 1:
+                label = task_key[2] or (task_key[0][:40] + "…")
+                console.print_warning(
+                    f"Multiple model answers for task '{label}'; exported as {len(seen_ids)} files."
+                )
 
         if output:
             output_path_obj = Path(output)

@@ -114,13 +114,18 @@ def run_with_checkpoint(
     """
     checkpoint = BatchCheckpoint.create(command=command, config_digest=config_digest)
 
-    # M8: warn before silently zeroing prior progress — rerunning without
-    # --resume overwrites an existing checkpoint at the same path.
+    # M8/2.4: rerunning without --resume overwrites an existing checkpoint at
+    # the same path. Preserve one generation as ``.bak`` (no rotation scheme)
+    # so the previous run's progress is recoverable, and warn under --quiet.
     if not resume and Path(checkpoint_path).exists():
         logger.warning(
             f"[{command}] A checkpoint already exists at {checkpoint_path} and will be "
             f"overwritten by this run. Pass --resume to continue it instead."
         )
+        try:
+            Path(checkpoint_path).replace(str(checkpoint_path) + ".bak")
+        except OSError as e:  # pragma: no cover - best-effort preservation
+            logger.warning(f"[{command}] Could not back up existing checkpoint: {e}")
 
     # 1. Optional resume: load prior progress, filter completed tasks.
     if resume and Path(checkpoint_path).exists():

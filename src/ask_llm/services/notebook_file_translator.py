@@ -135,6 +135,9 @@ class NotebookFileTranslator:
             output_path=output_path,
             input_tokens=total_in,
             output_tokens=total_out,
-            success=True,
+            # Audit 2.2: partial notebooks are no longer clean successes.
+            success=failed == 0,
+            error=f"{failed} cell chunk(s) failed" if failed else None,
             results=list(notebook_translator.last_results),
+            partial=failed > 0,
         )

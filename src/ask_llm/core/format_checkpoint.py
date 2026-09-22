@@ -10,10 +10,23 @@ lossy ``\\n\\n`` fallback. v1 files load unchanged (spans absent → legacy join
 
 v3 (H5): stores the carved ``frontmatter`` so resume can reattach it; v2 files
 load unchanged (frontmatter absent → resume re-extracts from the source file).
+
+v4 (M8): carries ``config_digest`` (sha256 over the source *content*, prompt
+template, model, chunk budget and format type) per the checkpoint contract
+(``checkpoint.py``). Resume refuses v≤3 files and refuses v4 files whose
+digest no longer matches the current source — a stale resume silently
+rebuilding output from the old body (and, with ``--inplace``, clobbering the
+edited source) is worse than rerunning.
+
+v4 also carries per-failed-chunk ``context_headings`` (audit 3.5): heading
+batches retry with the same level-reference context a fresh run used, and the
+``take_last_only`` parse stays symmetric. The field defaults to empty, so
+early v4 files load unchanged.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -24,18 +37,56 @@ from loguru import logger
 
 from ask_llm.core.checkpoint import atomic_write_text
 
-CHECKPOINT_VERSION = 3
+CHECKPOINT_VERSION = 4
+
+
+def compute_format_digest(
+    source_file: str | Path,
+    *,
+    prompt_template: str,
+    model: str,
+    max_chunk_tokens: int | None,
+    format_type: str,
+) -> str:
+    """Digest a format run's defining inputs for checkpoint consistency checks.
+
+    Hashes the source file *content* (never just its path) plus the prompt
+    template, model, chunk budget and format type — editing any of them
+    between runs invalidates the old checkpoint instead of letting a stale
+    resume mis-map prior results onto changed input.
+    """
+    h = hashlib.sha256()
+    p = Path(source_file)
+    if p.is_file():
+        h.update(p.read_bytes())
+    else:
+        h.update(str(source_file).encode("utf-8"))
+    h.update(b"\x1f")
+    h.update((prompt_template or "").encode("utf-8"))
+    h.update(b"\x1e")
+    h.update((model or "").encode("utf-8"))
+    h.update(b"\x1e")
+    h.update(str(max_chunk_tokens).encode("utf-8"))
+    h.update(b"\x1e")
+    h.update((format_type or "").encode("utf-8"))
+    return h.hexdigest()
 
 
 @dataclass
 class FailedChunkInfo:
-    """Information about a single failed chunk for checkpoint/resume."""
+    """Information about a single failed chunk for checkpoint/resume.
+
+    ``context_headings`` (audit 3.5): heading batches retry with the same
+    last-N previous-batch context a fresh run used; empty for body chunks and
+    for checkpoints written before the field existed.
+    """
 
     chunk_id: int
     content: str
     prompt_template: str
     error: str
     retry_count: int
+    context_headings: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -66,6 +117,9 @@ class FormatCheckpoint:
     # H5: the frontmatter carved out before chunking, reattached verbatim on
     # resume. Empty for pre-v3 checkpoints (resume re-extracts it instead).
     frontmatter: str = ""
+    # M8: digest of the run's defining inputs (see compute_format_digest).
+    # Empty for pre-v4 checkpoints; resume refuses those outright.
+    config_digest: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize checkpoint to dictionary."""
@@ -77,6 +131,7 @@ class FormatCheckpoint:
             "prompt_template": self.prompt_template,
             "max_chunk_tokens": self.max_chunk_tokens,
             "created_at": self.created_at,
+            "config_digest": self.config_digest,
             "failed_chunks": [
                 {
                     "chunk_id": fc.chunk_id,
@@ -84,6 +139,7 @@ class FormatCheckpoint:
                     "prompt_template": fc.prompt_template,
                     "error": fc.error,
                     "retry_count": fc.retry_count,
+                    "context_headings": list(fc.context_headings),
                 }
                 for fc in self.failed_chunks
             ],
@@ -121,6 +177,7 @@ class FormatCheckpoint:
                     prompt_template=fc["prompt_template"],
                     error=fc["error"],
                     retry_count=fc["retry_count"],
+                    context_headings=list(fc.get("context_headings", [])),
                 )
                 for fc in data.get("failed_chunks", [])
             ],
@@ -134,6 +191,7 @@ class FormatCheckpoint:
             original_text=data.get("original_text", ""),
             chunk_spans=list(data.get("chunk_spans", [])),
             frontmatter=data.get("frontmatter", ""),
+            config_digest=data.get("config_digest", ""),
         )
 
     def save(self, path: str | Path) -> None:

@@ -179,3 +179,37 @@ class TestResumeValidation:
                 max_retries=1,
                 max_workers=2,
             )
+
+
+class TestNonResumeCheckpointBackup:
+    def test_non_resume_rerun_preserves_prior_checkpoint_as_bak(
+        self, tmp_path, config_manager, monkeypatch
+    ):
+        """2.4: a fresh (non-resume) rerun keeps the prior checkpoint as .bak."""
+        checkpoint_path = tmp_path / "cp.json"
+        digest = "digest"
+        self._make_checkpoint(checkpoint_path, digest, completed=[0])
+
+        monkeypatch.setattr(
+            "ask_llm.core.command_runner.run_global_batch_tasks",
+            lambda tasks, *a, **k: ([_success(t.task_id) for t in tasks], None),
+        )
+        run_with_checkpoint(
+            command="batch",
+            config_digest=digest,
+            checkpoint_path=str(checkpoint_path),
+            tasks=[_task(0)],
+            config_manager=config_manager,
+            resume=False,  # fresh run over the existing checkpoint
+            max_retries=1,
+            max_workers=1,
+        )
+        # New checkpoint written for this run; prior one preserved as .bak.
+        assert Path(str(checkpoint_path) + ".bak").exists()
+        bak = BatchCheckpoint.load(str(checkpoint_path) + ".bak")
+        assert 0 in bak.completed_task_ids
+
+    def _make_checkpoint(self, path, digest, completed):
+        cp = BatchCheckpoint.create(command="batch", config_digest=digest)
+        cp.merge([_success(i) for i in completed])
+        cp.save(path)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shlex
 import subprocess
 import time
@@ -14,6 +15,7 @@ from loguru import logger
 from ask_llm.core.models import ChatHistory, ChatMessage, MessageRole
 from ask_llm.core.processor import RequestProcessor
 from ask_llm.core.protocols import LLMProviderProtocol, ReasoningChunk
+from ask_llm.utils.api_key_gate import provider_env_var_name
 from ask_llm.utils.console import console
 from ask_llm.utils.token_counter import TokenCounter
 
@@ -496,6 +498,17 @@ class ChatSession:
         except Exception as e:
             console.print_error(f"Failed to export: {e}")
 
+    def _scrubbed_shell_env(self) -> dict[str, str]:
+        """Child-process env with this session's provider API key removed.
+
+        Keys injected via :func:`apply_interactive_key` land in ``os.environ``
+        (llm-engine's ``${VAR}`` resolution needs that); the ``!shell`` escape
+        must not leak them into every command the user runs (audit 1.3).
+        """
+        env = dict(os.environ)
+        env.pop(provider_env_var_name(self.provider.name), None)
+        return env
+
     def _handle_shell_command(self, cmd: str) -> bool:
         """
         Execute shell command.
@@ -535,6 +548,7 @@ class ChatSession:
                     capture_output=True,
                     text=True,
                     timeout=30,
+                    env=self._scrubbed_shell_env(),
                 )
             except ValueError:
                 # If parsing fails (e.g., contains shell operators), use shell=True
@@ -545,6 +559,7 @@ class ChatSession:
                     capture_output=True,
                     text=True,
                     timeout=30,
+                    env=self._scrubbed_shell_env(),
                 )
 
             if result.stdout:

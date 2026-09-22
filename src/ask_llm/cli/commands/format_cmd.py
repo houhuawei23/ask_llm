@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 from typing import Annotated
 
 import typer
@@ -22,6 +21,7 @@ from ask_llm.services.format_service import (
 from ask_llm.utils.console import console
 from ask_llm.utils.engine_facade import create_engine_adapter
 from ask_llm.utils.md_path_discovery import discover_markdown_files
+from ask_llm.utils.path_resolver import OutputTargetError, validate_multi_input_output
 
 
 def _default_file_workers() -> int:
@@ -30,23 +30,12 @@ def _default_file_workers() -> int:
     return max(1, min(16, cpu * 2))
 
 
-def _output_is_single_file_path(output: str) -> bool:
-    """True if ``-o`` clearly targets one file (not a directory)."""
-    p = Path(output)
-    if p.exists():
-        return p.is_file()
-    # Non-existent path: treat as file if it looks like a single markdown file
-    suf = p.suffix.lower()
-    return suf in (".md", ".markdown") and not output.endswith(os.sep)
-
-
 def _validate_batch_output(output: str | None, file_count: int, inplace: bool) -> None:
-    if inplace or file_count <= 1 or not output:
-        return
-    if _output_is_single_file_path(output):
-        raise typer.BadParameter(
-            "多个输入文件不能使用单个 Markdown 文件作为 -o/--output；请指定目录或省略 -o 使用默认命名。"
-        )
+    """Structural output guard (shared logic in path_resolver, audit 2.1)."""
+    try:
+        validate_multi_input_output(output, file_count, inplace=inplace)
+    except OutputTargetError as e:
+        raise typer.BadParameter(str(e)) from e
 
 
 def format_cmd(
@@ -265,12 +254,16 @@ def format_cmd(
 
         # Handle --resume mode after config and processor are ready
         if resume:
-            format_service.resume_from_checkpoint(
+            outcome = format_service.resume_from_checkpoint(
                 resume,
                 output=output,
                 inplace=inplace,
                 force=force,
             )
+            # 2.7: map remaining failures to a non-zero exit code, consistent
+            # with the fresh-run policy (any failed file/chunk ⇒ exit 1).
+            if not outcome.ok:
+                raise typer.Exit(1)
             raise typer.Exit(0)
 
         resolved_paths = discover_markdown_files(files, recursive=recursive, max_depth=max_depth)

@@ -312,8 +312,14 @@ def trans(
             service.export_report(report, session_result)
 
             if session_result.failed_files > 0:
+                partial_note = (
+                    f" ({session_result.partial_files} partial)"
+                    if session_result.partial_files
+                    else ""
+                )
                 console.print_error(
-                    f"Translation finished with {session_result.failed_files} failed file(s)"
+                    f"Translation finished with {session_result.failed_files} failed "
+                    f"file(s){partial_note}"
                 )
                 raise typer.Exit(1)
 

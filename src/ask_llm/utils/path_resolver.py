@@ -7,10 +7,44 @@ output-path mapping used by the text and notebook translators.
 from __future__ import annotations
 
 import glob
+import os
 from pathlib import Path
 
 from ask_llm.utils.console import console
 from ask_llm.utils.file_handler import FileHandler
+
+
+class OutputTargetError(ValueError):
+    """Raised when the output configuration would collide or clobber (audit 2.1).
+
+    Service-level signal so both the CLI and library callers can fail fast
+    before any paid API work.
+    """
+
+
+def is_single_file_output(output: str) -> bool:
+    """True if ``-o`` clearly targets one file rather than a directory."""
+    p = Path(output)
+    if p.exists():
+        return p.is_file()
+    # Non-existent path: treat as file if it looks like a single markdown file.
+    return p.suffix.lower() in (".md", ".markdown") and not output.endswith(os.sep)
+
+
+def validate_multi_input_output(output: str | None, file_count: int, *, inplace: bool) -> None:
+    """Reject a single-file ``-o`` for a multi-file run (targets would collide).
+
+    Raises:
+        OutputTargetError: If *output* names a single file and more than one
+            input file is being processed.
+    """
+    if inplace or file_count <= 1 or not output:
+        return
+    if is_single_file_output(output):
+        raise OutputTargetError(
+            f"Multiple input files cannot use a single file as -o/--output: {output}. "
+            "Specify a directory, or omit -o for default per-file naming."
+        )
 
 
 def resolve_trans_input_paths(
@@ -22,21 +56,24 @@ def resolve_trans_input_paths(
     Resolve input paths to a list of translatable files.
 
     Supports: directory (expands to matching files), file path, glob pattern.
+    ``~`` is expanded, so quoted ``'~/docs/*.md'`` patterns work; every entry
+    is returned as an absolute resolved path so downstream output mapping is
+    uniform.
     """
     resolved: list[str] = []
     for pattern in files:
-        p = Path(pattern)
+        p = Path(pattern).expanduser()
         if p.is_dir():
             for ext in translatable_extensions:
                 ext_clean = ext if ext.startswith(".") else f".{ext}"
                 if recursive_dir:
-                    resolved.extend(str(f) for f in p.rglob(f"*{ext_clean}"))
+                    resolved.extend(str(f.resolve()) for f in p.rglob(f"*{ext_clean}"))
                 else:
-                    resolved.extend(str(f) for f in p.glob(f"*{ext_clean}"))
+                    resolved.extend(str(f.resolve()) for f in p.glob(f"*{ext_clean}"))
         elif p.exists() and p.is_file():
             resolved.append(str(p.resolve()))
         else:
-            matched = glob.glob(pattern)
+            matched = glob.glob(str(p))
             if matched:
                 for m in matched:
                     mp = Path(m)
@@ -47,6 +84,44 @@ def resolve_trans_input_paths(
             else:
                 console.print_warning(f"File not found: {pattern}")
     return sorted(set(resolved))
+
+
+def validate_output_targets(
+    output_paths: list[str],
+    *,
+    force: bool,
+    resume: bool = False,
+) -> None:
+    """Refuse colliding or pre-existing output targets BEFORE paid API work.
+
+    Args:
+        output_paths: Resolved target path for every job in the run.
+        force: ``--force`` was given; existing targets may be overwritten.
+        resume: Resume run; it legitimately targets its own partial output.
+
+    Raises:
+        OutputTargetError: On duplicate targets (several inputs resolving to
+            one output — later writes then fail only after the full spend, or
+            with ``--force`` degrade to last-writer-wins), or on an existing
+            target without ``--force`` (the old per-job check fired at export
+            time, after the run had already been paid for).
+    """
+    seen: dict[str, str] = {}
+    for out in output_paths:
+        key = str(Path(out).expanduser().resolve())
+        if key in seen:
+            raise OutputTargetError(
+                f"Multiple input files resolve to the same output path: {out} "
+                f"(already targeted for {seen[key]}). Use a directory as -o, or "
+                "omit -o, when processing multiple files."
+            )
+        seen[key] = out
+    if force or resume:
+        return
+    for out in output_paths:
+        p = Path(out).expanduser()
+        if p.exists():
+            raise OutputTargetError(f"Output file already exists: {out}. Use --force to overwrite.")
 
 
 def resolve_translation_output_path(

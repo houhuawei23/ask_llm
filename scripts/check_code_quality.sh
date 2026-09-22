@@ -68,7 +68,8 @@ echo "=========================================="
 if mypy src/ask_llm/; then
     echo -e "${GREEN}✓ MyPy 检查通过${NC}"
 else
-    echo -e "${YELLOW}⚠ MyPy 发现类型问题（非致命）${NC}"
+    echo -e "${RED}✗ MyPy 发现类型问题${NC}"
+    ERRORS=$((ERRORS + 1))
 fi
 echo ""
 
@@ -88,7 +89,8 @@ echo "=========================================="
 if bandit -r src/ask_llm/ -ll; then
     echo -e "${GREEN}✓ Bandit 安全检查通过${NC}"
 else
-    echo -e "${YELLOW}⚠ Bandit 发现潜在安全问题${NC}"
+    echo -e "${RED}✗ Bandit 发现潜在安全问题${NC}"
+    ERRORS=$((ERRORS + 1))
 fi
 echo ""
 

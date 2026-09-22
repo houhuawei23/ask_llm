@@ -523,3 +523,143 @@ class TestHeadingResume:
         assert result.failed_batches == []
         assert result.stats.batches_processed == 1
         assert result.stats.batches_failed == 0
+
+    def _make_processor(self) -> RequestProcessor:
+        mock_provider = MagicMock(spec=LLMProviderProtocol)
+        mock_provider.name = "mock"
+        mock_provider.default_model = "mock-model"
+        mock_provider.config = MagicMock()
+        mock_provider.config.api_temperature = 0.7
+        return RequestProcessor(mock_provider)
+
+    def test_resume_restores_recorded_context_headings(self, tmp_path, monkeypatch):
+        """Audit 3.5: retried heading batches regain their level-reference."""
+        from ask_llm.core.format_checkpoint import FailedChunkInfo, FormatCheckpoint
+
+        checkpoint_path = tmp_path / "title_checkpoint.json"
+        FormatCheckpoint(
+            version=4,
+            source_file="doc.md",
+            format_type="title",
+            model="",
+            prompt_template=_TEST_PROMPT_TEMPLATE,
+            max_chunk_tokens=None,
+            created_at="2026-09-22T00:00:00",
+            failed_chunks=[
+                FailedChunkInfo(
+                    chunk_id=3,
+                    content="# Deep\n### Deeper",
+                    prompt_template=_TEST_PROMPT_TEMPLATE,
+                    error="boom",
+                    retry_count=3,
+                    context_headings=["# First", "## Second"],
+                )
+            ],
+            successful_chunks=[],
+        ).save(str(checkpoint_path))
+
+        captured: dict[str, object] = {}
+        original = HeadingFormatter._retry_failed_units
+
+        def spy(self, checkpoint, units, worker, **kwargs):
+            captured["units"] = units
+            return original(self, checkpoint, units, worker, **kwargs)
+
+        monkeypatch.setattr(HeadingFormatter, "_retry_failed_units", spy)
+        # The retried batch itself would hit the network; replace the LLM call.
+        monkeypatch.setattr(
+            HeadingFormatter,
+            "_process_batch",
+            lambda self, batch, template, context=None: [h.raw_text for h in batch],
+        )
+
+        HeadingFormatter.resume_from_checkpoint(str(checkpoint_path), self._make_processor())
+
+        units = captured["units"]
+        assert len(units) == 1
+        assert units[0][0] == 3
+        assert units[0][2] == ["# First", "## Second"]
+
+    def test_resume_legacy_checkpoint_passes_no_context(self, tmp_path, monkeypatch):
+        """Early v4 checkpoints (no recorded context) keep the legacy behavior."""
+        import json as _json
+
+        from ask_llm.core.format_checkpoint import CHECKPOINT_VERSION, FormatCheckpoint
+
+        checkpoint_path = tmp_path / "title_checkpoint.json"
+        payload = {
+            "version": CHECKPOINT_VERSION,
+            "source_file": "doc.md",
+            "format_type": "title",
+            "model": "",
+            "prompt_template": _TEST_PROMPT_TEMPLATE,
+            "max_chunk_tokens": None,
+            "created_at": "2026-09-22T00:00:00",
+            "failed_chunks": [
+                {
+                    "chunk_id": 3,
+                    "content": "# Deep\n### Deeper",
+                    "prompt_template": _TEST_PROMPT_TEMPLATE,
+                    "error": "boom",
+                    "retry_count": 3,
+                }
+            ],
+            "successful_chunks": [],
+        }
+        checkpoint_path.write_text(_json.dumps(payload), encoding="utf-8")
+
+        captured: dict[str, object] = {}
+        original = HeadingFormatter._retry_failed_units
+
+        def spy(self, checkpoint, units, worker, **kwargs):
+            captured["units"] = units
+            return original(self, checkpoint, units, worker, **kwargs)
+
+        monkeypatch.setattr(HeadingFormatter, "_retry_failed_units", spy)
+        monkeypatch.setattr(
+            HeadingFormatter,
+            "_process_batch",
+            lambda self, batch, template, context=None: [h.raw_text for h in batch],
+        )
+
+        checkpoint = FormatCheckpoint.load(str(checkpoint_path))
+        assert checkpoint.failed_chunks[0].context_headings == []
+        HeadingFormatter.resume_from_checkpoint(str(checkpoint_path), self._make_processor())
+
+        units = captured["units"]
+        assert units[0][2] is None
+
+    def test_failed_chunk_context_roundtrip(self):
+        """context_headings survives save/load; absent field defaults to []."""
+        from ask_llm.core.format_checkpoint import FailedChunkInfo, FormatCheckpoint
+
+        fc = FailedChunkInfo(
+            chunk_id=2,
+            content="# A",
+            prompt_template="t",
+            error="e",
+            retry_count=1,
+            context_headings=["# Prev"],
+        )
+        checkpoint = FormatCheckpoint(
+            version=4,
+            source_file="doc.md",
+            format_type="title",
+            model="",
+            prompt_template="t",
+            max_chunk_tokens=None,
+            created_at="now",
+            failed_chunks=[fc],
+            successful_chunks=[],
+        )
+        loaded = FormatCheckpoint.from_dict(checkpoint.to_dict())
+        assert loaded.failed_chunks[0].context_headings == ["# Prev"]
+
+        # Legacy payload without the field -> empty list, not a KeyError.
+        payload = checkpoint.to_dict()
+        legacy_failed = {**payload["failed_chunks"][0]}
+        legacy_failed.pop("context_headings")
+        legacy_checkpoint = FormatCheckpoint.from_dict(
+            {**payload, "failed_chunks": [legacy_failed]}
+        )
+        assert legacy_checkpoint.failed_chunks[0].context_headings == []

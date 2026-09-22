@@ -46,6 +46,15 @@ def paper_request_timeout_seconds() -> float:
     return float(lr.unified_config.paper.request_timeout_seconds)
 
 
+class RateLimitAcquireTimeoutError(RuntimeError):
+    """Acquiring a rate-limit token timed out (audit 3.3).
+
+    Distinct type so the executor can flag the result ``throttled``: the
+    runner tail-requeues the task (budget untouched) instead of classifying it
+    as a transient API error and re-blocking a worker on every retry.
+    """
+
+
 def _update_global_task_progress_failed(
     progress: Progress | None,
     progress_task_id: TaskID | None,
@@ -376,8 +385,8 @@ class TaskExecutor:
                 timeout=acquire_timeout,
             )
             if not acquired:
-                raise RuntimeError(
-                    f"Rate limit timeout for {model_config.provider}/{model_config.model} "
+                raise RateLimitAcquireTimeoutError(
+                    f"Rate limit wait timeout for {model_config.provider}/{model_config.model} "
                     f"after {acquire_timeout:.0f}s (configure "
                     f"rate_limits.<provider>.acquire_timeout_seconds to raise it)"
                 )
@@ -420,6 +429,22 @@ class TaskExecutor:
                     result,
                     body_tokens,
                 )
+            return result
+
+        except RateLimitAcquireTimeoutError as e:
+            # Audit 3.3: throttle wait exhaustion is its own outcome — flagged
+            # ``throttled`` so the runner tail-requeues with the retry budget
+            # intact, instead of occupying a worker through every backoff.
+            error_msg = str(e)
+            bind_context(ctx).warning(f"Task throttled ({model_key}): {error_msg}")
+            result.status = TaskStatus.FAILED
+            result.error = error_msg
+            result.error_category = ErrorCategory.RATE_LIMIT
+            result.throttled = True
+
+            _update_global_task_progress_failed(
+                progress, progress_task_id, model_key, task.task_id, progress_tokens
+            )
             return result
 
         except Exception as e:

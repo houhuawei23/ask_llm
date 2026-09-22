@@ -27,10 +27,12 @@ results, D6) so a SIGKILL/OOM loses at most N results instead of the run.
 from __future__ import annotations
 
 import json
+import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Generic, TypeVar
+from uuid import uuid4
 
 from loguru import logger
 
@@ -40,12 +42,33 @@ TResult = TypeVar("TResult")
 CHECKPOINT_VERSION = 1
 
 
-def atomic_write_text(path: str | Path, payload: str) -> None:
-    """Write *payload* to *path* atomically (tmp file + os.replace)."""
+def atomic_write_text(path: str | Path, payload: str, *, mode: int | None = None) -> None:
+    """Write *payload* to *path* atomically (unique tmp + fsync + ``os.replace``).
+
+    The tmp name is unique per writer (pid + random suffix) so two processes
+    saving the same target never interleave through one shared ``.tmp`` file,
+    and the tmp file is fsynced before the rename so a crash cannot leave an
+    empty replacement behind on truncate-and-write filesystems.
+
+    Args:
+        path: Destination file path.
+        payload: Text to write (UTF-8).
+        mode: Optional permission bits for the final file (e.g. ``0o600`` for
+            secret-bearing writes); omitted keeps the process umask default.
+    """
     path = Path(path)
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
-    tmp_path.write_text(payload, encoding="utf-8")
-    tmp_path.replace(path)
+    tmp_path = path.with_name(f".{path.name}.{os.getpid()}.{uuid4().hex[:8]}.tmp")
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            f.write(payload)
+            f.flush()
+            os.fsync(f.fileno())
+        if mode is not None:
+            os.chmod(tmp_path, mode)
+        tmp_path.replace(path)
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
 
 
 @dataclass

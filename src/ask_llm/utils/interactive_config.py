@@ -1,12 +1,16 @@
 """Interactive configuration helper for batch processing."""
 
 import os
+import shutil
 from pathlib import Path
 
+import yaml
 from loguru import logger
 
 from ask_llm.config.manager import ConfigManager
+from ask_llm.config.providers_catalog import load_first_providers_yml
 from ask_llm.core.batch_models import ModelConfig
+from ask_llm.core.checkpoint import atomic_write_text
 from ask_llm.utils.api_key_gate import (
     PROVIDERS_WITHOUT_API_KEYS,
     api_key_is_missing_or_unresolved,
@@ -153,7 +157,7 @@ class InteractiveConfigHelper:
             console.print_info("You can set it via environment variable or enter it now.")
 
             # Try to get from environment variable first
-            env_var_name = f"{provider_name.upper().replace('-', '_')}_API_KEY"
+            env_var_name = provider_env_var_name(provider_name)
             env_key = os.getenv(env_var_name)
 
             if env_key:
@@ -206,58 +210,78 @@ class InteractiveConfigHelper:
 
     def _save_api_key_to_config(self, provider_name: str, api_key: str) -> None:
         """
-        Save API key to configuration file.
+        Save API key to the user's providers.yml (never cwd, never packaged).
+
+        The write target is always ``~/.config/ask_llm/providers.yml``: a
+        ``providers.yml`` in the working directory is project-local reference
+        data, and the packaged copy is a shared/possibly-symlinked file —
+        neither may receive secrets. When the user file does not exist yet it
+        is seeded from the resolved catalog copy so no provider data is lost.
+        The write is atomic and the file is restricted to 0600.
 
         Args:
             provider_name: Provider name
             api_key: API key to save
         """
-        # Try to find providers.yml file
-        config_paths = [
-            Path("providers.yml"),
-            Path.home() / ".config" / "ask_llm" / "providers.yml",
-        ]
-
-        config_path = None
-        for path in config_paths:
-            if path.exists():
-                config_path = path
-                break
-
-        if not config_path:
-            console.print_warning("Could not find providers.yml file to update")
-            console.print_info(
-                f"You can manually set the API key in your providers.yml file "
-                f"or use environment variable: {provider_name.upper().replace('-', '_')}_API_KEY"
-            )
-            return
+        config_path = Path.home() / ".config" / "ask_llm" / "providers.yml"
 
         try:
-            import yaml
+            if not config_path.exists():
+                seeded = self._seed_user_providers_yml(config_path)
+                if not seeded:
+                    console.print_warning(
+                        f"Could not find a providers.yml catalog to seed {config_path}"
+                    )
+                    console.print_info(self._manual_key_hint(provider_name))
+                    return
 
             # Read existing config
+            config_data: dict = {}
             with open(config_path, encoding="utf-8") as f:
-                config_data = yaml.safe_load(f) or {}
+                loaded = yaml.safe_load(f)
+            if isinstance(loaded, dict):
+                config_data = loaded
 
             # Update API key
-            if "providers" not in config_data:
-                config_data["providers"] = {}
+            providers = config_data.setdefault("providers", {})
+            if not isinstance(providers, dict):
+                console.print_warning(f"'providers' in {config_path} is not a mapping")
+                return
+            provider_cfg = providers.setdefault(provider_name, {})
+            if isinstance(provider_cfg, dict):
+                provider_cfg["api_key"] = api_key
 
-            if provider_name not in config_data["providers"]:
-                config_data["providers"][provider_name] = {}
+            # Atomic write, restricted permissions, replacing any prior file.
+            payload = yaml.dump(config_data, default_flow_style=False, allow_unicode=True)
+            atomic_write_text(config_path, payload, mode=0o600)
 
-            config_data["providers"][provider_name]["api_key"] = api_key
-
-            # Write back
-            with open(config_path, "w", encoding="utf-8") as f:
-                yaml.dump(config_data, f, default_flow_style=False, allow_unicode=True)
-
-            console.print_success(f"API key saved to {config_path}")
+            console.print_success(f"API key saved to {config_path} (permissions 0600)")
+            console.print_warning(
+                "Note: YAML comments/formatting in the file may have been normalized."
+            )
             logger.info(f"API key saved to {config_path}")
 
         except Exception as e:
             console.print_warning(f"Failed to save API key to config file: {e}")
-            console.print_info(
-                f"You can manually set the API key in your providers.yml file "
-                f"or use environment variable: {provider_name.upper().replace('-', '_')}_API_KEY"
-            )
+            console.print_info(self._manual_key_hint(provider_name))
+
+    @staticmethod
+    def _seed_user_providers_yml(config_path: Path) -> bool:
+        """Seed the user providers.yml from the resolved catalog copy, if any.
+
+        Copies the file *bytes* so comments and structure survive; the caller
+        then applies the key update on top.
+        """
+        catalog_data, catalog_path = load_first_providers_yml()
+        if catalog_data is None or catalog_path is None:
+            return False
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(catalog_path, config_path)
+        return True
+
+    @staticmethod
+    def _manual_key_hint(provider_name: str) -> str:
+        return (
+            f"You can manually set the API key in your providers.yml file "
+            f"or use environment variable: {provider_env_var_name(provider_name)}"
+        )

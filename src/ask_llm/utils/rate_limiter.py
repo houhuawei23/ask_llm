@@ -15,6 +15,11 @@ if TYPE_CHECKING:
 class _SyncTokenBucket:
     """线程安全的同步 token bucket。"""
 
+    # Tolerance for float comparisons when deciding whether a reconfigure
+    # actually changed the rate (audit 3.3): exact != on accumulated floats
+    # re-created buckets (and granted a free full burst) on no-op updates.
+    _EPSILON: float = 1e-9
+
     def __init__(self, requests_per_minute: int, burst_size: int) -> None:
         self._rate = requests_per_minute / 60.0
         self._capacity = max(1, burst_size)
@@ -22,6 +27,31 @@ class _SyncTokenBucket:
         self._last_update = time.monotonic()
         self._lock = threading.Lock()
         self._condition = threading.Condition(self._lock)
+
+    def reconfigure(self, requests_per_minute: int, burst_size: int) -> None:
+        """Update rate/capacity in place, preserving accumulated tokens.
+
+        The previous replace-the-bucket approach handed a freshly full burst on
+        every config change (audit A6) — a config reload mid-run granted an
+        immediate burst of free requests. Refill now simply continues from the
+        current token level under the new rate/capacity.
+        """
+        new_capacity = max(1, burst_size)
+        with self._condition:
+            now = time.monotonic()
+            elapsed = now - self._last_update
+            self._tokens = min(self._capacity, self._tokens + elapsed * self._rate)
+            self._last_update = now
+            self._rate = requests_per_minute / 60.0
+            self._capacity = new_capacity
+            self._tokens = min(self._tokens, float(new_capacity))
+            self._condition.notify_all()
+
+    def matches(self, requests_per_minute: int, burst_size: int) -> bool:
+        """True when the bucket already runs at the requested limits."""
+        return abs(
+            self._rate - requests_per_minute / 60.0
+        ) <= self._EPSILON and self._capacity == max(1, burst_size)
 
     def acquire(self, timeout: float | None = None) -> bool:
         """获取一个 token，必要时阻塞等待；timeout 为秒。"""
@@ -76,13 +106,15 @@ class GlobalRateLimiter:
     # Emit the "rate limiter waited" warning at most once per key per interval
     # so long batch runs don't drown the log in per-request warnings.
     _WARN_INTERVAL: ClassVar[float] = 60.0
-    _last_wait_warn: ClassVar[dict[str, float]] = {}
 
     _instance: ClassVar[GlobalRateLimiter | None] = None
     _instance_lock: ClassVar[threading.Lock] = threading.Lock()
     _limiters: dict[str, _SyncTokenBucket]
     _lock: threading.Lock
     _config: RateLimitConfig | None
+    # Audit 3.3: per-instance (was a ClassVar mutated unlocked from workers —
+    # a racy dict shared by every GlobalRateLimiter-adjacent code path).
+    _last_wait_warn: dict[str, float]
 
     def __new__(cls) -> GlobalRateLimiter:
         if cls._instance is None:
@@ -92,6 +124,7 @@ class GlobalRateLimiter:
                     cls._instance._limiters = {}
                     cls._instance._lock = threading.Lock()
                     cls._instance._config = None
+                    cls._instance._last_wait_warn = {}
         return cls._instance
 
     def configure(self, config: RateLimitConfig | None) -> None:
@@ -134,31 +167,32 @@ class GlobalRateLimiter:
         """为指定 provider/model 获取一个请求许可。"""
         key = self._key(provider, model)
         with self._lock:
+            rpm, burst = self._get_limit(provider, model)
             limiter = self._limiters.get(key)
             if limiter is None:
-                rpm, burst = self._get_limit(provider, model)
                 limiter = _SyncTokenBucket(rpm, burst)
                 self._limiters[key] = limiter
-            else:
-                # If config changed, recreate the bucket with new limits.
-                rpm, burst = self._get_limit(provider, model)
-                if limiter._capacity != max(1, burst) or limiter._rate != rpm / 60.0:
-                    limiter = _SyncTokenBucket(rpm, burst)
-                    self._limiters[key] = limiter
+            elif not limiter.matches(rpm, burst):
+                # Config changed: update in place (preserving accumulated
+                # tokens) instead of replacing the bucket with a full one.
+                limiter.reconfigure(rpm, burst)
 
         start = time.monotonic()
         acquired = limiter.acquire(timeout=timeout)
         elapsed = time.monotonic() - start
         if acquired and elapsed > 0.05:
-            now = time.monotonic()
-            if now - self._last_wait_warn.get(key, 0.0) >= self._WARN_INTERVAL:
+            with self._lock:
+                now = time.monotonic()
+                last = self._last_wait_warn.get(key, 0.0)
+                if now - last < self._WARN_INTERVAL:
+                    return acquired
                 self._last_wait_warn[key] = now
-                rpm, burst = self._get_limit(provider, model)
-                logger.warning(
-                    f"Rate limiter waited {elapsed:.2f}s for {key} "
-                    f"(RPM={rpm}, burst={burst}). Consider lowering concurrency "
-                    f"or raising limits."
-                )
+            rpm, burst = self._get_limit(provider, model)
+            logger.warning(
+                f"Rate limiter waited {elapsed:.2f}s for {key} "
+                f"(RPM={rpm}, burst={burst}). Consider lowering concurrency "
+                f"or raising limits."
+            )
         return acquired
 
 

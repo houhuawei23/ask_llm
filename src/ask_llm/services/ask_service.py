@@ -7,6 +7,7 @@ command module stays focused on argument parsing, streaming UX, and exit codes.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,6 +20,47 @@ from ask_llm.core.protocols import ReasoningChunk
 from ask_llm.utils.file_handler import FileHandler
 from ask_llm.utils.prompt_resolver import resolve_prompt_or_template
 from ask_llm.utils.token_counter import TokenCounter
+
+# A trailing short alphanumeric extension ("notes.md", "data.v2") marks a
+# path-like token; sentences ending in "3.5." or "version 12" do not match.
+_PATH_LIKE_SUFFIX = re.compile(r"\.[A-Za-z0-9]{1,8}$")
+
+
+def _looks_like_path(source: str) -> bool:
+    """Heuristic: does this positional input plausibly name a file?"""
+    s = source.strip()
+    if not s or "\n" in s:
+        return False
+    if s.startswith("~") or "/" in s or "\\" in s:
+        return True
+    return bool(_PATH_LIKE_SUFFIX.search(s.split()[-1]))
+
+
+def validate_input_source(source: str, *, from_input_option: bool) -> None:
+    """Fail fast when the input source looks like a path but does not exist.
+
+    ``load_content`` historically treated any non-existent path as literal
+    prompt text, so ``ask-llm -i typo.md`` sent (and billed) the string
+    "typo.md" as a prompt. Path-looking sources must error instead.
+
+    Args:
+        source: The raw input argument.
+        from_input_option: True when the source came from ``-i/--input`` —
+            that option's contract is a file, so any missing value raises.
+
+    Raises:
+        FileNotFoundError: If the source is path-like (or came via
+            ``-i/--input``) and does not resolve to an existing file.
+    """
+    p = Path(source).expanduser()
+    if p.is_file():
+        return
+    if from_input_option or _looks_like_path(source):
+        raise FileNotFoundError(
+            f"Input file not found: {source}. "
+            "If this was meant as literal prompt text, rephrase it so it does "
+            "not look like a file path (or pass it via a prompt template)."
+        )
 
 
 @dataclass
@@ -87,6 +129,9 @@ class AskService:
     def load_content(self, source: str, *, show_progress: bool = True) -> tuple[str, bool]:
         """Load input content from a file path or use the string directly.
 
+        ``~`` in the source is expanded, so ``-i '~/notes.md'`` reads the file
+        instead of falling through to text mode.
+
         Args:
             source: File path or direct text input.
             show_progress: Show progress bar when reading a file.
@@ -94,9 +139,9 @@ class AskService:
         Returns:
             Tuple of (content, input_is_file).
         """
-        input_path = Path(source)
+        input_path = Path(source).expanduser()
         if input_path.exists() and input_path.is_file():
-            return FileHandler.read(source, show_progress=show_progress), True
+            return FileHandler.read(str(input_path), show_progress=show_progress), True
         return source, False
 
     def load_prompt_template(self, prompt: str | None) -> str | None:

@@ -295,11 +295,20 @@ class TextFileTranslator:
         failed_count = sum(1 for r in results if r.status == TaskStatus.FAILED)
         successful_chunks = sum(1 for r in results if r.status == TaskStatus.SUCCESS)
 
+        # Audit 2.8: totals reflect ALL attempts (what the user actually paid,
+        # matching ExecutionReport) — not just successful chunks.
+        with_meta = [r for r in results if r.metadata]
+        total_in = sum(r.metadata.input_tokens for r in with_meta if r.metadata)
+        total_out = sum(r.metadata.output_tokens for r in with_meta if r.metadata)
+
         if failed_count > 0:
             console.print_warning(f"{failed_count} chunk(s) failed to translate")
         if successful_chunks == 0 and failed_count > 0:
             console.print_error(f"翻译失败: {job.file_path} 所有分块均失败。")
-            return failed_job_result(job.file_path, job.output_path, "All chunks failed")
+            result = failed_job_result(job.file_path, job.output_path, "All chunks failed")
+            result.input_tokens = total_in
+            result.output_tokens = total_out
+            return result
 
         exporter = TranslationExporter(
             chunks=job.chunks,
@@ -329,16 +338,8 @@ class TextFileTranslator:
             if failed_count > 0:
                 console.print_warning(f"  Failed: {failed_count}/{len(results)}")
 
-            total_in = sum(
-                r.metadata.input_tokens
-                for r in results
-                if r.metadata and r.status == TaskStatus.SUCCESS
-            )
-            total_out = sum(
-                r.metadata.output_tokens
-                for r in results
-                if r.metadata and r.status == TaskStatus.SUCCESS
-            )
+            total_in = sum(r.metadata.input_tokens for r in results if r.metadata)
+            total_out = sum(r.metadata.output_tokens for r in results if r.metadata)
             console.print(
                 format_cost_estimate(
                     self.provider,
@@ -349,13 +350,18 @@ class TextFileTranslator:
                     pricing_source=self.pricing_source,
                 )
             )
+            # Audit 2.2: a file with any failed chunk is no longer reported as
+            # a clean success — it exports (failed chunks keep original text)
+            # but counts as partial, so the session exits non-zero.
             return TranslationJobResult(
                 file_path=job.file_path,
                 output_path=str(exported_path),
                 input_tokens=total_in,
                 output_tokens=total_out,
-                success=True,
+                success=failed_count == 0,
+                error=f"{failed_count} chunk(s) failed" if failed_count else None,
                 retries=retries,
+                partial=failed_count > 0,
             )
 
         except FileExistsError:

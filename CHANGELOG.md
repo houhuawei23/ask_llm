@@ -1,12 +1,83 @@
 # Changelog
 
-## 2.23.0 (Unreleased)
+## 2.24.0 (Unreleased)
+
+深度审查第二批 + 第三批：数据丢失与已付费工作保护（输出冲突预检、部分失败
+改判、checkpoint contract 补齐），重试/限流/并发正确性。660 测试全绿。
+
+### 行为变更（脚本/CI 需关注）
+
+- **部分 chunk 失败的文件不再算成功**：trans 中任一 chunk 失败，该文件计为
+  partial（仍导出，失败 chunk 按原文），session 汇总计入 failed_files → 退出码
+  非零。依赖"部分失败也 exit 0"的脚本需调整。
+- **format --resume 仍有失败 chunk 时退出码非零**（与 format 常规运行的失败
+  语义对齐）；checkpoint 拒绝时也非零。
+- **batch 导出 split 模式保留全部模型的答案**：同组多模型结果导出为
+  `<name>.md` / `<name>_1.md` / …，不再静默丢弃付费输出。
+- **非 resume 重跑不再直接覆盖 checkpoint**：旧 checkpoint 先改名 `.bak`。
+- **quota/欠费类错误改为终局（不再重试）**：`quota exceeded` /
+  `insufficient_quota` 等计费类失败直接终局（新增 BILLING 类别），回退到
+  fallback provider 仍然生效——同一 key 反复重试只会继续烧钱。
+- **限流等待超时不再吃重试预算**：acquire 超时的任务标记 throttled 并队尾重排
+  （预算不动），重试预算耗尽后按普通失败走 fallback 链，不再占用 worker
+  阻塞 ~4 分钟。
+- **batch 并发改为按 (provider, model) 分池**：每个 lane 按自己的 burst 限额
+  定并发，不再全 batch 被最紧的 provider 掐到它的下限。
+
+### Added
+
+- `trans` 多文件 + 单文件样式 `-o` 的冲突在花费前被拒绝（OutputTargetError）；
+  已存在的输出目标在无 `--force` 时同样在任何 API 调用前拒绝（resume 豁免）。
+- `format` 的多文件单文件输出守卫提取为共享 `path_resolver.validate_multi_input_output`。
+- FormatCheckpoint 升级 v4：携带 `config_digest`（源文件内容 + prompt + model +
+  chunk 预算 + format type 的 sha256），resume 拒绝 v≤3 与摘要不匹配的
+  checkpoint（改过源文件后 `--resume` 不再把旧结果错拼到新内容）；失败的标题
+  批次同时记录 `context_headings`，resume 还原层级参考上下文（与全新运行
+  完全对称）。
+- `--inplace` 部分成功的 resume 先写 `源文件.bak` 再覆盖。
+- CI 测试 job 加覆盖率门禁（`--cov-fail-under=76`，只升不降）。
+- `ProviderAdapterCache` 生命周期：LRU key 用 API key 的 sha256（明文 key 不再
+  常驻内存元组）、generation 计数（`clear()` 后凭证轮换立即生效）、LRU 淘汰
+  与 `close()`/atexit 关闭底层 HTTP client（此前最多泄漏 128 个连接）。
+
+### Fixed
+
+- ask 的输出覆盖检查提前到 API 调用之前（原来在付费之后才检查）。
+- `trans` 输入解析支持 `~` 展开（引号包裹的 `'~/docs/*.md'` 不再 File not
+  found），目录展开统一为绝对路径。
+- batch `_validate_models` 不再污染共享 ConfigManager（原来返回后停在最后一个
+  校验模型上并残留采样 override 与 model override）。
+- token/成本汇总统一为"所有 attempts"口径（与 ExecutionReport 一致）：trans 的
+  控制台汇总、session 总量（含 partial 文件的实际花费）、notebook 的统计都不再
+  漏算失败尝试烧掉的 token。
+- `atomic_write_text` 加固：唯一 tmp 名（pid+随机后缀，双进程并发保存不再共用
+  同一 tmp）+ replace 前 fsync + 可选 chmod（秘密文件 0600）+ 失败清理 tmp。
+- 退避加 full jitter（`uniform(0, delay)`）：几十个任务同一瞬间失败时不再在同一
+  瞬间集体重试，重新同步压力到刚喘过气的 provider。
+- 空错误消息默认按瞬态重试（多个 SDK 连接错误 `str(e)` 为空，原来直接终局）；
+  数字状态码改词边界匹配（"500" 不再劫持 "context length is 15000"）；
+  `RetryPolicy` 真正接入 BoundedRetryRunner。
+- Ctrl-C 不再静默丢弃排队重试：中断时 pending/retry-heap 的任务产出显式
+  Interrupted 结果进报告与 checkpoint（resume 接手），指标新增 `abandoned`，
+  successful+failed+abandoned 恒等于 total。
+- 限流器卫生：配置变更就地更新 bucket（保留已积累 token，不再白送满 burst）、
+  浮点比较加容差、wait-warn 去重表移到实例字段并在锁内更新。
+
+## 2.23.0 (2026-09-22)
 
 全面审计修复：3 Critical + 10 High + 约 20 Medium，测试链路补真实执行链覆盖，
 工程卫生（打包/钩子/版本单一源）。589 测试全绿，mypy 清零并开始真正把关。
 
 ### 行为变更（脚本/CI 需关注）
 
+- **cwd 下的 providers.yml 不再并入运行时 provider 配置（安全修复）**：此前在任何
+  含 providers.yml 的目录运行 ask-llm，该文件的 base_url 会接管请求并把解析出的
+  API key 发过去（凭证劫持）。运行时配置现在只读 `ASK_LLM_PROVIDERS_YML` →
+  `~/.config/ask_llm/providers.yml` → 包内副本；cwd/repo 根副本仅供 pricing 与
+  模型限额等目录数据读取。
+- **ask 的路径型缺失输入直接报错**：`ask-llm -i typo.md` 此前把 "typo.md" 当字面
+  prompt 发送并计费；现在路径样式的缺失输入在调用前报 FileNotFoundError。
+  纯文本输入不受影响。
 - **format / batch / config test 失败现在返回非零退出码**：此前 format 无论成败恒
   exit 0，config test 对连接失败/未知 provider 也 exit 0。依赖"恒成功"的脚本需调整
   （与 trans/paper 对齐）。
@@ -28,8 +99,25 @@
   路径、repo 根启发式在 site-packages 下失效（provider 回退 + 成本估算双双失效且
   开发环境无法复现）。现打包副本入搜索路径末端，repo 根启发式加 pyproject 哨兵。
 
+### Added
+
+- **GitHub Actions CI**：push/PR 自动运行 ruff check/format、mypy、pytest
+  （Python 3.10 与 3.12）与 bandit 安全扫描；新增 dependabot（pip + actions 每周）。
+  `scripts/check_code_quality.sh` 的 mypy/bandit 由非致命告警改为致命错误；
+  dev extras 补 `pytest-benchmark`。
+
 ### Fixed（High）
 
+- **交互式保存 API key 不再写坏配置**：保存目标固定为
+  `~/.config/ask_llm/providers.yml`（此前优先写 cwd 的 providers.yml），不存在时
+  从目录副本字节级播种（保留注释与结构）；写入走唯一 tmp 名 + fsync + `os.replace`
+  原子路径并 chmod 0600。
+- **chat `!shell` 不再泄漏注入的 API key**：key 会经 `apply_interactive_key` 进入
+  `os.environ`（llm-engine `${VAR}` 解析所需），现在 shell 子进程收到剔除了当前
+  provider key 的 env 副本。
+- **providers.yml 按 (路径, mtime, size) 记忆化解析**：一条命令此前读盘+YAML 解析
+  2-3 次（运行时合并 / pricing / 模型限额各一次），现在每进程一次，`${VAR}` 解析
+  仍按调用实时进行。
 - **ConfigManager overrides 全局单槽跨 provider 串 key**：交互式 gate 粘贴的
   api_key 与采样参数会泄漏到 batch/fallback 的其他 provider；`_model_override`
   伪 key 混入 model_validate 输入。现 overrides 按 provider 隔离，model 覆盖独立

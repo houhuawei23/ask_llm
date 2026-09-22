@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import heapq
 import itertools
+import random
 import signal
 import threading
 import time
@@ -23,8 +24,13 @@ from typing import Any, Generic, TypeVar
 
 from loguru import logger
 
+from ask_llm.core.retry_policy import RetryPolicy
+
 TTask = TypeVar("TTask")
 TResult = TypeVar("TResult")
+
+# Shared jitter source; tests seed it via random.seed for determinism.
+_jitter_rng = random.Random()
 
 
 @dataclass
@@ -37,6 +43,10 @@ class RunMetrics:
     retried: int = 0
     total_latency: float = 0.0
     interrupted: bool = False
+    # Audit 3.2: tasks abandoned on interrupt (never submitted, or queued for
+    # retry when Ctrl-C arrived). Always reported so successful+failed+abandoned
+    # reconciles with total_tasks.
+    abandoned: int = 0
 
 
 def exponential_backoff_seconds(
@@ -44,15 +54,20 @@ def exponential_backoff_seconds(
     *,
     initial: float,
     maximum: float,
+    rng: random.Random | None = None,
 ) -> float:
     """Delay before retry *attempt_1_based* (1 = first retry after initial failure).
 
-    ``min(initial * 2 ** (n - 1), maximum)`` — matches the previous runner.
+    Full-jitter exponential backoff: ``uniform(0, min(initial * 2 ** (n - 1),
+    maximum))`` (audit 3.1). Without jitter, dozens of tasks failing at the
+    same instant retried at exactly the same instants, re-synchronizing load
+    against an already-strained provider. Pass *rng* for deterministic tests.
     """
     if attempt_1_based < 1:
         return 0.0
-    raw: float = initial * (2 ** (attempt_1_based - 1))
-    return float(min(raw, maximum))
+    raw: float = min(initial * (2 ** (attempt_1_based - 1)), maximum)
+    source = rng or _jitter_rng
+    return float(source.uniform(0, raw))
 
 
 class BoundedRetryRunner(Generic[TTask, TResult]):
@@ -70,11 +85,20 @@ class BoundedRetryRunner(Generic[TTask, TResult]):
         max_retries: int,
         retry_delay: float,
         retry_delay_max: float,
+        retry_policy: RetryPolicy | None = None,
+        stop_event: threading.Event | None = None,
     ) -> None:
         self.max_workers = max(1, max_workers)
         self.max_retries = max_retries
         self.retry_delay = retry_delay
         self.retry_delay_max = retry_delay_max
+        # Audit 3.1: an explicit policy (e.g. per-provider) takes precedence
+        # over the shared DEFAULT_RETRY_POLICY fallback.
+        self.retry_policy = retry_policy
+        # Audit 3.3: cooperative stop for runners driven from non-main threads
+        # (per-provider lanes): the SIGINT handler lives on the main thread and
+        # sets this event; each lane runner treats it as its own interrupt.
+        self.stop_event = stop_event
 
     def run_with_metrics(
         self,
@@ -85,19 +109,38 @@ class BoundedRetryRunner(Generic[TTask, TResult]):
         error_message: Callable[[TResult], str],
         retry_count_from_result: Callable[[TResult], int],
         is_retryable_error: Callable[[str], bool] | None = None,
+        is_throttled: Callable[[TResult], bool] | None = None,
         on_worker_exception: Callable[[TTask, BaseException], TResult] | None = None,
         on_retry_scheduled: Callable[[TTask, TResult], None] | None = None,
         on_result: Callable[[TResult], None] | None = None,
         order_key: Callable[[TResult], Any] = lambda r: getattr(r, "task_id", 0),
+        make_interrupted_result: Callable[[TTask], TResult] | None = None,
     ) -> tuple[list[TResult], RunMetrics]:
         """Run all tasks and return (sorted results, run metrics).
 
         ``on_result`` (D6) fires on the runner's main thread after each result
         is appended, so callers can persist incremental progress and survive a
         hard kill (SIGKILL/OOM) without losing the whole run.
+
+        ``make_interrupted_result`` (audit 3.2): when the run is interrupted
+        (Ctrl-C), tasks left in the pending queue or the retry heap never
+        produce a result. With this callback, each abandoned task gets an
+        explicit failed-style result (fired through ``on_result`` too) so run
+        summaries and reports account for every task; without it, abandoned
+        tasks are only counted in ``RunMetrics.abandoned``.
+
+        ``is_throttled`` (audit 3.3): a failed result that merely timed out
+        waiting for a rate-limit token is requeued at the TAIL of the pending
+        queue with its retry budget untouched — the bucket refill is the wait,
+        so the worker slot is freed instead of blocked. Bounded by
+        ``max_retries + 1`` deferrals per task; beyond that the result is
+        treated as a normal failure (escalating through the fallback chain).
         """
         if is_retryable_error is None:
-            is_retryable_error = _is_transient_error
+            if self.retry_policy is not None:
+                is_retryable_error = self.retry_policy.is_retryable
+            else:
+                is_retryable_error = _is_transient_error
 
         results: list[TResult] = []
         pending: deque[tuple[TTask, int]] = deque((t, 0) for t in tasks)
@@ -112,6 +155,10 @@ class BoundedRetryRunner(Generic[TTask, TResult]):
         lock = threading.Lock()
         exception_during_run: BaseException | None = None
         retried_count = 0
+        # Audit 3.3: consecutive rate-limit deferrals per task (keyed by id();
+        # tasks are alive for the whole run). Caps tail-requeueing so a
+        # permanently saturated provider still terminates the task.
+        throttle_deferrals: dict[int, int] = {}
         start_time = time.perf_counter()
 
         def _submit(task: TTask, retry_count: int) -> Any:
@@ -139,6 +186,18 @@ class BoundedRetryRunner(Generic[TTask, TResult]):
 
             if is_failed(result):
                 current_retry = retry_count_from_result(result)
+
+                if is_throttled is not None and is_throttled(result):
+                    task_key = id(task)
+                    used = throttle_deferrals.get(task_key, 0)
+                    if used <= self.max_retries:
+                        # Tail requeue; the retry budget is untouched, and the
+                        # worker slot is released immediately instead of the
+                        # task blocking it for the whole acquire timeout.
+                        throttle_deferrals[task_key] = used + 1
+                        pending.append((task, current_retry))
+                        return
+
                 if current_retry < self.max_retries and is_retryable_error(
                     error_message(result) or ""
                 ):
@@ -190,6 +249,15 @@ class BoundedRetryRunner(Generic[TTask, TResult]):
                 thread_name_prefix="ask-llm-bounded",
             ) as executor:
                 while True:
+                    # Audit 3.3: cooperative stop (lane runners on non-main
+                    # threads share one main-thread SIGINT event).
+                    if not interrupted and (
+                        self.stop_event is not None and self.stop_event.is_set()
+                    ):
+                        interrupted = True
+                        if prev_handler is not None:
+                            signal.signal(signal.SIGINT, prev_handler)
+
                     # Move retries whose time has come back to the pending queue.
                     if not interrupted:
                         now = time.monotonic()
@@ -235,10 +303,27 @@ class BoundedRetryRunner(Generic[TTask, TResult]):
             if install_handler and prev_handler is not None:
                 signal.signal(signal.SIGINT, prev_handler)
 
+        abandoned_count = 0
         if interrupted:
+            # Audit 3.2: drain abandoned work into explicit results so nothing
+            # paid-for disappears from summaries/reports. Never re-submitted —
+            # resume covers them via the checkpoint.
+            abandoned_tasks = [t for t, _ in pending]
+            abandoned_tasks.extend(task for _, _, task, _ in retry_heap)
+            abandoned_count = len(abandoned_tasks)
+            if make_interrupted_result is not None:
+                for task in abandoned_tasks:
+                    result = make_interrupted_result(task)
+                    results.append(result)
+                    if on_result is not None:
+                        try:
+                            on_result(result)
+                        except BaseException as exc:
+                            logger.warning(f"on_result raised: {exc}")
             logger.info(
                 f"Interrupted (Ctrl-C): returning {len(results)}/{len(tasks)} "
-                "completed results; in-flight tasks were drained. Resume to continue."
+                f"results ({abandoned_count} abandoned: pending or awaiting "
+                "retry). Resume to continue."
             )
 
         results.sort(key=order_key)
@@ -250,6 +335,7 @@ class BoundedRetryRunner(Generic[TTask, TResult]):
             retried=retried_count,
             total_latency=total_time,
             interrupted=interrupted,
+            abandoned=abandoned_count,
         )
         return results, metrics
 
@@ -262,10 +348,12 @@ class BoundedRetryRunner(Generic[TTask, TResult]):
         error_message: Callable[[TResult], str],
         retry_count_from_result: Callable[[TResult], int],
         is_retryable_error: Callable[[str], bool] | None = None,
+        is_throttled: Callable[[TResult], bool] | None = None,
         on_worker_exception: Callable[[TTask, BaseException], TResult] | None = None,
         on_retry_scheduled: Callable[[TTask, TResult], None] | None = None,
         on_result: Callable[[TResult], None] | None = None,
         order_key: Callable[[TResult], Any] = lambda r: getattr(r, "task_id", 0),
+        make_interrupted_result: Callable[[TTask], TResult] | None = None,
     ) -> list[TResult]:
         """Run all tasks and return results sorted by ``order_key``."""
         results, _ = self.run_with_metrics(
@@ -275,10 +363,12 @@ class BoundedRetryRunner(Generic[TTask, TResult]):
             error_message=error_message,
             retry_count_from_result=retry_count_from_result,
             is_retryable_error=is_retryable_error,
+            is_throttled=is_throttled,
             on_worker_exception=on_worker_exception,
             on_retry_scheduled=on_retry_scheduled,
             on_result=on_result,
             order_key=order_key,
+            make_interrupted_result=make_interrupted_result,
         )
         return results
 
@@ -295,10 +385,12 @@ def run_bounded_with_retries(
     error_message: Callable[[TResult], str],
     retry_count_from_result: Callable[[TResult], int],
     is_retryable_error: Callable[[str], bool] | None = None,
+    is_throttled: Callable[[TResult], bool] | None = None,
     on_worker_exception: Callable[[TTask, BaseException], TResult] | None = None,
     on_retry_scheduled: Callable[[TTask, TResult], None] | None = None,
     on_result: Callable[[TResult], None] | None = None,
     order_key: Callable[[TResult], Any] = lambda r: getattr(r, "task_id", 0),
+    make_interrupted_result: Callable[[TTask], TResult] | None = None,
 ) -> list[TResult]:
     """Convenience wrapper around :class:`BoundedRetryRunner`."""
     runner: BoundedRetryRunner[TTask, TResult] = BoundedRetryRunner(
@@ -314,10 +406,12 @@ def run_bounded_with_retries(
         error_message=error_message,
         retry_count_from_result=retry_count_from_result,
         is_retryable_error=is_retryable_error,
+        is_throttled=is_throttled,
         on_worker_exception=on_worker_exception,
         on_retry_scheduled=on_retry_scheduled,
         on_result=on_result,
         order_key=order_key,
+        make_interrupted_result=make_interrupted_result,
     )
 
 

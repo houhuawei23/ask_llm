@@ -11,6 +11,7 @@ from ask_llm.core.batch_models import BatchResult, BatchTask, ModelConfig, TaskS
 from ask_llm.core.batch_processor import GlobalBatchProcessor
 from ask_llm.core.models import ProviderConfig
 from ask_llm.core.provider_manager import ProviderManager
+from ask_llm.config.unified_config import RateLimitConfig
 from ask_llm.core.telemetry import ErrorCategory
 
 
@@ -450,3 +451,79 @@ def test_process_global_tasks_bounded_calls_with_fallback_chain():
     # B1 invariant: <= n_tasks * (max_retries + 1) == 5 * 3 == 15.
     # Old two-layer retry would have made 5 * 3 * 2 == 30.
     assert call_counter["n"] <= n_tasks * (max_retries + 1)
+
+
+class TestAudit33LanePools:
+    """Audit 3.3 (M6): per-(provider, model) lanes through process_global_tasks."""
+
+    def _two_lane_tasks(self) -> list[BatchTask]:
+        tasks = []
+        for i in range(4):
+            provider, model = ("primary", "model-a") if i % 2 == 0 else ("fallback", "model-b")
+            tasks.append(
+                BatchTask(
+                    task_id=i,
+                    prompt="p",
+                    content="c",
+                    model_settings=ModelConfig(provider=provider, model=model),
+                )
+            )
+        return tasks
+
+    def _config_manager(self) -> MagicMock:
+        cm = MagicMock()
+        cm.config.get_provider_config.return_value = ProviderConfig(
+            api_provider="primary",
+            api_base="https://api.primary.com/v1",
+            api_key="sk-test",
+            models=["model-a", "model-b"],
+        )
+        return cm
+
+    def test_multi_lane_run_returns_all_results_sorted(self):
+        """Two providers run in concurrent lanes; every result is accounted for."""
+        processor = GlobalBatchProcessor(max_workers=4)
+        cm = self._config_manager()
+        providers = {
+            "primary/model-a": _make_provider("primary", "model-a"),
+            "fallback/model-b": _make_provider("fallback", "model-b"),
+        }
+
+        with (
+            patch("ask_llm.core.progress_presenter.Progress"),
+            patch(
+                "ask_llm.utils.provider_cache.create_engine_adapter",
+                side_effect=lambda cfg, **kw: providers[f"{cfg.api_provider}/{cfg.models[0]}"],
+            ),
+            patch("ask_llm.core.batch_processor.get_global_rate_limiter") as lane_limiter,
+            _patch_rate_limiter() as exec_limiter,
+            _patch_token_helpers(),
+            patch("ask_llm.core.task_executor.RequestProcessor") as mock_rp,
+        ):
+            lane_limiter.return_value.burst_for.return_value = 100
+            exec_limiter.return_value.burst_for.return_value = 100
+
+            proc = MagicMock()
+            proc.process.return_value = iter(["ok"])
+            mock_rp.return_value = proc
+
+            results = processor.process_global_tasks(self._two_lane_tasks(), cm)
+
+        assert [r.task_id for r in results] == [0, 1, 2, 3]
+        assert all(r.status == TaskStatus.SUCCESS for r in results)
+        # Two lanes => two per-lane pools, each <= max_workers.
+        assert processor.last_metrics is not None
+        assert processor.last_metrics.successful == 4
+
+    def test_tight_lane_gets_fewer_slots_than_max_workers(self):
+        """Lane sizing: burst=1 provider gets a 1-slot lane; others unaffected."""
+        rate_config = RateLimitConfig(
+            primary={"requests_per_minute": 60, "burst_size": 1},
+            fallback={"requests_per_minute": 600, "burst_size": 8},
+        )
+        processor = GlobalBatchProcessor(max_workers=6, rate_limit_config=rate_config)
+        tasks = self._two_lane_tasks()
+        # primary burst 1, fallback burst 8.
+        lanes = processor._build_lanes(tasks)
+        assert lanes["primary:model-a"][0] == 1
+        assert lanes["fallback:model-b"][0] == 6

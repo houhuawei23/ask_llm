@@ -52,6 +52,10 @@ class TranslationJobResult:
     error: str | None = None
     retries: int = 0
     results: list[BatchResult] = field(default_factory=list)
+    # Audit 2.2: exported despite some failed chunks (which fall back to the
+    # original text). ``success`` is False in that case so scripts see a
+    # non-zero exit; ``partial`` distinguishes it from a total failure.
+    partial: bool = False
 
 
 def failed_job_result(
@@ -82,5 +86,8 @@ class TranslationSessionResult:
     total_output_tokens: int = 0
     successful_files: int = 0
     failed_files: int = 0
+    # Audit 2.2: files exported with some failed chunks. Counted into
+    # ``failed_files`` too, so CLIs exit non-zero on partial translations.
+    partial_files: int = 0
     total_retries: int = 0
     report: ExecutionReport | None = None

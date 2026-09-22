@@ -7,8 +7,10 @@ that the command module stays focused on argument parsing and error handling.
 from __future__ import annotations
 
 import os
+import shutil
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from rich.progress import (
@@ -21,7 +23,11 @@ from rich.progress import (
 )
 
 from ask_llm.config.context import get_config_or_none
-from ask_llm.core.format_checkpoint import FormatCheckpoint
+from ask_llm.core.format_checkpoint import (
+    CHECKPOINT_VERSION,
+    FormatCheckpoint,
+    compute_format_digest,
+)
 from ask_llm.core.format_markdown_file import (
     FormatMarkdownOutcome,
     format_body_markdown_file,
@@ -259,6 +265,20 @@ def run_format(
     )
 
 
+@dataclass
+class FormatResumeOutcome:
+    """Result of a ``format --resume`` run (F-lite: carries the failure count
+    so the CLI can map it to a non-zero exit code — audit 2.7)."""
+
+    output_path: str
+    still_failed_count: int = 0
+    checkpoint_path: str | None = None
+
+    @property
+    def ok(self) -> bool:
+        return self.still_failed_count == 0
+
+
 class FormatService:
     """High-level service for format command orchestration, including resume."""
 
@@ -284,7 +304,7 @@ class FormatService:
         output: str | None,
         inplace: bool,
         force: bool,
-    ) -> None:
+    ) -> FormatResumeOutcome:
         """Resume formatting from a checkpoint file.
 
         Args:
@@ -294,14 +314,40 @@ class FormatService:
             force: Overwrite existing output file.
 
         Supports both body and title checkpoints (P3.5; title resume was
-        previously rejected).
+        previously rejected). Refuses pre-v4 checkpoints and checkpoints whose
+        input digest no longer matches the current source file (M8): a stale
+        resume rebuilding output from the old body — and with ``--inplace``
+        clobbering the edited source — is worse than rerunning. When resuming
+        ``--inplace`` with chunks still failing, a one-shot ``.bak`` of the
+        source is kept (audit 2.6).
+
+        Returns:
+            FormatResumeOutcome with the output path and remaining failure count.
 
         Raises:
-            RuntimeError: If writing output fails, or the resumed heading count
-                does not match the source file.
+            RuntimeError: If writing output fails, the resumed heading count
+                does not match the source file, or the checkpoint is stale.
         """
         checkpoint = FormatCheckpoint.load(checkpoint_path)
+        if checkpoint.version < CHECKPOINT_VERSION:
+            raise RuntimeError(
+                f"checkpoint 版本过旧 (v{checkpoint.version}，当前 v{CHECKPOINT_VERSION})，"
+                "缺少输入一致性摘要，无法安全恢复；请删除该 checkpoint 后重新运行 format 命令。"
+            )
         source_file = checkpoint.source_file
+        if checkpoint.config_digest:
+            current_digest = compute_format_digest(
+                source_file,
+                prompt_template=checkpoint.prompt_template,
+                model=checkpoint.model,
+                max_chunk_tokens=checkpoint.max_chunk_tokens,
+                format_type=checkpoint.format_type,
+            )
+            if checkpoint.config_digest != current_digest:
+                raise RuntimeError(
+                    f"checkpoint 与当前源文件不一致（源文件在 checkpoint 创建后被修改过）：{source_file}。"
+                    "为避免把旧结果错拼到新内容上，已拒绝恢复；请删除该 checkpoint 后重新运行。"
+                )
 
         console.print_info(f"从 checkpoint 恢复: {checkpoint_path}")
         console.print_info(f"源文件: {source_file}")
@@ -353,6 +399,14 @@ class FormatService:
             out_path = FileHandler.generate_output_path(source_file, suffix=suffix)
 
         try:
+            if inplace and still_failed:
+                # 2.6: the source is the user's only copy; a partial resume must
+                # not destroy it without recourse. One-shot backup, no rotation.
+                backup_path = Path(source_file + ".bak")
+                shutil.copyfile(source_file, backup_path)
+                console.print_warning(
+                    f"仍有失败 chunk，--inplace 覆盖前已备份原文件: {backup_path}"
+                )
             FileHandler.write(out_path, final_text, force=force or inplace)
         except Exception as exc:
             raise RuntimeError(f"写入失败: {exc}") from exc
@@ -374,3 +428,9 @@ class FormatService:
                 console.print_warning(
                     f"全部完成，但未能删除 checkpoint {checkpoint_path}: {e}（可手动删除）"
                 )
+
+        return FormatResumeOutcome(
+            output_path=out_path,
+            still_failed_count=len(still_failed),
+            checkpoint_path=updated_checkpoint,
+        )
