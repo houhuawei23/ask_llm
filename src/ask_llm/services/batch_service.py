@@ -9,6 +9,7 @@ messages.
 from __future__ import annotations
 
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -63,8 +64,14 @@ def _validate_models(
     provider_models: list[ModelConfig],
     app_config: AppConfig,
     config_manager: ConfigManager,
+    *,
+    max_workers: int = 8,
 ) -> _ValidationResult:
     """Validate provider/model list and test connections.
+
+    Plan 5.6: the connection probes fan out through a small thread pool — a
+    dead endpoint no longer stalls the whole validation stage for its full
+    timeout. Results (and console lines) preserve the input order.
 
     Builds each overridden provider view on a detached ``model_copy`` — the
     loop must never ``set_provider`` / ``apply_overrides`` on the *shared*
@@ -74,68 +81,76 @@ def _validate_models(
     """
     result = _ValidationResult()
 
-    for model_config in provider_models:
+    def _check(index: int, model_config: ModelConfig) -> tuple[int, str, bool, str]:
+        """Run the checks for one model; returns (index, key, ok, note)."""
         model_key = f"{model_config.provider}/{model_config.model}"
-        console.print(f"  Checking {model_key}...", end=" ")
+
+        if model_config.provider not in app_config.providers:
+            return index, model_key, False, "Provider not found"
+
+        provider_config = app_config.providers[model_config.provider]
+
+        if api_key_is_missing_or_unresolved(provider_config.api_key):
+            return index, model_key, False, "API key not configured"
+
+        if provider_config.models and model_config.model not in provider_config.models:
+            return (
+                index,
+                model_key,
+                False,
+                f"Model not available. Available: {', '.join(provider_config.models)}",
+            )
+
+        overrides: dict[str, Any] = {}
+        if model_config.temperature is not None:
+            overrides["api_temperature"] = model_config.temperature
+        if model_config.top_p is not None:
+            overrides["api_top_p"] = model_config.top_p
+        if model_config.max_tokens is not None:
+            overrides["max_tokens"] = model_config.max_tokens
+        provider_config_with_overrides = (
+            provider_config.model_copy(update=overrides) if overrides else provider_config
+        )
+
+        default_model = model_config.model or (
+            provider_config.models[0] if provider_config.models else ""
+        )
+        if not default_model:
+            return index, model_key, False, "No model available for this provider"
 
         try:
-            if model_config.provider not in app_config.providers:
-                console.print("[red]✗[/red] Provider not found")
-                result.skipped.append(model_key)
-                continue
-
-            provider_config = app_config.providers[model_config.provider]
-
-            if api_key_is_missing_or_unresolved(provider_config.api_key):
-                console.print("[red]✗[/red] API key not configured")
-                result.skipped.append(model_key)
-                continue
-
-            if provider_config.models and model_config.model not in provider_config.models:
-                console.print(
-                    f"[red]✗[/red] Model not available. Available: {', '.join(provider_config.models)}"
-                )
-                result.skipped.append(model_key)
-                continue
-
-            overrides: dict[str, Any] = {}
-            if model_config.temperature is not None:
-                overrides["api_temperature"] = model_config.temperature
-            if model_config.top_p is not None:
-                overrides["api_top_p"] = model_config.top_p
-            if model_config.max_tokens is not None:
-                overrides["max_tokens"] = model_config.max_tokens
-            provider_config_with_overrides = (
-                provider_config.model_copy(update=overrides) if overrides else provider_config
+            test_provider = ProviderAdapterCache.get(
+                provider_config_with_overrides, default_model=default_model
             )
-
-            default_model = model_config.model or (
-                provider_config.models[0] if provider_config.models else ""
-            )
-            if not default_model:
-                raise ValueError(f"No model available for provider '{model_config.provider}'")
-
-            try:
-                test_provider = ProviderAdapterCache.get(
-                    provider_config_with_overrides, default_model=default_model
-                )
-            except Exception as e:
-                console.print(f"[red]✗[/red] Failed to create provider adapter: {e}")
-                result.skipped.append(model_key)
-                continue
-
-            success, message, latency = test_provider.test_connection()
-
-            if not success:
-                console.print(f"[red]✗[/red] Connection test failed: {message}")
-                result.skipped.append(model_key)
-                continue
-
-            console.print(f"[green]✓ ({latency:.2f}s)[/green]")
-            result.validated.append(model_config)
-
         except Exception as e:
-            console.print(f"[red]✗[/red] Error: {e}")
+            return index, model_key, False, f"Failed to create provider adapter: {e}"
+
+        success, message, latency = test_provider.test_connection()
+        if not success:
+            return index, model_key, False, f"Connection test failed: {message}"
+        return index, model_key, True, f"{latency:.2f}s"
+
+    workers = max(1, min(max_workers, len(provider_models)))
+    ordered: list[tuple[int, str, bool, str] | None] = [None] * len(provider_models)
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="ask-llm-validate") as pool:
+        futures = {pool.submit(_check, i, mc): i for i, mc in enumerate(provider_models)}
+        for future in as_completed(futures):
+            checked: tuple[int, str, bool, str] = future.result()
+            ordered[checked[0]] = checked
+            _index, model_key, ok, note = checked
+            if ok:
+                console.print(f"  [green]✓[/green] {model_key} ({note})")
+            else:
+                console.print(f"  [red]✗[/red] {model_key}: {note}")
+
+    # Preserve input order regardless of probe completion order.
+    for entry in ordered:
+        if entry is None:
+            continue
+        index, model_key, ok, _note = entry
+        if ok:
+            result.validated.append(provider_models[index])
+        else:
             result.skipped.append(model_key)
 
     return result
@@ -162,6 +177,7 @@ def run_batch_from_config(
     verbose: bool = False,
     resume_checkpoint_path: str | None = None,
     use_fallback: bool = True,
+    skip_validation: bool = False,
 ) -> BatchRunResult:
     """Load a batch YAML config, validate models, and execute all tasks.
 
@@ -177,6 +193,9 @@ def run_batch_from_config(
         retry_delay_max: Max retry delay cap.
         skip_api_key_check: Skip API key validation.
         verbose: Enable verbose provider output.
+        skip_validation: Skip the model/connection validation stage entirely
+            (plan 5.6) — every configured provider/model runs unvalidated;
+            failures surface per task at execution time.
         use_fallback: Whether to enable fallback to alternate providers/models.
 
     Returns:
@@ -211,14 +230,19 @@ def run_batch_from_config(
         # commands; batch resolves keys before spawning concurrent calls.
         ensure_resolved_provider_keys(config_manager, unique_providers)
 
-    # Validate all models and test connections
-    console.print()
-    console.print("[bold]Validating models and testing connections...[/bold]")
-    validation = _validate_models(
-        provider_models,
-        app_config,
-        config_manager,
-    )
+    # Validate all models and test connections (skippable, plan 5.6).
+    if skip_validation:
+        console.print()
+        console.print_warning("Skipping model validation (--skip-validation).")
+        validation = _ValidationResult(validated=list(provider_models))
+    else:
+        console.print()
+        console.print("[bold]Validating models and testing connections...[/bold]")
+        validation = _validate_models(
+            provider_models,
+            app_config,
+            config_manager,
+        )
 
     # Skipped providers are reported once by the CLI via BatchService.print_skipped_providers().
     if not validation.validated:

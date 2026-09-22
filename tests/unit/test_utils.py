@@ -66,8 +66,8 @@ class TestTokenCounter:
         """clear_cache() must empty the LRU cache without error."""
         TokenCounter.count_tokens("some text to cache", "gpt-4")
         TokenCounter.clear_cache()
-        info = TokenCounter._count_tokens_cached.cache_info()
-        assert info.currsize == 0
+        assert not TokenCounter._token_cache
+        assert TokenCounter._token_cache_bytes == 0
 
     def test_is_approximate_model(self):
         """DeepSeek/Qwen are flagged as using an approximate tokenizer."""
@@ -252,3 +252,117 @@ class TestAudit44WordFallbackFloor:
         from ask_llm.utils.token_counter import TokenCounter
 
         assert TokenCounter._word_fallback_estimate("") >= 1
+
+
+class TestAudit51HardSplitParity:
+    """Audit 5.1: the windowed hard split must be byte-identical to the
+    full-range binary search over a varied corpus."""
+
+    @staticmethod
+    def _reference_split(TokenCounter, text, max_tokens, model):  # noqa: N803
+        """The pre-optimization algorithm (full-range binary search)."""
+        import tiktoken
+
+        enc = TokenCounter.get_encoding(model)
+        budget = max_tokens
+
+        def count(s):
+            return len(enc.encode(s))
+
+        text = text.strip()
+        if not text:
+            return []
+        if count(text) <= budget:
+            return [text]
+
+        out = []
+        remaining = text
+        while remaining:
+            if count(remaining) <= budget:
+                out.append(remaining)
+                break
+            lo, hi = 1, len(remaining)
+            best = 1
+            while lo <= hi:
+                mid = (lo + hi) // 2
+                if count(remaining[:mid]) <= budget:
+                    best = mid
+                    lo = mid + 1
+                else:
+                    hi = mid - 1
+            cut = remaining.rfind("\n", 0, best)
+            if cut <= 0 or cut < best // 4:
+                cut = best
+            piece = remaining[:cut].strip()
+            if not piece:
+                piece = remaining[:best].strip()
+                cut = best
+            out.append(piece)
+            remaining = remaining[cut:].lstrip()
+        return out
+
+    def test_hard_split_matches_reference_on_corpus(self):
+        import random
+
+        from ask_llm.utils.token_counter import TokenCounter
+
+        rng = random.Random(20260922)
+        words_en = [
+            "the",
+            "quick",
+            "brown",
+            "fox",
+            "jumps",
+            "over",
+            "a",
+            "lazy",
+            "dog",
+            "while",
+            "streams",
+            "of",
+            "tokens",
+            "flow",
+            "through",
+            "binary",
+            "searches",
+            "in",
+            "the",
+            "splitter",
+            "engine",
+        ]
+        corpus = [
+            "word " * 2000,
+            "这是一段很长的中文文本，没有任何空格，用来验证 CJK 分词的窗口搜索与全量搜索完全一致。"
+            * 40,
+            "```python\ndef f():\n    return 'x'\n```\n" * 60,
+            "Mixed 中文 and English words with\nnewlines\n" * 100,
+            "=SUM(A1) @cmd $VAR `tick` |pipe| ;semi &and" * 80,
+        ]
+        for _ in range(8):
+            n = rng.randint(200, 1500)
+            corpus.append(" ".join(rng.choice(words_en) for _ in range(n)))
+            corpus.append("".join(rng.choice("汉 字 与 单 词abc, 0123.") for _ in range(n)))
+
+        for text in corpus:
+            for budget in (32, 128, 900):
+                got = TokenCounter.split_hard_by_max_tokens(text, budget, "gpt-4")
+                want = self._reference_split(TokenCounter, text, budget, "gpt-4")
+                assert got == want, f"parity broken (budget={budget}) on: {text[:60]!r}"
+
+    def test_token_cache_respects_byte_budget(self):
+        from ask_llm.utils.token_counter import TokenCounter
+
+        TokenCounter.clear_cache()
+        original = TokenCounter._TOKEN_CACHE_MAX_BYTES
+        TokenCounter._TOKEN_CACHE_MAX_BYTES = 1000
+        try:
+            for i in range(50):
+                TokenCounter.count_tokens(f"document number {i} " + "x" * 100, "gpt-4")
+            total = sum(nbytes for _, nbytes in TokenCounter._token_cache.values())
+            assert total <= 1000 + max(
+                (nbytes for _, nbytes in TokenCounter._token_cache.values()), default=0
+            )
+            assert len(TokenCounter._token_cache) < 50
+        finally:
+            TokenCounter._TOKEN_CACHE_MAX_BYTES = original
+            TokenCounter.clear_cache()

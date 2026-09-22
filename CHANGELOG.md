@@ -2,9 +2,9 @@
 
 ## 2.24.0 (Unreleased)
 
-深度审查第二批 + 第三批 + 第四批：数据丢失与已付费工作保护（输出冲突预检、
-部分失败改判、checkpoint contract 补齐），重试/限流/并发正确性，解析/成本/
-导出正确性。695 测试全绿。
+深度审查第二批 + 第三批 + 第四批 + 第五批：数据丢失与已付费工作保护（输出冲突
+预检、部分失败改判、checkpoint contract 补齐），重试/限流/并发正确性，解析/
+成本/导出正确性，性能优化与三项增强。716 测试全绿。
 
 ### 行为变更（脚本/CI 需关注）
 
@@ -32,6 +32,17 @@
 
 ### Added
 
+- **trans/batch `--dry-run`**（5.2）：复用真实切分管线与定价目录，零网络调用
+  输出 chunk/请求数、输入/输出 token 估算与预估成本。
+- **`config set/get`**（5.3）：`config set providers.deepseek.api_key sk-...`、
+  `config set translation.max_chunk_tokens 3000`；行级编辑保留文件内注释与
+  其他 provider；键不存在时回退原子 dump（providers.yml 保持 0600）；
+  `config get` 对密钥类键只显示"已配置"不回显明文。
+- **chat 会话增强**（5.4）：`/save` 持久化完整会话（含 provider/model/
+  temperature），新增 `/resume` 恢复；历史按 token 预算（6000）自动截断最旧
+  轮次（system prompt 永不淘汰，至少保留一轮）；`/search` 输入按字面量转义
+  （`/search (as of` 不再 re.error 裸崩）；初始上下文回复失败时保留 seeded
+  context 进历史。
 - `trans` 多文件 + 单文件样式 `-o` 的冲突在花费前被拒绝（OutputTargetError）；
   已存在的输出目标在无 `--force` 时同样在任何 API 调用前拒绝（resume 豁免）。
 - `format` 的多文件单文件输出守卫提取为共享 `path_resolver.validate_multi_input_output`。
@@ -48,6 +59,12 @@
 
 ### Fixed
 
+- token 计数缓存按字节总量上限（64MB）淘汰（5.1）：条目是整篇文档，原固定
+  1024 条的 LRU 可能常驻数百 MB。硬切分二分搜索保持与旧实现逐字节一致
+  （前缀 token 计数非单调，窗口搜索会改变切点——已用 parity 测试锁定）。
+- batch `_validate_models` 连接探测并行化（5.6）：一个死端点不再把整个校验
+  阶段拖满超时；结果与输入顺序保持一致。新增 `--skip-validation` 旗标可
+  跳过连接测试直接运行。
 - `binary_splitter` 段落切分 find-miss → RecursionError（$$ 合成段落在自定义
   分隔符下无法在原文中定位，同输入无限递归）：回退字符偏移切分（优先吸附空白
   边界）+ 深度上限强制切分兜底，"切分拼接 == 原文"不变式保持。

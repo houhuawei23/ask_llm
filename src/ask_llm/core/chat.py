@@ -35,13 +35,19 @@ class ChatSession:
         "/models": "List available models",
         "/model": "Show or switch model (usage: /model <name>)",
         "/history": "Show conversation history summary",
-        "/save": "Save conversation history to file (usage: /save <file>)",
-        "/search": "Search message history (usage: /search <pattern>)",
+        "/save": "Save the session (history + provider/model) (usage: /save <file>)",
+        "/resume": "Resume a saved session (usage: /resume <file>)",
+        "/search": "Search message history (usage: /search <text>)",
         "/export": "Export history (usage: /export <file> [json|md|txt])",
         "/clear": "Clear conversation history",
         "/system": "Show or set system prompt (usage: /system <text>)",
         "/clear-system": "Clear system prompt",
     }
+
+    # Plan 5.4: token budget for the conversation window. Oldest user/assistant
+    # rounds are dropped when the history exceeds this; system prompts never
+    # count against eviction.
+    MAX_HISTORY_TOKENS: ClassVar[int] = 6000
 
     def __init__(
         self,
@@ -119,7 +125,15 @@ class ChatSession:
         )
         if initial_context:
             console.print("[dim]Getting initial response...[/dim]")
-            session._stream_assistant_reply()
+            ok = session._stream_assistant_reply()
+            if not ok:
+                # Plan 5.4: a failed initial reply used to silently drop the
+                # seeded context (the generic handler pops the trailing user
+                # message). Re-add it so the conversation keeps its context.
+                session.history.add_message(MessageRole.USER, initial_context)
+                console.print_warning(
+                    "Initial reply failed; the seeded context is kept in history."
+                )
         return session
 
     def start(self) -> None:
@@ -185,9 +199,42 @@ class ChatSession:
         """
         self.history.add_message(MessageRole.USER, content)
         self._stream_assistant_reply()
+        self._trim_history_to_budget()
 
-    def _stream_assistant_reply(self) -> None:
-        """Stream an assistant reply for the current history and record it."""
+    def _trim_history_to_budget(self) -> None:
+        """Drop the oldest user/assistant rounds over the token budget (5.4).
+
+        System prompts are never evicted. A single oversized round is kept as
+        the only round rather than split (the next turn still evicts it).
+        """
+
+        def _tokens(content: str) -> int:
+            return TokenCounter.count_tokens(content, self.model)
+
+        total = sum(_tokens(m.content) for m in self.history.messages)
+        if total <= self.MAX_HISTORY_TOKENS:
+            return
+
+        msgs = self.history.messages
+        first_turn = next(
+            (i for i, m in enumerate(msgs) if m.role != MessageRole.SYSTEM), len(msgs)
+        )
+        # Keep at least one complete (user+assistant) round: a lone oversized
+        # round cannot be satisfied anyway and an empty history breaks context.
+        while total > self.MAX_HISTORY_TOKENS and len(msgs) - first_turn > 2:
+            evict = msgs[first_turn : first_turn + 2]  # a user+assistant pair
+            total -= sum(_tokens(m.content) for m in evict)
+            del msgs[first_turn : first_turn + 2]
+            logger.debug(
+                f"History over token budget ({self.MAX_HISTORY_TOKENS}); dropped the oldest round"
+            )
+
+    def _stream_assistant_reply(self) -> bool:
+        """Stream an assistant reply for the current history and record it.
+
+        Returns True on success; False after a failure (the caller decides
+        whether the trailing user message should be kept).
+        """
         # Get messages for API
         messages = self.history.get_messages()
 
@@ -221,6 +268,7 @@ class ChatSession:
             self.history.add_message(MessageRole.ASSISTANT, response)
 
             logger.debug(f"Response received: {len(response)} chars in {latency:.2f}s")
+            return True
 
         except Exception as e:
             console.print()
@@ -228,6 +276,7 @@ class ChatSession:
             # Remove user message from history if it was just added
             if self.history.messages and self.history.messages[-1].role == MessageRole.USER:
                 self.history.messages.pop()
+            return False
 
     def _handle_meta_command(self, command: str) -> bool:
         """
@@ -371,7 +420,7 @@ class ChatSession:
         console.print()
 
     def _cmd_save(self, args: str) -> None:
-        """Save history to file."""
+        """Save the full session (history + provider/model + temperature)."""
         if not args:
             console.print_warning("Usage: /save <filename>")
             return
@@ -379,14 +428,62 @@ class ChatSession:
         filename = args.strip()
         try:
             data = self.history.to_dict()
+            data["provider"] = self.provider.name
+            data["model"] = self.model
+            data["temperature"] = self.temperature
             data["saved_at"] = datetime.now().isoformat()
 
             with open(filename, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
 
-            console.print_success(f"History saved to: {filename}")
+            console.print_success(f"Session saved to: {filename}")
         except Exception as e:
             console.print_error(f"Failed to save: {e}")
+
+    def _cmd_resume(self, args: str) -> None:
+        """Resume a session saved via /save (plan 5.4)."""
+        if not args:
+            console.print_warning("Usage: /resume <filename>")
+            return
+
+        filename = args.strip()
+        try:
+            with open(filename, encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception as e:
+            console.print_error(f"Failed to load {filename}: {e}")
+            return
+
+        messages = data.get("messages")
+        if not isinstance(messages, list):
+            console.print_error(f"{filename} is not a saved chat session")
+            return
+
+        history = ChatHistory(
+            provider=data.get("provider") or self.provider.name,
+            model=data.get("model") or self.model,
+        )
+        for msg in messages:
+            try:
+                role = MessageRole(str(msg.get("role")))
+            except ValueError:
+                continue
+            content = msg.get("content")
+            if content:
+                history.add_message(role, content)
+
+        saved_model = data.get("model")
+        if saved_model and saved_model != self.model:
+            console.print_info(f"Resumed session model: {saved_model}")
+        self.model = saved_model or self.model
+        self.history = history
+        self._trim_history_to_budget()
+
+        user = sum(1 for m in history.messages if m.role == MessageRole.USER)
+        assistant = sum(1 for m in history.messages if m.role == MessageRole.ASSISTANT)
+        console.print_success(
+            f"Session resumed from {filename} ({user} user / {assistant} assistant messages)"
+        )
 
     def _cmd_clear(self, args: str) -> None:
         """Clear conversation history."""
@@ -417,18 +514,23 @@ class ChatSession:
         console.print_success("System prompt cleared")
 
     def _cmd_search(self, args: str) -> None:
-        """Search message history."""
+        """Search message history (literal text; plan 5.4).
+
+        The user input is ``re.escape``d — a pattern like ``"(as of"`` used to
+        raise a raw ``re.error`` that fell through to the generic handler.
+        """
         import re
 
         pattern = args.strip()
         if not pattern:
-            console.print_warning("Usage: /search <pattern>")
+            console.print_warning("Usage: /search <text>")
             return
 
+        escaped = re.escape(pattern)
         matches = [
             (i, m)
             for i, m in enumerate(self.history.messages)
-            if re.search(pattern, m.content, re.IGNORECASE)
+            if re.search(escaped, m.content, re.IGNORECASE)
         ]
 
         if not matches:

@@ -1,6 +1,7 @@
 """Interactive configuration helper for batch processing."""
 
 import os
+import re
 import shutil
 from pathlib import Path
 
@@ -18,6 +19,149 @@ from ask_llm.utils.api_key_gate import (
 )
 from ask_llm.utils.console import console
 from ask_llm.utils.engine_facade import create_engine_adapter
+
+# Keys whose values must ALWAYS be written as quoted strings: a numeric API
+# key written bare ("123456") would parse back as an int. Deliberately NOT a
+# suffix wildcard — "max_chunk_tokens" is a counter, not a secret.
+_SECRET_KEY_RE = re.compile(r"(api_key|(^|_)(key|token|secret|password))$", re.IGNORECASE)
+
+
+def _format_yaml_value(value_str: str, *, force_string: bool) -> str:
+    """Serialize *value_str* for inline YAML, quoting when ambiguity lurks."""
+    try:
+        parsed = yaml.safe_load(value_str)
+    except yaml.YAMLError:
+        parsed = None
+    if isinstance(parsed, str):
+        force_string = True
+
+    def _dump_scalar(s: str) -> str:
+        # safe_dump appends the "..." document-end marker; an inline value is
+        # only the first line.
+        line = yaml.safe_dump(s, allow_unicode=True, default_flow_style=False).splitlines()[0]
+        return str(line)
+
+    if force_string:
+        return _dump_scalar(value_str)
+    # Numbers/bools/null: keep the raw text when it round-trips exactly
+    # (leading-zero or "0123" style inputs are quoted as strings instead).
+    if parsed is not None and str(parsed) == value_str.strip():
+        return value_str.strip()
+    return _dump_scalar(value_str)
+
+
+def _split_inline_comment(rest: str) -> tuple[str, str]:
+    """Split a YAML value's ``rest`` into (value_text, comment_text_incl_hash)."""
+    quote: str | None = None
+    for i, ch in enumerate(rest):
+        if quote:
+            if ch == quote:
+                quote = None
+        elif ch in ("'", '"'):
+            quote = ch
+        elif ch == "#" and i > 0 and rest[i - 1] in (" ", "\t"):
+            return rest[:i].rstrip(), rest[i:]
+    return rest.rstrip(), ""
+
+
+def set_config_value(
+    config_path: str | Path,
+    dotted_path: str,
+    value_str: str,
+    *,
+    mode: int | None = None,
+) -> bool:
+    """Set ``dotted_path`` to *value_str* in the YAML file at *config_path*.
+
+    Comment-preserving (plan 5.3): when the full key path already exists, only
+    the target line's value is edited in place — every other line, including
+    comments, is byte-identical. When any key along the path is missing, the
+    file falls back to a load-modify-dump rewrite through
+    :func:`atomic_write_text` (comments in that file are normalized; *mode*
+    e.g. 0o600 for secret files still applies).
+
+    Returns True when the in-place edit path was used.
+    """
+    path = Path(config_path)
+    keys = dotted_path.split(".")
+    if not keys or any(not k for k in keys):
+        raise ValueError(f"Invalid config key path: {dotted_path!r}")
+
+    text = path.read_text(encoding="utf-8") if path.exists() else ""
+    lines = text.splitlines(keepends=True)
+
+    # Walk the nesting levels, tracking the parent indent.
+    parent_indent = -1
+    target_idx: int | None = None
+    target_key = keys[-1]
+    search_from = 0
+    for level, key in enumerate(keys):
+        found: int | None = None
+        found_indent = 0
+        line_re = re.compile(rf"^(\s*)(-[ ]?)?{re.escape(key)}(\s*):(.*)$")
+        for i in range(search_from, len(lines)):
+            raw = lines[i]
+            if not raw.strip() or raw.lstrip().startswith("#"):
+                continue
+            m = line_re.match(raw.rstrip("\n"))
+            if not m:
+                continue
+            indent = len(m.group(1).expandtabs(4))
+            if indent <= parent_indent:
+                continue
+            found, found_indent = i, indent
+            break
+        if found is None:
+            break
+        if level == len(keys) - 1:
+            target_idx = found
+        else:
+            parent_indent = found_indent
+            search_from = found + 1
+
+    force_string = bool(_SECRET_KEY_RE.search(target_key))
+
+    if target_idx is not None:
+        raw = lines[target_idx]
+        eol = "\n" if raw.endswith("\n") else ""
+        body = raw.rstrip("\n")
+        m = re.match(rf"^(\s*){re.escape(target_key)}(\s*):(.*)$", body)
+        if m is None:  # pragma: no cover — the walk above matched this line
+            return False
+        line_indent, key_text = m.group(1), f"{target_key}{m.group(2)}"
+        _old_value, comment = _split_inline_comment(m.group(3))
+        new_value = _format_yaml_value(value_str, force_string=force_string)
+        sep = " " if (comment or new_value) else ""
+        lines[target_idx] = (
+            f"{line_indent}{key_text}:{sep}{new_value}{' ' + comment if comment else ''}{eol}"
+        )
+        atomic_write_text(path, "".join(lines), mode=mode)
+        return True
+
+    # Missing key: load-modify-dump rewrite (comments normalized), atomically.
+    data: dict = {}
+    if text:
+        loaded = yaml.safe_load(text)
+        if isinstance(loaded, dict):
+            data = loaded
+    node = data
+    for key in keys[:-1]:
+        child = node.get(key)
+        if not isinstance(child, dict):
+            node[key] = {}
+            node = node[key]
+        else:
+            node = child
+    try:
+        parsed_value: object = yaml.safe_load(value_str)
+    except yaml.YAMLError:
+        parsed_value = value_str
+    if force_string or isinstance(parsed_value, str):
+        parsed_value = value_str
+    node[keys[-1]] = parsed_value
+    payload = yaml.dump(data, default_flow_style=False, allow_unicode=True, sort_keys=False)
+    atomic_write_text(path, payload, mode=mode)
+    return False
 
 
 def apply_interactive_key(config_manager: ConfigManager, provider_name: str, key: str) -> None:
@@ -235,30 +379,26 @@ class InteractiveConfigHelper:
                     console.print_info(self._manual_key_hint(provider_name))
                     return
 
-            # Read existing config
-            config_data: dict = {}
-            with open(config_path, encoding="utf-8") as f:
-                loaded = yaml.safe_load(f)
-            if isinstance(loaded, dict):
-                config_data = loaded
-
-            # Update API key
-            providers = config_data.setdefault("providers", {})
-            if not isinstance(providers, dict):
-                console.print_warning(f"'providers' in {config_path} is not a mapping")
+            # Update API key via the shared comment-preserving setter (5.3):
+            # existing files keep their comments byte-identical; only a key
+            # that doesn't exist yet triggers a normalized rewrite.
+            try:
+                preserved = set_config_value(
+                    config_path,
+                    f"providers.{provider_name}.api_key",
+                    api_key,
+                    mode=0o600,
+                )
+            except Exception as e:
+                console.print_warning(f"Failed to save API key to config file: {e}")
+                console.print_info(self._manual_key_hint(provider_name))
                 return
-            provider_cfg = providers.setdefault(provider_name, {})
-            if isinstance(provider_cfg, dict):
-                provider_cfg["api_key"] = api_key
-
-            # Atomic write, restricted permissions, replacing any prior file.
-            payload = yaml.dump(config_data, default_flow_style=False, allow_unicode=True)
-            atomic_write_text(config_path, payload, mode=0o600)
 
             console.print_success(f"API key saved to {config_path} (permissions 0600)")
-            console.print_warning(
-                "Note: YAML comments/formatting in the file may have been normalized."
-            )
+            if not preserved:
+                console.print_warning(
+                    "Note: YAML comments/formatting in the file may have been normalized."
+                )
             logger.info(f"API key saved to {config_path}")
 
         except Exception as e:

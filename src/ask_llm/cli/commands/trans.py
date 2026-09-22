@@ -204,6 +204,13 @@ def trans(
             help="Resume translation from per-file checkpoints (default: False)",
         ),
     ] = False,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run",
+            help="Estimate chunks, tokens and cost without any API call",
+        ),
+    ] = False,
     fallback: Annotated[
         bool,
         typer.Option(
@@ -261,6 +268,40 @@ def trans(
                 final_provider,
                 skip_api_key_check=skip_api_key_check,
             )
+
+            if dry_run:
+                from ask_llm.services.dry_run import estimate_translation_run
+                from ask_llm.utils.path_resolver import resolve_trans_input_paths
+
+                input_paths = resolve_trans_input_paths(
+                    files,
+                    trans_cfg.translatable_extensions,
+                    trans_cfg.recursive_dir,
+                )
+                if not input_paths:
+                    console.print_error("No input files matched.")
+                    raise typer.Exit(1)
+                dry_report = estimate_translation_run(
+                    input_paths,
+                    final_model,
+                    final_provider,
+                    target_language=target_lang or trans_cfg.target_language,
+                    source_language=trans_cfg.source_language
+                    if source_lang is None
+                    else source_lang,
+                    style=trans_cfg.style,
+                    prompt_file=prompt_file,
+                    max_chunk_tokens=(
+                        max_chunk_tokens
+                        if max_chunk_tokens is not None
+                        else trans_cfg.max_chunk_tokens
+                    ),
+                    balance_chunks=trans_cfg.balance_translation_chunks and not no_balance_chunks,
+                    pricing_map=pricing_map,
+                )
+                for line in dry_report.render(pricing_source=pricing_source):
+                    console.print(line)
+                return
 
             options = TranslationOptions(
                 target_language=target_lang or trans_cfg.target_language,

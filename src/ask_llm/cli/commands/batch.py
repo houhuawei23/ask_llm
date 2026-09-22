@@ -85,6 +85,21 @@ def batch(
             help="Overwrite existing output files when exporting results",
         ),
     ] = False,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run",
+            help="Estimate requests, tokens and cost without any API call "
+            "(requires models in the batch YAML; skips connection tests)",
+        ),
+    ] = False,
+    skip_validation: Annotated[
+        bool,
+        typer.Option(
+            "--skip-validation",
+            help="Skip the provider/model connection tests before running",
+        ),
+    ] = False,
     verbose: Annotated[
         bool,
         typer.Option(
@@ -139,6 +154,32 @@ def batch(
         with cli_errors("batch"):
             load_result, config_manager = load_cli_session(config_path)
             batch_cfg = load_result.unified_config.batch
+
+            if dry_run:
+                from ask_llm.services.dry_run import estimate_batch_run
+                from ask_llm.utils.batch_loader import BatchConfigLoader
+
+                batch_config = BatchConfigLoader.load(config_file)
+                tasks = batch_config["tasks"]
+                provider_models = batch_config.get("provider_models", [])
+                if not provider_models:
+                    console.print_error(
+                        "--dry-run requires explicit models in the batch YAML "
+                        "(interactive selection needs a live session)."
+                    )
+                    raise typer.Exit(1)
+
+                pricing_map, pricing_source = load_pricing_with_hint(None)
+                for model_config in provider_models:
+                    dry_report = estimate_batch_run(
+                        [(t.prompt, t.content) for t in tasks],
+                        model_config.provider,
+                        model_config.model,
+                        pricing_map=pricing_map,
+                    )
+                    for line in dry_report.render(pricing_source=pricing_source):
+                        console.print(line)
+                return
             pricing_map, _pricing_source = load_pricing_with_hint(None)
             effective_threads = threads if threads is not None else batch_cfg.threads
             effective_retries = retries if retries is not None else batch_cfg.retries
@@ -188,6 +229,7 @@ def batch(
                 verbose=verbose,
                 resume_checkpoint_path=resume,
                 use_fallback=fallback,
+                skip_validation=skip_validation,
             )
 
             service = BatchService(

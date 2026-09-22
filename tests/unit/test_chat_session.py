@@ -96,11 +96,13 @@ def test_from_initial_context_uses_resolved_model_for_call():
 
 
 def test_from_initial_context_rolls_back_user_message_on_failure():
+    """Plan 5.4: a failed initial reply KEEPS the seeded context in history
+    (previously the generic rollback silently dropped it)."""
     provider = FakeProvider(error=RuntimeError("boom"))
 
     session = ChatSession.from_initial_context(provider, model="m1", initial_context="ctx")
 
-    assert session.history.messages == []
+    assert [m.content for m in session.history.messages] == ["ctx"]
 
 
 class TestAudit46ShellMetachar:
@@ -148,3 +150,83 @@ class TestAudit46ShellMetachar:
         # argv form: the quoted | is one literal argument, never a shell pipe.
         argv = run.call_args.args[0]
         assert argv == ["grep", "a|b", "file.txt"]
+
+
+class TestAudit54SessionEnhancements:
+    """Plan 5.4: /save /resume round-trip, history trimming, /search escaping,
+    seeded-context retention."""
+
+    def _session(self):
+        return ChatSession.from_initial_context(FakeProvider(), model="m1")
+
+    def test_save_resume_roundtrip(self, tmp_path):
+        import json
+
+        session = self._session()
+        session._send_message = lambda content: (
+            session.history.add_message(MessageRole.USER, content)
+            or session.history.add_message(MessageRole.ASSISTANT, "echo " + content)
+        )
+        session._send_message("first question")
+        saved = tmp_path / "session.json"
+        session._cmd_save(str(saved))
+
+        data = json.loads(saved.read_text(encoding="utf-8"))
+        assert data["provider"] == "fake"
+        assert data["model"] == "m1"
+        assert data["messages"][-1]["role"] == "assistant"
+
+        # A fresh session resumes the file.
+        fresh = ChatSession.from_initial_context(FakeProvider(), model="m1")
+        fresh._cmd_resume(str(saved))
+        roles = [m.role for m in fresh.history.messages]
+        assert roles.count(MessageRole.USER) == 1
+        assert roles.count(MessageRole.ASSISTANT) == 1
+        assert fresh.history.messages[-1].content == "echo first question"
+
+    def test_history_trims_oldest_round_over_budget(self, monkeypatch):
+        from ask_llm.core.chat import ChatSession
+
+        session = self._session()
+        monkeypatch.setattr(ChatSession, "MAX_HISTORY_TOKENS", 30)
+        for i in range(6):
+            session.history.add_message(MessageRole.USER, f"question {i} " + "word " * 20)
+            session.history.add_message(MessageRole.ASSISTANT, f"answer {i} " + "word " * 20)
+
+        session._trim_history_to_budget()
+
+        total = sum(len(m.content) for m in session.history.messages)
+        assert total < 6 * 40  # some rounds evicted
+        roles = [m.role for m in session.history.messages]
+        assert roles.count(MessageRole.USER) == roles.count(MessageRole.ASSISTANT)
+        # Rounds evict oldest-first.
+        assert "question 0" not in session.history.messages[0].content
+
+    def test_system_prompt_survives_trimming(self):
+        session = self._session()
+        session.history.add_message(MessageRole.SYSTEM, "system prompt stays")
+        for _ in range(10):
+            session.history.add_message(MessageRole.USER, "u" * 200)
+            session.history.add_message(MessageRole.ASSISTANT, "a" * 200)
+        session._trim_history_to_budget()
+        assert any(m.role == MessageRole.SYSTEM for m in session.history.messages)
+
+    def test_search_escapes_regex_metachars(self, capsys):
+        session = self._session()
+        session.history.add_message(MessageRole.USER, "price is (as of) 2026")
+
+        # Previously raised re.error through the generic handler.
+        session._cmd_search("(as of")
+        out = capsys.readouterr().out
+        assert "1 match" in out
+
+    def test_seeded_context_kept_when_initial_reply_fails(self):
+        provider = FakeProvider(error=RuntimeError("boom"))
+
+        session = ChatSession.from_initial_context(
+            provider, model="m1", initial_context="the seeded context"
+        )
+
+        roles = [m.role for m in session.history.messages]
+        assert roles == [MessageRole.USER]
+        assert session.history.messages[0].content == "the seeded context"

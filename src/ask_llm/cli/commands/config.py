@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Annotated
 
 import typer
@@ -17,12 +18,87 @@ from ask_llm.utils.api_key_gate import (
 )
 from ask_llm.utils.console import console
 from ask_llm.utils.engine_facade import create_engine_adapter
+from ask_llm.utils.interactive_config import set_config_value
+
+# Config key paths routed to the providers.yml user file (credentials /
+# base_url live there per the runtime/catalog split; everything else belongs
+# to default_config.yml).
+_PROVIDERS_PREFIX = "providers."
+
+
+def _mask_if_secret(key_path: str, value: object) -> str:
+    """Render a config value for display; secrets are never printed."""
+    import re as _re
+
+    leaf = key_path.rsplit(".", 1)[-1]
+    if _re.search(r"(api_key|(^|_)(key|token|secret|password)s?$)", leaf, _re.IGNORECASE):
+        rendered = str(value)
+        if not rendered or rendered.startswith("${"):
+            return "✗ Not configured"
+        return "✓ Configured (hidden)"
+    return str(value)
+
+
+def _config_get_set(
+    action: str,
+    key_path: str | None,
+    value: str | None,
+    config_path: str | None = None,
+) -> None:
+    """Implement ``config get`` / ``config set`` (plan 5.3)."""
+    if not key_path or (action == "set" and value is None):
+        console.print_error(
+            f"config {action} requires a dotted key path"
+            + (" and a value" if action == "set" else "")
+        )
+        raise typer.Exit(1)
+
+    if action == "get":
+        load_result = ConfigLoader.load(config_path)
+        set_config(load_result)
+        # Walk both the provider config and the unified config.
+        target: object = load_result.app_config
+        for part in key_path.split("."):
+            target = target.get(part) if isinstance(target, dict) else getattr(target, part, None)
+            if target is None:
+                break
+        if target is None:
+            console.print_error(f"Key not found: {key_path}")
+            raise typer.Exit(1)
+        if isinstance(target, list):
+            console.print(str(target))
+        else:
+            console.print(_mask_if_secret(key_path, target))
+        return
+
+    # set: route to the right user file — provider keys/base_url to
+    # providers.yml (0600), everything else to default_config.yml.
+    if key_path.startswith(_PROVIDERS_PREFIX):
+        target_file = Path.home() / ".config" / "ask_llm" / "providers.yml"
+        mode: int | None = 0o600
+    else:
+        target_file = Path.home() / ".config" / "ask_llm" / "default_config.yml"
+        mode = None
+
+    assert value is not None  # guarded above
+    try:
+        target_file.parent.mkdir(parents=True, exist_ok=True)
+        if not target_file.exists():
+            target_file.touch()
+        preserved = set_config_value(target_file, key_path, value, mode=mode)
+    except Exception as e:
+        console.print_error(f"Failed to set {key_path}: {e}")
+        raise typer.Exit(1) from e
+
+    console.print_success(f"{key_path} set in {target_file}")
+    if not preserved:
+        console.print_warning("New key created; the file's comments were normalized.")
 
 
 def config(
     action: Annotated[
         str,
-        typer.Argument(help="Action: show, test, init"),
+        typer.Argument(help="Action: show, test, init, get, set"),
     ] = "show",
     config_path: Annotated[
         str | None, typer.Option("--config", "-c", help="Configuration file path")
@@ -45,6 +121,14 @@ def config(
             help="Show configuration provenance: loaded file path and active env-var overrides",
         ),
     ] = False,
+    key_path: Annotated[
+        str | None,
+        typer.Argument(help="Dotted config key for get/set, e.g. providers.deepseek.api_key"),
+    ] = None,
+    value: Annotated[
+        str | None,
+        typer.Argument(help="Value to set (with set action)"),
+    ] = None,
 ) -> None:
     """
     Manage configuration.
@@ -56,10 +140,17 @@ def config(
         ask-llm config init
         ask-llm config init -o ./my_config.yml
         ask-llm config show --debug-config
+        ask-llm config get providers.deepseek.api_key
+        ask-llm config set providers.deepseek.api_key sk-...
+        ask-llm config set translation.max_chunk_tokens 3000
     """
     with cli_errors("config"):
         if action == "init":
             _config_init(output_path)
+            return
+
+        if action in ("get", "set"):
+            _config_get_set(action, key_path, value, config_path)
             return
 
         # Load existing config
@@ -180,5 +271,5 @@ def config(
 
         else:
             console.print_error(f"Unknown action: {action}")
-            console.print("Available actions: show, test, init")
+            console.print("Available actions: show, test, init, get, set")
             raise typer.Exit(1)

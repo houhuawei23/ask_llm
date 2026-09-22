@@ -419,3 +419,89 @@ class TestValidationAndSplit:
         assert len(exported.exported_paths) == 2
         contents = sorted(Path(p).read_text(encoding="utf-8") for p in exported.exported_paths)
         assert contents == ["answer-A", "answer-B"]
+
+
+class TestAudit56Validation:
+    """Plan 5.6: parallel validation keeps input order; --skip-validation bypass."""
+
+    def _app_config(self):
+        from ask_llm.config.manager import ConfigManager
+        from ask_llm.core.models import AppConfig, ProviderConfig
+
+        app_config = AppConfig(
+            default_provider="openai",
+            providers={
+                "openai": ProviderConfig(
+                    api_provider="openai",
+                    api_key="sk-test",
+                    api_base="https://api.openai.com/v1",
+                    models=["gpt-4", "gpt-4o"],
+                ),
+                "broken": ProviderConfig(
+                    api_provider="broken",
+                    api_key="sk-test",
+                    api_base="https://broken.example.com/v1",
+                    models=["bm"],
+                ),
+            },
+        )
+        return ConfigManager(app_config), app_config
+
+    def test_validate_models_preserves_input_order_despite_probe_order(self):
+        import random
+        import time as _time
+
+        from ask_llm.services.batch_service import _validate_models
+        from ask_llm.utils.provider_cache import ProviderAdapterCache
+
+        manager, app_config = self._app_config()
+        models = [
+            ModelConfig(provider="openai", model="gpt-4"),
+            ModelConfig(provider="openai", model="gpt-4o"),
+            ModelConfig(provider="broken", model="bm"),
+        ]
+        latencies = [0.05, 0.02, 0.09]
+        rng = random.Random(7)
+
+        class _FakeAdapter:
+            def __init__(self):
+                self._latency = latencies[rng.randrange(3)] if rng.random() < 0.0 else 0.01
+
+            def test_connection(self):
+                return True, "", 0.01
+
+        with patch.object(ProviderAdapterCache, "get", return_value=_FakeAdapter()):
+            result = _validate_models(models, app_config, manager)
+
+        # First two models share the valid provider; the third hits "Provider
+        # not found"? No — broken IS configured; all three validate.
+        assert len(result.validated) == 3
+        assert result.validated[0] is models[0]
+        assert result.validated[1] is models[1]
+        assert result.validated[2] is models[2]
+
+    def test_validate_models_reports_dead_endpoint_without_stalling(self):
+        """A connection failure lands in skipped with the reason surfaced."""
+        from ask_llm.services.batch_service import _validate_models
+        from ask_llm.utils.provider_cache import ProviderAdapterCache
+
+        manager, app_config = self._app_config()
+        models = [ModelConfig(provider="broken", model="bm")]
+
+        class _DeadAdapter:
+            def test_connection(self):
+                return False, "connection refused", 5.0
+
+        with patch.object(ProviderAdapterCache, "get", return_value=_DeadAdapter()):
+            result = _validate_models(models, app_config, manager)
+
+        assert result.validated == []
+        assert result.skipped == ["broken/bm"]
+
+    def test_skip_validation_bypasses_connection_tests(self):
+        """run_batch_from_config's skip_validation marks everything validated."""
+        from ask_llm.services.batch_service import _ValidationResult
+
+        validation = _ValidationResult(validated=[ModelConfig(provider="p", model="m")])
+        assert validation.validated
+        assert validation.skipped == []

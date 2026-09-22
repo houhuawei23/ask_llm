@@ -122,3 +122,93 @@ class TestShellEnvScrub:
         assert "DEEPSEEK_API_KEY" not in env
         # Other env is untouched.
         assert env.get("HOME") is not None
+
+
+class TestAudit53SetConfigValue:
+    """Plan 5.3: comment-preserving config set, atomic + mode honored."""
+
+    @staticmethod
+    def _write(tmp_path: Path, content: str) -> Path:
+        p = tmp_path / "providers.yml"
+        p.write_text(content, encoding="utf-8")
+        return p
+
+    def test_set_preserves_comments_and_other_providers(self, tmp_path):
+        from ask_llm.utils.interactive_config import set_config_value
+
+        original = (
+            "# my providers\n"
+            "providers:\n"
+            "  deepseek:\n"
+            "    api_key: ${DEEPSEEK_API_KEY}  # keep this comment\n"
+            "    api_base: https://api.deepseek.com/v1\n"
+            "  openai:\n"
+            "    # inline note above the key\n"
+            "    api_key: sk-openai\n"
+        )
+        path = self._write(tmp_path, original)
+
+        preserved = set_config_value(path, "providers.deepseek.api_key", "sk-new")
+
+        assert preserved is True
+        text = path.read_text(encoding="utf-8")
+        assert "# my providers" in text
+        assert "# keep this comment" in text
+        assert "# inline note above the key" in text
+        assert "sk-new" in text
+        assert "sk-openai" in text
+        assert "api_base: https://api.deepseek.com/v1" in text
+
+    def test_set_quotes_numeric_secret_as_string(self, tmp_path):
+        import yaml
+
+        from ask_llm.utils.interactive_config import set_config_value
+
+        path = self._write(tmp_path, "providers:\n  x:\n    api_key: abc\n")
+        set_config_value(path, "providers.x.api_key", "123456")
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        assert data["providers"]["x"]["api_key"] == "123456"
+        assert "'123456'" in path.read_text(encoding="utf-8")
+
+    def test_set_parses_scalars_in_place(self, tmp_path):
+        import yaml
+
+        from ask_llm.utils.interactive_config import set_config_value
+
+        path = self._write(tmp_path, "translation:\n  max_chunk_tokens: 2000  # budget\n")
+        set_config_value(path, "translation.max_chunk_tokens", "3000")
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        assert data["translation"]["max_chunk_tokens"] == 3000
+        assert "# budget" in path.read_text(encoding="utf-8")
+
+    def test_missing_key_falls_back_to_dump_rewrite_with_mode(self, tmp_path):
+        import yaml
+
+        from ask_llm.utils.interactive_config import set_config_value
+
+        path = self._write(tmp_path, "# header comment\nproviders:\n  x:\n    api_key: a\n")
+        preserved = set_config_value(path, "providers.new.api_key", "sk-n", mode=0o600)
+
+        assert preserved is False
+        assert (path.stat().st_mode & 0o777) == 0o600
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        assert data["providers"]["new"]["api_key"] == "sk-n"
+        assert data["providers"]["x"]["api_key"] == "a"
+
+    def test_save_api_key_preserves_comments(self, tmp_path, monkeypatch):
+        """_save_api_key_to_config delegates to the comment-preserving setter."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        target = tmp_path / ".config" / "ask_llm" / "providers.yml"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            "# comment survives\nproviders:\n  deepseek:\n    api_key: old\n",
+            encoding="utf-8",
+        )
+
+        _HELPER._save_api_key_to_config("deepseek", "sk-rotated")
+
+        text = target.read_text(encoding="utf-8")
+        assert "sk-rotated" in text
+        assert "old" not in text
+        assert "# comment survives" in text
+        assert (target.stat().st_mode & 0o777) == 0o600

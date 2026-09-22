@@ -1,13 +1,14 @@
 """Token counting utilities."""
 
 import re
-from functools import lru_cache
+import threading
+from collections import OrderedDict
 from typing import Any, ClassVar
 
 from loguru import logger
 
 from ask_llm.config.context import get_config_or_none
-from ask_llm.core.constants import APPROX_TOKEN_SAFETY_FACTOR, TOKEN_COUNT_CACHE_SIZE
+from ask_llm.core.constants import APPROX_TOKEN_SAFETY_FACTOR
 
 try:
     import tiktoken
@@ -221,29 +222,64 @@ class TokenCounter:
             return max(words, 1)
         return max(words, char_estimate, 1)
 
-    @staticmethod
-    @lru_cache(maxsize=TOKEN_COUNT_CACHE_SIZE)
-    def _count_tokens_cached(text: str, model: str | None) -> int:
-        """Cache-backed token count implementation. See :meth:`count_tokens`."""
+    # Audit 5.1: the token-count cache holds *whole documents* as keys; a
+    # fixed entry count (the old lru_cache(1024)) could pin hundreds of MB.
+    # Bound total cached text bytes instead, evicting least-recently-used.
+    _TOKEN_CACHE_MAX_BYTES: ClassVar[int] = 64 * 1024 * 1024
+    _token_cache: ClassVar["OrderedDict[tuple[str, str | None], tuple[int, int]]"] = OrderedDict()
+    _token_cache_bytes: ClassVar[int] = 0
+    _token_cache_lock: ClassVar[threading.Lock] = threading.Lock()
+
+    @classmethod
+    def _count_tokens_cached(cls, text: str, model: str | None) -> int:
+        """Byte-bounded LRU memo for :meth:`count_tokens` (audit 5.1)."""
+        key = (text, model)
+        lock = cls._token_cache_lock
+        with lock:
+            entry = cls._token_cache.get(key)
+            if entry is not None:
+                value, _entry_bytes = entry
+                cls._token_cache.move_to_end(key)
+                return value
+
+        value = cls._compute_token_count(text, model)
+
+        # char count as a cheap byte proxy (UTF-8 is 1-4 bytes/char, so this
+        # over-admits slightly; the bound is a guardrail, not an exact quota)
+        entry_bytes = max(1, len(text))
+        with lock:
+            if key not in cls._token_cache:
+                cls._token_cache[key] = (value, entry_bytes)
+                cls._token_cache_bytes += entry_bytes
+                while cls._token_cache_bytes > cls._TOKEN_CACHE_MAX_BYTES and cls._token_cache:
+                    _, (_, evicted_bytes) = cls._token_cache.popitem(last=False)
+                    cls._token_cache_bytes -= evicted_bytes
+            return value
+
+    @classmethod
+    def _compute_token_count(cls, text: str, model: str | None) -> int:
+        """Cache-miss token count. See :meth:`count_tokens`."""
         if not TIKTOKEN_AVAILABLE:
-            TokenCounter._warn_word_fallback_once()
-            return TokenCounter._word_fallback_estimate(text)
+            cls._warn_word_fallback_once()
+            return cls._word_fallback_estimate(text)
 
         try:
-            encoding = TokenCounter.get_encoding(model)
+            encoding = cls.get_encoding(model)
             if encoding is None:
-                TokenCounter._warn_word_fallback_once()
-                return TokenCounter._word_fallback_estimate(text)
+                cls._warn_word_fallback_once()
+                return cls._word_fallback_estimate(text)
             return len(encoding.encode(text))
         except Exception as e:
             logger.debug(f"Token counting failed: {e}, falling back to word count")
-            TokenCounter._warn_word_fallback_once()
-            return TokenCounter._word_fallback_estimate(text)
+            cls._warn_word_fallback_once()
+            return cls._word_fallback_estimate(text)
 
     @classmethod
     def clear_cache(cls) -> None:
         """Clear the token-count LRU cache. Useful in tests or long-running processes."""
-        cls._count_tokens_cached.cache_clear()
+        with cls._token_cache_lock:
+            cls._token_cache.clear()
+            cls._token_cache_bytes = 0
 
     @classmethod
     def estimate_tokens(cls, text: str, model: str | None = None) -> dict:
@@ -322,15 +358,13 @@ class TokenCounter:
                 out.append(remaining)
                 break
 
-            lo, hi = 1, len(remaining)
-            best = 1
-            while lo <= hi:
-                mid = (lo + hi) // 2
-                if cls.count_tokens(remaining[:mid], model) <= budget:
-                    best = mid
-                    lo = mid + 1
-                else:
-                    hi = mid - 1
+            # Audit 5.1 note: this bisection is deliberately kept full-range
+            # and exact. Prefix token counts are NON-monotone (BPE merges at a
+            # cut boundary), so a windowed search seeded from token offsets
+            # converges to different cuts and breaks the byte-identical
+            # regression contract; the 5.1 optimization here is the byte-
+            # bounded token cache instead.
+            best = cls._bisect_best_cut(remaining, 1, len(remaining), budget, model) or 1
 
             cut = remaining.rfind("\n", 0, best)
             if cut <= 0 or cut < best // 4:
@@ -343,3 +377,22 @@ class TokenCounter:
             remaining = remaining[cut:].lstrip()
 
         return out
+
+    @classmethod
+    def _bisect_best_cut(
+        cls, remaining: str, lo: int, hi: int, budget: int, model: str | None
+    ) -> int | None:
+        """Largest cut in [lo, hi] whose prefix encodes to ≤ budget tokens.
+
+        Mirrors the historical inline bisection exactly (same mid sequence), so
+        results are byte-identical to previous releases.
+        """
+        best: int | None = None
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            if cls.count_tokens(remaining[:mid], model) <= budget:
+                best = mid
+                lo = mid + 1
+            else:
+                hi = mid - 1
+        return best

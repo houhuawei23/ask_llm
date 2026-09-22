@@ -64,7 +64,7 @@ def test_benchmark_json_export_streaming(benchmark, count):
 
     def export():
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=True) as f:
-            exporter._export_json(f.name)
+            exporter._export_json(f.name, force=True)
 
     benchmark(export)
 
@@ -98,7 +98,7 @@ def test_benchmark_provider_adapter_cache_hit(benchmark):
         max_tokens=None,
         timeout=60.0,
     )
-    with patch("ask_llm.utils.provider_cache._create_cached_adapter") as mock_create:
+    with patch("ask_llm.utils.provider_cache.create_engine_adapter") as mock_create:
         mock_create.return_value = MagicMock()
         ProviderAdapterCache.get(config, default_model="gpt-4")
 
