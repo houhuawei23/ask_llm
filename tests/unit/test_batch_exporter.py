@@ -396,3 +396,71 @@ class TestJSONExportAtomicity:
             exporter.export(str(target), format_type="json")
         assert not target.exists()
         assert not (tmp_path / "out.json.tmp").exists()
+
+
+class TestAudit45ExporterHardening:
+    """Audit 4.5: force, suffix rejection, CSV injection, fences."""
+
+    def _exporter(self):
+        return BatchResultExporter(_make_results(), BatchStatistics())
+
+    def test_export_refuses_existing_target_without_force(self, tmp_path):
+        target = tmp_path / "out.json"
+        target.write_text("{}", encoding="utf-8")
+        exporter = self._exporter()
+        with pytest.raises(FileExistsError):
+            exporter.export(str(target), format_type="json")
+        assert target.read_text(encoding="utf-8") == "{}"  # untouched
+
+    def test_export_overwrites_existing_target_with_force(self, tmp_path):
+        target = tmp_path / "out.json"
+        target.write_text("{}", encoding="utf-8")
+        self._exporter().export(str(target), format_type="json", force=True)
+        assert json.loads(target.read_text(encoding="utf-8"))
+
+    def test_unknown_extension_rejected_not_json_default(self, tmp_path):
+        """JSON content must never be written into a .txt target."""
+        exporter = self._exporter()
+        with pytest.raises(ValueError, match="Cannot infer export format"):
+            exporter.export(str(tmp_path / "results.txt"))
+        assert not (tmp_path / "results.txt").exists()
+
+    def test_yaml_and_markdown_suffix_detection_survives(self, tmp_path):
+        assert self._exporter().export(str(tmp_path / "r.yaml"))
+        assert self._exporter().export(str(tmp_path / "r.md"))
+
+    def test_csv_cells_neutralized_against_formula_injection(self, tmp_path):
+        results = _make_results()
+        results[0].prompt = "=SUM(A1:A2)"
+        results[0].content = "@x + cmd"
+        target = tmp_path / "out.csv"
+        BatchResultExporter(results, BatchStatistics()).export(str(target), format_type="csv")
+        # The csv writer may quote cells containing the ' prefix; compare
+        # against the quote-stripped payload.
+        raw = target.read_text(encoding="utf-8").replace('"', "")
+        assert "'=SUM(A1:A2)" in raw
+        assert "'@x + cmd" in raw
+        assert "\n=SUM" not in raw
+
+    def test_csv_no_truncation(self, tmp_path):
+        results = _make_results()
+        long_content = "X" * 5000
+        results[0].content = long_content
+        target = tmp_path / "out.csv"
+        BatchResultExporter(results, BatchStatistics()).export(str(target), format_type="csv")
+        raw = target.read_text(encoding="utf-8")
+        assert long_content in raw
+        assert "..." not in raw.split("Content")[1].split("\n")[0]
+
+    def test_markdown_answers_are_fenced(self, tmp_path):
+        results = _make_results()
+        results[0].response = "Answer with ```python\ncode()\n``` inside."
+        target = tmp_path / "out.md"
+        BatchResultExporter(results, BatchStatistics(), "prompt-content-pairs").export(
+            str(target), format_type="markdown"
+        )
+        text = target.read_text(encoding="utf-8")
+        # The embedded triple-backtick block cannot terminate the outer fence:
+        # a ```` fence (4+) must wrap the payload.
+        assert "````" in text
+        assert "```python" in text

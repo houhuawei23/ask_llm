@@ -116,3 +116,70 @@ def test_rebalance_respects_prompt_overhead() -> None:
         chunks, model, max_chunk_tokens=60, enabled=True, prompt_overhead=40
     )
     assert len(big) > len(small)
+
+
+class TestAudit43MergeMetaAndSpans:
+    """Audit 4.3: merges keep both sides' metadata; spans are source-relative."""
+
+    def test_merge_preserves_both_sides_metadata(self):
+        from ask_llm.utils.chunk_balance import _merge_meta
+
+        left = {"type": "heading_section", "heading": "Intro"}
+        right = {"type": "heading_section", "heading": "Methods", "rebalanced": False}
+        merged = _merge_meta(left, right)
+
+        assert merged["heading"] == ["Intro", "Methods"]  # both survive
+        assert merged["type"] == "heading_section"  # equal values collapse
+        assert merged["rebalanced"] is False
+
+    def test_merged_chunk_spans_cover_both_sources(self):
+        """A merged chunk's span runs from the first piece's source start to
+        the last piece's source end — not cumulative offsets in a synthetic
+        stream."""
+        heavy = "para " * 400  # oversized: gets split
+        tail_a = "tail-a content"
+        tail_b = "tail-b content"
+        sep_len = len("\n\n")
+        chunks = [
+            TextChunk(content=heavy, chunk_id=0, start_pos=0, end_pos=len(heavy), metadata={}),
+            TextChunk(
+                content=tail_a,
+                chunk_id=1,
+                start_pos=len(heavy) + 10,
+                end_pos=len(heavy) + 10 + len(tail_a),
+                metadata={},
+            ),
+            TextChunk(
+                content=tail_b,
+                chunk_id=2,
+                start_pos=len(heavy) + 50,
+                end_pos=len(heavy) + 50 + len(tail_b),
+                metadata={},
+            ),
+        ]
+
+        out = rebalance_translation_chunks(chunks, model="gpt-4", max_chunk_tokens=200)
+
+        assert out
+        for c in out:
+            assert c.start_pos <= c.end_pos
+        # Every output span stays within the true source extent.
+        assert all(c.end_pos <= len(heavy) + 50 + len(tail_b) for c in out)
+
+    def test_merged_chunk_carries_all_source_metadata(self):
+        """Metadata of chunks merged together survives on the merged chunk."""
+        meta_a = {"heading": "Section A"}
+        meta_b = {"heading": "Section B"}
+        chunks = [
+            TextChunk(content="alpha beta", chunk_id=0, start_pos=0, end_pos=10, metadata=meta_a),
+            TextChunk(content="gamma delta", chunk_id=1, start_pos=12, end_pos=23, metadata=meta_b),
+        ]
+
+        out = rebalance_translation_chunks(chunks, model="gpt-4", max_chunk_tokens=2000)
+
+        assert len(out) == 1, "tiny neighbors must merge under a generous budget"
+        assert out[0].metadata["heading"] == ["Section A", "Section B"]
+        assert out[0].metadata["rebalanced"] is True
+        # Source-relative span: origin chunk 0 start through origin chunk 1 end.
+        assert out[0].start_pos == 0
+        assert out[0].end_pos == 23

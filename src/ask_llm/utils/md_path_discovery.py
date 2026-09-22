@@ -57,7 +57,8 @@ def _expand_glob_or_literal(raw: str) -> list[Path]:
 
     Mirrors legacy ``format`` behaviour: try glob first; if empty, treat as literal path.
     """
-    matches = glob.glob(raw)
+    # Audit 4.8: honor ** for recursive patterns (e.g. 'docs/**/*.md').
+    matches = glob.glob(raw, recursive=True)
     if matches:
         return [Path(m) for m in matches]
 

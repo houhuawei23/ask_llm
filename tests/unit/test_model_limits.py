@@ -73,3 +73,23 @@ def test_bundled_providers_yml_loads():
     assert limits["deepseek-chat"].max_output_maximum == 8192
     assert "deepseek-reasoner" in limits
     assert limits["deepseek-reasoner"].max_output_maximum == 65536
+
+
+class TestAudit44DeepseekCapPrecedence:
+    """Audit 4.4: the substring 8192 clamp yields to an explicit catalog maximum."""
+
+    def test_unknown_deepseek_with_declared_maximum_not_clamped(self):
+        from ask_llm.utils.model_limits import ModelLimits
+
+        limits = {"my-deepseek-proxy-v3": ModelLimits(128000, 8192, 32768)}
+        assert resolve_paper_max_tokens("my-deepseek-proxy-v3", 65536, limits) == 32768
+
+    def test_unknown_deepseek_without_declared_maximum_still_clamped(self):
+        assert resolve_paper_max_tokens("deepseek-unknown", 65536, {}) == 8192
+
+    def test_exact_known_ids_keep_hard_api_cap(self):
+        """Verified API caps apply even when the catalog says otherwise."""
+        from ask_llm.utils.model_limits import ModelLimits
+
+        limits = {"deepseek-chat": ModelLimits(128000, 8192, 999999)}
+        assert resolve_paper_max_tokens("deepseek-chat", 65536, limits) == 8192

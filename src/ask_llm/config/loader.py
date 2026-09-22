@@ -208,7 +208,9 @@ class ConfigLoader:
     def _resolve_config_path(cls, config_path: str | Path | None = None) -> Path:
         """Resolve configuration file path."""
         if config_path:
-            return Path(config_path)
+            # Audit 4.8: expanduser aligns --config with the diagnose/paper
+            # commands ('~/cfg/default_config.yml' quoted in shell).
+            return Path(config_path).expanduser()
 
         for path in cls.DEFAULT_CONFIG_PATHS:
             if path.exists():

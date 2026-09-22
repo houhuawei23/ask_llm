@@ -1,5 +1,6 @@
 """Token counting utilities."""
 
+import re
 from functools import lru_cache
 from typing import Any, ClassVar
 
@@ -190,24 +191,54 @@ class TokenCounter:
                 "for accurate counts."
             )
 
+    # Audit 4.4: word-count fallback floor. Whitespace word counts collapse
+    # CJK text (no spaces → whole paragraphs = 1 "word"), oversizing chunks
+    # until the provider rejects them. cl100k encodes a han character at
+    # ~1-2 tokens and ~4 latin characters at ~1 token, so a char-class mix is
+    # a far safer floor; for han-only text it lands at roughly
+    # 1/APPROX_TOKEN_SAFETY_FACTOR of the budget math's assumption — i.e.
+    # deliberately conservative.
+    _FALLBACK_CJK_RE = re.compile(r"[぀-ヿ㐀-鿿豈-﫿가-힯]")
+    _FALLBACK_CJK_TOKENS_PER_CHAR = 1.0
+    _FALLBACK_OTHER_CHARS_PER_TOKEN = 4.0
+
+    @classmethod
+    def _word_fallback_estimate(cls, text: str) -> int:
+        """Word count lifted by a CJK-aware character floor (tiktoken-free path)."""
+        try:
+            words = cls.count_words(text)
+        except Exception:
+            return 1
+        try:
+            cjk = len(cls._FALLBACK_CJK_RE.findall(text))
+            other = len(text) - cjk
+            char_estimate = int(
+                cjk * cls._FALLBACK_CJK_TOKENS_PER_CHAR
+                + other / cls._FALLBACK_OTHER_CHARS_PER_TOKEN
+            )
+        except TypeError:
+            # Non-str input (e.g. a test double): the word count is all we have.
+            return max(words, 1)
+        return max(words, char_estimate, 1)
+
     @staticmethod
     @lru_cache(maxsize=TOKEN_COUNT_CACHE_SIZE)
     def _count_tokens_cached(text: str, model: str | None) -> int:
         """Cache-backed token count implementation. See :meth:`count_tokens`."""
         if not TIKTOKEN_AVAILABLE:
             TokenCounter._warn_word_fallback_once()
-            return TokenCounter.count_words(text)
+            return TokenCounter._word_fallback_estimate(text)
 
         try:
             encoding = TokenCounter.get_encoding(model)
             if encoding is None:
                 TokenCounter._warn_word_fallback_once()
-                return TokenCounter.count_words(text)
+                return TokenCounter._word_fallback_estimate(text)
             return len(encoding.encode(text))
         except Exception as e:
             logger.debug(f"Token counting failed: {e}, falling back to word count")
             TokenCounter._warn_word_fallback_once()
-            return TokenCounter.count_words(text)
+            return TokenCounter._word_fallback_estimate(text)
 
     @classmethod
     def clear_cache(cls) -> None:

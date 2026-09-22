@@ -98,6 +98,13 @@ def _split_by_h2(text: str, *, keep_leading: bool) -> list[tuple[str, str]]:
     When the text has no ``##`` at all, returns ``[("", stripped_text)]`` (empty when
     blank) so callers can treat it as a single unsplit block.
     """
+    # Audit 4.2: offsets are computed with ``len(line) + 1`` assuming the only
+    # separator is "\n" — but splitlines() also drops "\r\n" (length 2) and a
+    # lone "\r", so CRLF files drifted the offset by 1 per line and the
+    # protected-range checks (fences) misaligned. Normalize up front: parse,
+    # offset math and the bodies actually sent to the LLM then agree.
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+
     structure = MarkdownStructure.parse(text)
 
     blocks: list[tuple[str, list[str]]] = []

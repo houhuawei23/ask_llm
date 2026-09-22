@@ -98,6 +98,12 @@ class BinarySplitter:
     injected :class:`BudgetPolicy`.
     """
 
+    # Audit 4.1: hard recursion cap for paragraph splitting. The find-based
+    # split-point search can make no progress on adversarial text; the offset
+    # fallback guarantees strictly smaller halves, and this cap is the last
+    # line of defense degrading to a forced token split.
+    _MAX_PARAGRAPH_DEPTH: int = 64
+
     def __init__(self, budget: BudgetPolicy):
         self.budget = budget
 
@@ -209,7 +215,7 @@ class BinarySplitter:
         return chunks
 
     def _split_by_paragraphs_binary(
-        self, text: str, start_pos: int, start_chunk_id: int
+        self, text: str, start_pos: int, start_chunk_id: int, depth: int = 0
     ) -> list[TextChunk]:
         if self.budget.fits(text):
             return [
@@ -221,6 +227,31 @@ class BinarySplitter:
                     metadata={"type": "paragraph_section"},
                 )
             ]
+
+        # Audit 4.1: depth cap — degrade to a forced token split rather than
+        # recursing further. Unreachable when the offset fallback below keeps
+        # making progress, but guarantees termination on any input.
+        if depth > self._MAX_PARAGRAPH_DEPTH:
+            logger.warning(
+                f"Paragraph split depth cap ({self._MAX_PARAGRAPH_DEPTH}) hit; "
+                "forcing a token split for this section."
+            )
+            chunks: list[TextChunk] = []
+            chunk_id = start_chunk_id
+            current_pos = start_pos
+            for piece in self.budget.hard_split(text):
+                chunks.append(
+                    TextChunk(
+                        content=piece,
+                        chunk_id=chunk_id,
+                        start_pos=current_pos,
+                        end_pos=current_pos + len(piece),
+                        metadata={"type": "hard_token_split"},
+                    )
+                )
+                chunk_id += 1
+                current_pos += len(piece)
+            return chunks
 
         paragraphs = re.split(r"\n\s*\n", text)
         paragraphs = [p.strip() for p in paragraphs if p.strip()]
@@ -254,23 +285,38 @@ class BinarySplitter:
                 else:
                     split_text_pos = para_start + len(paragraphs[i])
 
+        if not 0 < split_text_pos < len(text):
+            # Audit 4.1: merged $$ blocks (and stripped paragraphs) need not
+            # appear verbatim in the source — with custom "\n \n"-style
+            # separators every find() used to miss, leaving split_text_pos == 0
+            # and recursing on the IDENTICAL text until RecursionError (or the
+            # symmetric full-length case recursing on the whole left half).
+            # Fall back to a character-offset split: both halves are strictly
+            # smaller, so recursion terminates. Prefer a whitespace boundary
+            # near the midpoint so chunks don't start/end mid-word.
+            mid = max(1, len(text) // 2)
+            lo, hi = max(1, mid - 200), min(len(text), mid + 200)
+            candidates = [i for i in range(lo, hi) if text[i].isspace()]
+            split_text_pos = min(candidates, key=lambda i: abs(i - mid)) if candidates else mid
+            logger.debug("Paragraph find-miss; falling back to character-offset split.")
+
         left_text = text[:split_text_pos].rstrip()
         right_text = text[split_text_pos:].lstrip()
 
-        chunks: list[TextChunk] = []
+        chunks = []
         current_chunk_id = start_chunk_id
 
         if left_text.strip():
-            left_chunks = self._split_by_paragraphs_binary(left_text, start_pos, current_chunk_id)
+            left_chunks = self._split_by_paragraphs_binary(
+                left_text, start_pos, current_chunk_id, depth + 1
+            )
             chunks.extend(left_chunks)
             current_chunk_id += len(left_chunks)
 
         if right_text.strip():
-            right_start_pos = (
-                start_pos + len(left_text) + (len(text) - len(left_text) - len(right_text))
-            )
+            right_start_pos = start_pos + len(text) - len(right_text)
             right_chunks = self._split_by_paragraphs_binary(
-                right_text, right_start_pos, current_chunk_id
+                right_text, right_start_pos, current_chunk_id, depth + 1
             )
             chunks.extend(right_chunks)
 

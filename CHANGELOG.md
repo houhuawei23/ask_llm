@@ -2,8 +2,9 @@
 
 ## 2.24.0 (Unreleased)
 
-深度审查第二批 + 第三批：数据丢失与已付费工作保护（输出冲突预检、部分失败
-改判、checkpoint contract 补齐），重试/限流/并发正确性。660 测试全绿。
+深度审查第二批 + 第三批 + 第四批：数据丢失与已付费工作保护（输出冲突预检、
+部分失败改判、checkpoint contract 补齐），重试/限流/并发正确性，解析/成本/
+导出正确性。695 测试全绿。
 
 ### 行为变更（脚本/CI 需关注）
 
@@ -23,6 +24,11 @@
   阻塞 ~4 分钟。
 - **batch 并发改为按 (provider, model) 分池**：每个 lane 按自己的 burst 限额
   定并发，不再全 batch 被最紧的 provider 掐到它的下限。
+- **batch 导出尊重 --force**：输出目标已存在且未加 `--force` 时导出报错
+  （FileExistsError），不再静默覆盖；后缀无法识别格式时直接报错而不是把
+  JSON 写进 `.txt`。
+- **chat `!命令` 遇 shell 元字符明确拒绝**：`|;&<>()$\`` 不再被静默拆成
+  argv 字面量或升级 shell=True；引号包裹的参数照常执行。
 
 ### Added
 
@@ -42,6 +48,29 @@
 
 ### Fixed
 
+- `binary_splitter` 段落切分 find-miss → RecursionError（$$ 合成段落在自定义
+  分隔符下无法在原文中定位，同输入无限递归）：回退字符偏移切分（优先吸附空白
+  边界）+ 深度上限强制切分兜底，"切分拼接 == 原文"不变式保持。
+- paper_explain CRLF 文件的受保护区偏移漂移：`splitlines()` 丢 `\r\n` 但按
+  长度 1 计数，每行偏 1 字节使围栏检测错位；入口统一换行符后解析、偏移与
+  实际发送文本一致。
+- chunk_balance 合并保留双侧 metadata（原来 `{**a, **b}` 静默丢左侧 heading
+  等上下文）；输出 span 改为对源定位重算（splitter 会 strip、merge 会插
+  分隔符，原累计偏移全是漂移的假坐标）。
+- 成本估算区分 cache-hit 价：`format_cost_estimate` 接受
+  `input_cache_hit_tokens` 并显示命中价（DeepSeek 命中价约为输入价 1/10，
+  全按输入价计会大幅高估）。
+- tiktoken 缺失的 word-count 回退加 CJK 字符下限（无空格中文原来整段算 1 个
+  "word"，切分会严重超预算直到 provider 拒绝）。
+- DeepSeek 8192 子串钳制仅在 providers.yml 未声明 maximum 时生效（代理镜像
+  等自定义模型名不再被错误钳制）；已知精确模型 id 的硬上限仍然生效。
+- CSV 导出取消 100 字符截断（不再静默丢弃付费输出），单元格 `=,+,-,@` 前缀
+  `'` 防电子表格公式注入；markdown 导出中 LLM 输出加自适应长度 fence（内嵌
+  代码块不再破坏结构）。
+- fallback 链排除主端点本身并按 (provider, model) 去重（保留首次出现），
+  不再把刚失败的端点当 fallback 重试。
+- `md_path_discovery` glob 支持 `**` 递归；`--config` 支持 `~` 展开
+  （与 diagnose/paper 对齐）。
 - ask 的输出覆盖检查提前到 API 调用之前（原来在付费之后才检查）。
 - `trans` 输入解析支持 `~` 展开（引号包裹的 `'~/docs/*.md'` 不再 File not
   found），目录展开统一为绝对路径。

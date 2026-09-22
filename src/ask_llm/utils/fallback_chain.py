@@ -21,6 +21,10 @@ def build_fallback_chain(
     ``AppConfig``. If the provider is unknown or has no fallbacks, an empty
     list is returned.
 
+    Audit 4.7: entries equal to the primary ``(provider, model)`` are dropped —
+    listing the primary as its own fallback re-ran the endpoint that just
+    failed — and duplicates keep their first occurrence only.
+
     Args:
         app_config: Loaded application configuration.
         primary_config: The primary model configuration for the task.
@@ -33,7 +37,12 @@ def build_fallback_chain(
         return []
 
     result: list[ModelConfig] = []
+    seen: set[tuple[str, str]] = {(primary_config.provider, primary_config.model)}
     for fb in provider_cfg.fallback_to:
+        key = (fb.provider, fb.model)
+        if key in seen:
+            continue
+        seen.add(key)
         result.append(
             ModelConfig(
                 provider=fb.provider,

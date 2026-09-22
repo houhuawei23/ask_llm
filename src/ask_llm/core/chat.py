@@ -509,6 +509,27 @@ class ChatSession:
         env.pop(provider_env_var_name(self.provider.name), None)
         return env
 
+    _SHELL_METACHARS = "|;&<>()$`"
+
+    @classmethod
+    def _find_unquoted_metachar(cls, cmd: str) -> str | None:
+        """Return the first shell metachar outside quotes in *cmd*, else None.
+
+        Quoted metacharacters (``!grep "a|b" file``) are legitimate literal
+        arguments; unquoted ones only make sense under a real shell, which the
+        ``!`` escape deliberately does not provide (audit 4.6).
+        """
+        quote: str | None = None
+        for ch in cmd:
+            if quote:
+                if ch == quote:
+                    quote = None
+            elif ch in ("'", '"'):
+                quote = ch
+            elif ch in cls._SHELL_METACHARS:
+                return ch
+        return None
+
     def _handle_shell_command(self, cmd: str) -> bool:
         """
         Execute shell command.
@@ -537,30 +558,34 @@ class ChatSession:
         console.print(f"[dim]$ {cmd}[/dim]")
 
         try:
-            # Parse command safely - use shell=False for simple commands
-            # For complex shell features (pipes, redirects), we need shell=True
-            # This is intentional for interactive shell command execution
+            # Audit 4.6: !commands run through execv-style argv (no shell).
+            # The old shlex-then-shell=True fallback meant a command like
+            # "echo hi | grep hi" was silently executed as argv literals
+            # ("|" handed to echo as an argument), while anything that broke
+            # shlex escalated to a full shell. Metacharacters are now an
+            # explicit rejection — use quotes for literal arguments.
+            metachar = self._find_unquoted_metachar(cmd)
+            if metachar:
+                console.print_error(
+                    f"Shell metacharacter {metachar!r} is not supported in !commands "
+                    "(no shell interpolation). Quote the argument, or run the "
+                    "pipeline in a real shell."
+                )
+                return True
+
             try:
-                # Try to parse as a simple command without shell
                 cmd_parts = shlex.split(cmd)
-                result = subprocess.run(
-                    cmd_parts,
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
-                    env=self._scrubbed_shell_env(),
-                )
-            except ValueError:
-                # If parsing fails (e.g., contains shell operators), use shell=True
-                # This is intentional for interactive shell command execution
-                result = subprocess.run(  # nosec B602
-                    cmd,
-                    shell=True,
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
-                    env=self._scrubbed_shell_env(),
-                )
+            except ValueError as e:
+                console.print_error(f"Cannot parse command ({e}); balance your quotes and retry.")
+                return True
+
+            result = subprocess.run(
+                cmd_parts,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                env=self._scrubbed_shell_env(),
+            )
 
             if result.stdout:
                 console.print(result.stdout.rstrip())

@@ -288,3 +288,33 @@ def _split_by_h2_raw(text: str):
     from ask_llm.core.paper_explain import _split_by_h2
 
     return _split_by_h2(text, keep_leading=False)
+
+
+class TestAudit42CrlfOffsets:
+    """Audit 4.2: CRLF files must not drift the protected-range offset math."""
+
+    def test_crlf_fence_not_split_and_bodies_lf(self):
+        from ask_llm.core.paper_explain import split_markdown_ordered
+
+        text = (
+            "# Paper\r\n"
+            "\r\n"
+            "Intro paragraph before any heading.\r\n"
+            "```bash\r\n"
+            "## not a real heading inside a fence\r\n"
+            "echo hi\r\n"
+            "```\r\n"
+            "## Real Section\r\n"
+            "\r\n"
+            "Real body text.\r\n"
+        )
+
+        sections, order, headings = split_markdown_ordered(text)
+
+        assert order == ["extra:real-section"], f"order={order}"
+        # The fenced pseudo-heading must not have become a split point: it can
+        # only be inside some body, never a section of its own.
+        assert all("not a real heading" not in h for h in headings.values())
+        assert "Real body text." in sections["extra:real-section"]
+        # Bodies actually sent to the LLM are LF-normalized.
+        assert "\r" not in sections["extra:real-section"]

@@ -78,6 +78,13 @@ def batch(
             help="Split results into separate files (one file per task, content only)",
         ),
     ] = False,
+    force: Annotated[
+        bool,
+        typer.Option(
+            "--force",
+            help="Overwrite existing output files when exporting results",
+        ),
+    ] = False,
     verbose: Annotated[
         bool,
         typer.Option(
@@ -147,11 +154,21 @@ def batch(
                     ".md": "markdown",
                     ".markdown": "markdown",
                 }
-                output_format = extension_to_format.get(suffix, "json")
-                logger.debug(
-                    f"Auto-detected output format '{output_format}' from file extension '{suffix}'"
-                )
-            elif output_format is None:
+                detected = extension_to_format.get(suffix)
+                if suffix and detected is None:
+                    # Audit 4.5: an unknown extension no longer silently
+                    # exports JSON into e.g. a .txt target.
+                    raise typer.BadParameter(
+                        f"Cannot infer output format from extension '{suffix}' of "
+                        f"'{output}'. Pass --format explicitly."
+                    )
+                output_format = detected
+                if output_format is not None:
+                    logger.debug(
+                        f"Auto-detected output format '{output_format}' "
+                        f"from file extension '{suffix}'"
+                    )
+            if output_format is None:
                 output_format = batch_cfg.default_output_format
 
             if verbose:
@@ -186,6 +203,7 @@ def batch(
                 output_format,
                 split=split,
                 separate_files=separate_files,
+                force=force,
             )
             service.export_report(report)
 

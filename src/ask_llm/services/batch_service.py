@@ -405,6 +405,7 @@ class BatchService:
         *,
         split: bool = False,
         separate_files: bool = False,
+        force: bool = False,
     ) -> BatchExportResult:
         """Export batch results according to the selected mode.
 
@@ -413,6 +414,8 @@ class BatchService:
             output_format: Output format (json, yaml, csv, markdown).
             split: Export one file per original task.
             separate_files: Export one file per model when multiple models were used.
+            force: Overwrite existing output files (audit 4.5); without it an
+                existing target raises ``FileExistsError``.
 
         Returns:
             BatchExportResult with exported paths and mode.
@@ -426,18 +429,20 @@ class BatchService:
             raise ValueError("No providers were successfully processed. Cannot generate results.")
 
         if split:
-            return self._export_split(output, output_format, grouped)
+            return self._export_split(output, output_format, grouped, force=force)
 
         if separate_files and len(self.run_result.validated_models) > 1:
-            return self._export_separate(output, output_format, grouped)
+            return self._export_separate(output, output_format, grouped, force=force)
 
-        return self._export_single(output, output_format)
+        return self._export_single(output, output_format, force=force)
 
     def _export_split(
         self,
         output: str | None,
         output_format: str,
         grouped: dict[str, list[BatchResult]],
+        *,
+        force: bool = False,
     ) -> BatchExportResult:
         """Export split files: one file per (task, model) answer.
 
@@ -492,7 +497,7 @@ class BatchService:
             output_dir = str(config_file_path.parent / self.batch_cfg.batch_output_dir)
 
         exported_files = BatchResultExporter.export_split_files(
-            deduped_results, output_dir, self.run_result.batch_mode
+            deduped_results, output_dir, self.run_result.batch_mode, force=force
         )
         console.print()
         console.print_success(f"Results exported to {len(exported_files)} files in: {output_dir}")
@@ -505,6 +510,8 @@ class BatchService:
         output: str | None,
         output_format: str,
         grouped: dict[str, list[BatchResult]],
+        *,
+        force: bool = False,
     ) -> BatchExportResult:
         """Export separate files per model."""
         output_dir = output or self.batch_cfg.batch_results_dir
@@ -514,6 +521,7 @@ class BatchService:
             output_dir,
             output_format,
             self.run_result.batch_mode,
+            force=force,
         )
         console.print()
         console.print_success(f"Results exported to {len(exported_files)} files:")
@@ -521,7 +529,9 @@ class BatchService:
             console.print(f"  - {file_path}")
         return BatchExportResult(exported_paths=exported_files, export_mode="separate")
 
-    def _export_single(self, output: str | None, output_format: str) -> BatchExportResult:
+    def _export_single(
+        self, output: str | None, output_format: str, *, force: bool = False
+    ) -> BatchExportResult:
         """Export all results to a single file."""
         combined_results = self._combined_results()
         combined_stats = BatchStatistics.combined_from_results(combined_results)
@@ -536,7 +546,7 @@ class BatchService:
             )
 
         exporter = BatchResultExporter(combined_results, combined_stats, self.run_result.batch_mode)
-        exported_file = exporter.export(output_path, output_format)
+        exported_file = exporter.export(output_path, output_format, force=force)
         console.print()
         console.print_success(f"Results exported to: {exported_file}")
         return BatchExportResult(exported_paths=[exported_file], export_mode="single")

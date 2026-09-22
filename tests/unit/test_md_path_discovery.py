@@ -92,3 +92,29 @@ class TestDiscoverMarkdownFiles:
         names = {p.name for p in out}
         assert "root.md" in names
         assert "nested.md" not in names
+
+
+class TestAudit48RecursiveGlob:
+    """Audit 4.8: '**' patterns recurse; _resolve_config_path expands '~'."""
+
+    def test_doublestar_glob_recurses_into_subdirectories(self, tmp_path):
+        from ask_llm.utils.md_path_discovery import _expand_glob_or_literal
+
+        (tmp_path / "top.md").write_text("# top", encoding="utf-8")
+        nested = tmp_path / "a" / "b"
+        nested.mkdir(parents=True)
+        (nested / "deep.md").write_text("# deep", encoding="utf-8")
+
+        matches = _expand_glob_or_literal(str(tmp_path / "**" / "*.md"))
+        names = {p.name for p in matches}
+        assert names == {"top.md", "deep.md"}
+
+    def test_config_path_expanduser(self, monkeypatch):
+        from pathlib import Path
+
+        from ask_llm.config.loader import ConfigLoader
+
+        monkeypatch.setenv("HOME", str(Path("/tmp/fakehome")))
+        resolved = ConfigLoader._resolve_config_path("~/cfg/default_config.yml")
+        assert resolved == Path("/tmp/fakehome/cfg/default_config.yml")
+        assert not str(resolved).startswith("~")

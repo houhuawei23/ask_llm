@@ -101,3 +101,50 @@ def test_from_initial_context_rolls_back_user_message_on_failure():
     session = ChatSession.from_initial_context(provider, model="m1", initial_context="ctx")
 
     assert session.history.messages == []
+
+
+class TestAudit46ShellMetachar:
+    """Audit 4.6: !commands with shell metacharacters are rejected, not mangled."""
+
+    def test_metachar_detection(self):
+        from ask_llm.core.chat import ChatSession
+
+        assert ChatSession._find_unquoted_metachar("echo hi | grep hi") == "|"
+        assert ChatSession._find_unquoted_metachar("ls > out.txt") == ">"
+        assert ChatSession._find_unquoted_metachar("echo $HOME") == "$"
+        assert ChatSession._find_unquoted_metachar("echo `whoami`") == "`"
+        # Quoted metacharacters are legitimate literal arguments.
+        assert ChatSession._find_unquoted_metachar('grep "a|b" file.txt') is None
+        assert ChatSession._find_unquoted_metachar("echo 'it; ok'") is None
+        assert ChatSession._find_unquoted_metachar("plain command --flag") is None
+
+    def test_pipe_command_rejected_not_argv_split(self):
+        """'echo hi | grep hi' must not run with | as an argv literal."""
+        from unittest.mock import MagicMock, patch
+
+        provider = FakeProvider()
+        session = ChatSession.from_initial_context(provider, model="m1")
+
+        run = MagicMock()
+        with patch("ask_llm.core.chat.subprocess.run", run):
+            handled = session._handle_shell_command("echo hi | grep hi")
+
+        assert handled is True
+        run.assert_not_called()  # nothing executed
+
+    def test_quoted_metachar_still_executes(self):
+        from unittest.mock import MagicMock, patch
+
+        provider = FakeProvider()
+        session = ChatSession.from_initial_context(provider, model="m1")
+
+        completed = MagicMock(returncode=0, stdout="a|b", stderr="")
+        run = MagicMock(return_value=completed)
+        with patch("ask_llm.core.chat.subprocess.run", run):
+            handled = session._handle_shell_command('grep "a|b" file.txt')
+
+        assert handled is True
+        run.assert_called_once()
+        # argv form: the quoted | is one literal argument, never a shell pipe.
+        argv = run.call_args.args[0]
+        assert argv == ["grep", "a|b", "file.txt"]

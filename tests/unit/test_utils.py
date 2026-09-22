@@ -228,3 +228,27 @@ class TestEncodingSelection:
     def test_new_cjk_providers_are_approximate(self, model):
         """Kimi/GLM/MiniMax must get the approximate-model safety factor."""
         assert TokenCounter.is_approximate_model(model)
+
+
+class TestAudit44WordFallbackFloor:
+    """Audit 4.4: the tiktoken-free fallback must not collapse CJK to 1 'word'."""
+
+    def test_cjk_text_gets_char_proportional_floor(self):
+        from ask_llm.utils.token_counter import TokenCounter
+
+        text = "这是一段没有空格的中文文本"  # 13 han chars; whitespace count == 1
+        estimate = TokenCounter._word_fallback_estimate(text)
+        assert estimate >= len(text)
+
+    def test_latin_text_keeps_word_count(self):
+        from ask_llm.utils.token_counter import TokenCounter
+
+        text = "hello world this is a plain sentence"
+        estimate = TokenCounter._word_fallback_estimate(text)
+        assert estimate >= len(text.split())
+        assert estimate <= len(text)  # sanity: floor never exceeds char count
+
+    def test_empty_text_returns_one(self):
+        from ask_llm.utils.token_counter import TokenCounter
+
+        assert TokenCounter._word_fallback_estimate("") >= 1

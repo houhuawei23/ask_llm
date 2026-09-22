@@ -93,8 +93,16 @@ def format_cost_estimate(
     pricing_map: dict[tuple[str, str], dict[str, float]],
     *,
     pricing_source: Path | None = None,
+    input_cache_hit_tokens: int = 0,
 ) -> str:
-    """Human-readable lines for console (no leading/trailing newlines)."""
+    """Human-readable lines for console (no leading/trailing newlines).
+
+    ``input_cache_hit_tokens`` (audit 4.4): the prompt-cached portion of the
+    input is billed at the cache-hit rate — for DeepSeek the hit rate is
+    ~1/10th of the miss rate, so pricing cached tokens at the full input rate
+    overestimated real cost by a wide margin. Callers pass the hit total when
+    their telemetry carries it (0 = unknown, billed at the input rate).
+    """
     total = input_tokens + output_tokens
     lines = [
         f"  Tokens: input={input_tokens:,}  output={output_tokens:,}  total={total:,}",
@@ -102,9 +110,18 @@ def format_cost_estimate(
     row = lookup_pricing(pricing_map, provider, model)
     src = f" ({pricing_source.name})" if pricing_source else ""
     if row is not None:
-        cny = estimate_cost_cny(row, input_tokens, output_tokens)
+        cny = estimate_cost_cny(
+            row,
+            input_tokens,
+            output_tokens,
+            input_cache_hit_tokens=input_cache_hit_tokens,
+        )
+        hit_note = (
+            f", ¥{row['input_cache_hit']:.2f}/M cached-in" if row.get("input_cache_hit") else ""
+        )
         lines.append(
-            f"  Estimated cost (CNY){src}: ¥{cny:.4f}  (pricing: ¥{row['input']:.2f}/M in, ¥{row['output']:.2f}/M out)"
+            f"  Estimated cost (CNY){src}: ¥{cny:.4f}  "
+            f"(pricing: ¥{row['input']:.2f}/M in{hit_note}, ¥{row['output']:.2f}/M out)"
         )
     else:
         lines.append(

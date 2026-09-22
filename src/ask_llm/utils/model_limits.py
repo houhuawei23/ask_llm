@@ -18,8 +18,17 @@ _DEEPSEEK_API_MAX_TOKENS: dict[str, int] = {
 }
 
 
-def _deepseek_http_max_tokens_cap(model: str | None) -> int | None:
-    """Return API ``max_tokens`` ceiling for known DeepSeek model ids; ``None`` if not DeepSeek."""
+def _deepseek_http_max_tokens_cap(
+    model: str | None, declared_maximum: int | None = None
+) -> int | None:
+    """Return API ``max_tokens`` ceiling for known DeepSeek model ids; ``None`` if not DeepSeek.
+
+    Audit 4.4: the blanket ``8192`` guess for *unknown* DeepSeek-named models
+    now yields to an explicit ``providers.yml`` ``max_output.maximum`` — a
+    substring match ("my-deepseek-proxy") used to clamp models the catalog
+    deliberately configured higher. Exact, verified model ids keep their hard
+    API cap regardless.
+    """
     if not model:
         return None
     key = model.strip().lower()
@@ -27,6 +36,8 @@ def _deepseek_http_max_tokens_cap(model: str | None) -> int | None:
         return None
     if key in _DEEPSEEK_API_MAX_TOKENS:
         return _DEEPSEEK_API_MAX_TOKENS[key]
+    if declared_maximum is not None:
+        return None
     return 8192
 
 
@@ -108,11 +119,13 @@ def resolve_paper_max_tokens(
     except (TypeError, ValueError):
         r = 8192
     r = max(1, r)
+    declared_maximum: int | None = None
     if model and limits_by_model:
         key = model.strip()
         if key in limits_by_model:
-            r = min(r, limits_by_model[key].max_output_maximum)
-    cap = _deepseek_http_max_tokens_cap(model)
+            declared_maximum = limits_by_model[key].max_output_maximum
+            r = min(r, declared_maximum)
+    cap = _deepseek_http_max_tokens_cap(model, declared_maximum)
     if cap is not None:
         r = min(r, cap)
     return r

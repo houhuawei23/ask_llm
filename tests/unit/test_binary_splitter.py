@@ -181,3 +181,55 @@ class TestSentenceSplitLosslessness:
         chunks = _split(para, 100)
         assert len(chunks) > 1
         assert self._normalized_join(chunks) == " ".join(para.split())
+
+
+class TestAudit41NoProgressFallback:
+    """Audit 4.1: find-miss on merged $$ paragraphs must not recurse forever."""
+
+    @staticmethod
+    def _dollar_doc(blocks: int = 8, filler: int = 80) -> str:
+        """Paragraph pairs separated by '\\n \\n' (custom separator).
+
+        Each display-math block merges with its predecessor into a *synthetic*
+        string ("para\\n\\n$$...$$") that does not appear verbatim in the
+        source, so the find-based split-point search misses on every candidate.
+        """
+        parts = []
+        for i in range(blocks):
+            parts.append(f"Paragraph {i} " + ("content " * filler))
+            parts.append("$$\ne^{i\\pi} + 1 = 0\n$$")
+        return "\n \n".join(parts)
+
+    @staticmethod
+    def _normalized_join(chunks) -> str:
+        return " ".join(" ".join(c.content.split()) for c in chunks).strip()
+
+    def test_dollar_blocks_with_custom_separator_no_recursion_error(self):
+        text = self._dollar_doc()
+        chunks = _split(text, 150)  # must not raise RecursionError
+        assert len(chunks) > 1
+        # Losslessness invariant: split+join equals the source (normalized).
+        assert self._normalized_join(chunks) == " ".join(text.split())
+
+    def test_no_progress_falls_back_to_offset_split(self):
+        """A total find-miss splits at a character offset instead of recursing
+        on identical input — both halves strictly smaller than the whole."""
+        text = self._dollar_doc(blocks=6, filler=40)
+        chunks = _split(text, 120)
+        assert chunks, "must produce chunks"
+        assert self._normalized_join(chunks) == " ".join(text.split())
+        # The fallback genuinely made progress: more than one chunk.
+        assert len(chunks) >= 2
+
+    def test_depth_cap_degrades_to_forced_split(self):
+        """The explicit depth cap hard-splits instead of recursing further."""
+        splitter = BinarySplitter(TokenBudget(model=MODEL, max_tokens=10))
+        text = "AAAA " * 500  # never fits, no sentence separators
+        # Call past the cap directly: must return hard-token-split chunks.
+        chunks = splitter._split_by_paragraphs_binary(text, 0, 0, splitter._MAX_PARAGRAPH_DEPTH + 1)
+        assert chunks
+        assert all(c.metadata["type"] == "hard_token_split" for c in chunks)
+        # Forced token splits may cut mid-token and trim boundary whitespace;
+        # content equality is checked whitespace-insensitively.
+        joined = "".join(c.content for c in chunks)
+        assert " ".join(joined.split()) == " ".join(text.split())

@@ -10,14 +10,30 @@ import yaml
 from loguru import logger
 
 from ask_llm.core.batch_models import BatchResult, BatchStatistics, TaskStatus
-from ask_llm.utils.export_formats import detect_export_format
 from ask_llm.utils.file_handler import FileHandler
 
 
 class BatchResultExporter:
-    """Export batch processing results to various formats."""
+    """Export batch processing results to various formats.
+
+    Audit 4.5: exports respect ``force`` — an existing target raises
+    ``FileExistsError`` instead of being silently overwritten; auto-detected
+    formats refuse unrecognized extensions rather than defaulting to JSON
+    (JSON content never lands in a ``.txt``); CSV cells are neutralized
+    against spreadsheet formula injection; LLM responses are fenced in
+    Markdown exports.
+    """
 
     SUPPORTED_FORMATS: ClassVar[list[str]] = ["json", "yaml", "csv", "markdown"]
+
+    # Auto-detection extension map; unknown extensions are rejected instead of
+    # silently exporting JSON (audit 4.5).
+    _FORMAT_EXTENSIONS: ClassVar[dict[str, tuple[str, ...]]] = {
+        "json": (".json",),
+        "yaml": (".yaml", ".yml"),
+        "csv": (".csv",),
+        "markdown": (".md", ".markdown"),
+    }
 
     def __init__(
         self,
@@ -53,7 +69,9 @@ class BatchResultExporter:
 
         return "prompt-contents" if all_same_prompt else "prompt-content-pairs"
 
-    def export(self, output_path: str, format_type: str | None = None) -> str:
+    def export(
+        self, output_path: str, format_type: str | None = None, *, force: bool = False
+    ) -> str:
         """
         Export results to file.
 
@@ -61,18 +79,22 @@ class BatchResultExporter:
             output_path: Output file path
             format_type: Output format (json, yaml, csv, markdown).
                 If None, will be auto-detected from file extension.
+            force: Overwrite an existing output file. When False (audit 4.5),
+                an existing target raises ``FileExistsError``.
 
         Returns:
             Path to exported file
 
         Raises:
-            ValueError: If format is not supported
+            ValueError: If format is not supported, or the extension is not
+                recognized while auto-detecting.
+            FileExistsError: If the target exists and ``force`` is False.
         """
         output_file = Path(output_path)
 
         # Auto-detect format from file extension if not specified
         if format_type is None:
-            format_type = detect_export_format(output_path, default="json")
+            format_type = self._detect_format_from_suffix(output_file)
             logger.debug(f"Auto-detected format '{format_type}' from extension")
         else:
             format_type = format_type.lower()
@@ -85,7 +107,6 @@ class BatchResultExporter:
 
         # Generate output path if needed (add extension if missing)
         if not output_file.suffix:
-            # Map format to extension
             format_to_extension = {
                 "json": ".json",
                 "yaml": ".yaml",
@@ -97,23 +118,42 @@ class BatchResultExporter:
 
         # Export based on format
         if format_type == "json":
-            self._export_json(str(output_file))
+            self._export_json(str(output_file), force=force)
         elif format_type == "yaml":
             content = self._export_yaml()
-            FileHandler.write(str(output_file), content, force=True)
+            FileHandler.write(str(output_file), content, force=force)
         elif format_type == "csv":
             content = self._export_csv()
-            FileHandler.write(str(output_file), content, force=True)
+            FileHandler.write(str(output_file), content, force=force)
         elif format_type == "markdown":
             content = self._export_markdown()
-            FileHandler.write(str(output_file), content, force=True)
+            FileHandler.write(str(output_file), content, force=force)
         else:
             raise ValueError(f"Unsupported format: {format_type}")
 
         logger.info(f"Exported {len(self.results)} results to {output_file}")
         return str(output_file)
 
-    def _export_json(self, output_path: str) -> None:
+    @classmethod
+    def _detect_format_from_suffix(cls, output_file: Path) -> str:
+        """Map a file extension to an export format; unknown ones are an error.
+
+        The previous behavior defaulted unknown extensions to JSON, quietly
+        writing JSON payload into e.g. a ``.txt`` file (audit 4.5).
+        """
+        suffix = output_file.suffix.lower()
+        for fmt, extensions in cls._FORMAT_EXTENSIONS.items():
+            if suffix in extensions:
+                return fmt
+        shown = suffix if suffix else "(none)"
+        raise ValueError(
+            f"Cannot infer export format from extension '{shown}' of "
+            f"'{output_file.name}'. Supported extensions: "
+            + ", ".join(ext for exts in cls._FORMAT_EXTENSIONS.values() for ext in exts)
+            + " — or pass --format explicitly."
+        )
+
+    def _export_json(self, output_path: str, *, force: bool = False) -> None:
         """Export results as JSON using a streaming encoder.
 
         For large result sets this avoids materializing the entire JSON string in
@@ -122,6 +162,10 @@ class BatchResultExporter:
         used by the yaml/csv/markdown exports (H10).
         """
         output_file = Path(output_path)
+        if output_file.exists() and not force:
+            raise FileExistsError(
+                f"Output file already exists: {output_path}. Use --force to overwrite."
+            )
         output_file.parent.mkdir(parents=True, exist_ok=True)
         tmp_file = output_file.with_suffix(output_file.suffix + ".tmp")
         encoder = json.JSONEncoder(indent=2, ensure_ascii=False, default=str)
@@ -141,8 +185,20 @@ class BatchResultExporter:
             str, yaml.dump(data, default_flow_style=False, allow_unicode=True, sort_keys=False)
         )
 
+    # Audit 4.5: spreadsheet formula-injection guard. A cell starting with one
+    # of these characters is executed by Excel/Sheets when the CSV is opened;
+    # prefixing a single quote forces text interpretation.
+    _CSV_INJECTION_PREFIXES: ClassVar[tuple[str, ...]] = ("=", "+", "-", "@", "\t", "\r")
+
+    @classmethod
+    def _csv_safe(cls, value: str) -> str:
+        """Neutralize spreadsheet formula injection in a CSV cell."""
+        if value.startswith(cls._CSV_INJECTION_PREFIXES):
+            return "'" + value
+        return value
+
     def _export_csv(self) -> str:
-        """Export results as CSV."""
+        """Export results as CSV (full content, injection-neutralized)."""
         import io
 
         output = io.StringIO()
@@ -166,20 +222,19 @@ class BatchResultExporter:
             ]
         )
 
-        # Write rows
+        # Write rows — full prompt/content/response, no truncation (audit 4.5):
+        # the 100-character cut silently dropped most of the paid-for output.
         for result in self.results:
             writer.writerow(
                 [
                     result.task_id,
-                    result.status.value,
-                    result.model_settings.provider,
-                    result.model_settings.model,
-                    result.prompt[:100] + "..." if len(result.prompt) > 100 else result.prompt,
-                    result.content[:100] + "..." if len(result.content) > 100 else result.content,
-                    result.response[:100] + "..."
-                    if result.response and len(result.response) > 100
-                    else (result.response or ""),
-                    result.error or "",
+                    self._csv_safe(result.status.value),
+                    self._csv_safe(result.model_settings.provider),
+                    self._csv_safe(result.model_settings.model),
+                    self._csv_safe(result.prompt),
+                    self._csv_safe(result.content),
+                    self._csv_safe(result.response or ""),
+                    self._csv_safe(result.error or ""),
                     f"{result.metadata.latency:.2f}" if result.metadata else "",
                     result.metadata.input_tokens if result.metadata else "",
                     result.metadata.output_tokens if result.metadata else "",
@@ -188,6 +243,18 @@ class BatchResultExporter:
             )
 
         return output.getvalue()
+
+    @staticmethod
+    def _markdown_fence(payload: str) -> list[str]:
+        """Return *payload* wrapped in a code fence that survives embedded backticks.
+
+        The fence grows one backtick beyond the longest run inside the payload,
+        so LLM output containing its own code blocks cannot break out (audit 4.5).
+        """
+        runs = re.findall(r"`+", payload)
+        longest = max((len(r) for r in runs), default=0)
+        fence = "`" * max(3, longest + 1)
+        return [fence, payload, fence]
 
     def _export_markdown(self) -> str:
         """Export results as Markdown with format-aware structure."""
@@ -272,7 +339,7 @@ class BatchResultExporter:
                 lines.append("")
                 lines.append("**Answer:**")
                 lines.append("")
-                lines.append(result.response or "")
+                lines.extend(self._markdown_fence(result.response or ""))
                 lines.append("")
                 if result.metadata:
                     lines.append(
@@ -315,7 +382,7 @@ class BatchResultExporter:
                 lines.append("")
                 lines.append("**Answer:**")
                 lines.append("")
-                lines.append(result.response or "")
+                lines.extend(self._markdown_fence(result.response or ""))
                 lines.append("")
                 if result.metadata:
                     lines.append(
@@ -371,6 +438,8 @@ class BatchResultExporter:
         output_dir: str,
         format_type: str = "json",
         batch_mode: str | None = None,
+        *,
+        force: bool = False,
     ) -> list[str]:
         """
         Export results grouped by model to separate files.
@@ -381,6 +450,7 @@ class BatchResultExporter:
             output_dir: Output directory
             format_type: Output format
             batch_mode: Batch mode ('prompt-contents' or 'prompt-content-pairs')
+            force: Overwrite existing files (audit 4.5)
 
         Returns:
             List of exported file paths
@@ -400,7 +470,7 @@ class BatchResultExporter:
             )
 
             exporter = cls(results, statistics, batch_mode)
-            file_path = exporter.export(str(output_path / filename), format_type)
+            file_path = exporter.export(str(output_path / filename), format_type, force=force)
             exported_files.append(file_path)
 
         return exported_files
@@ -411,6 +481,8 @@ class BatchResultExporter:
         results: list[BatchResult],
         output_dir: str,
         batch_mode: str | None = None,  # noqa: ARG003
+        *,
+        force: bool = False,
     ) -> list[str]:
         """
         Export each task result to a separate file.
@@ -420,6 +492,8 @@ class BatchResultExporter:
             results: List of batch results
             output_dir: Output directory path
             batch_mode: Batch mode (not used in split mode, kept for API consistency)
+            force: Overwrite existing files (audit 4.5). Filename conflicts
+                within this export still resolve via ``_N`` suffixes.
 
         Returns:
             List of exported file paths
@@ -467,13 +541,13 @@ class BatchResultExporter:
 
             # Write only the response content (if available)
             if result.response:
-                FileHandler.write(str(file_path), result.response, force=True)
+                FileHandler.write(str(file_path), result.response, force=force)
                 exported_files.append(str(file_path))
                 logger.debug(f"Exported task {result.task_id} to {file_path}")
             else:
                 # If no response (failed task), create empty file or skip
                 # Option: create empty file to indicate task was processed
-                FileHandler.write(str(file_path), "", force=True)
+                FileHandler.write(str(file_path), "", force=force)
                 exported_files.append(str(file_path))
                 logger.warning(
                     f"Task {result.task_id} has no response, created empty file: {file_path}"
