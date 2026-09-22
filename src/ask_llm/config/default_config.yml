@@ -7,8 +7,9 @@
 # Search order for default_config.yml:
 #   --config > ./default_config.yml > ~/.config/ask_llm/ > /etc/ask_llm/ > package built-in
 #
-# Search order for providers.yml:
-#   ASK_LLM_PROVIDERS_YML > ./providers.yml > package root > ~/.config/ask_llm/
+# Search order for providers.yml (L11/2.25 — cwd removed for credential
+# safety in 2.23):
+#   ASK_LLM_PROVIDERS_YML > ~/.config/ask_llm/ > package built-in
 
 # === 1. General/Global Defaults ===
 general:

@@ -309,9 +309,8 @@ class TranslationService:
 
     def _print_session_total(self, session_result: TranslationSessionResult) -> None:
         """Print aggregate token/cost summary when more than one file was processed."""
-        processed_file_count = len([r for r in session_result.job_results if r.success]) + len(
-            [r for r in session_result.job_results if not r.success]
-        )
+        # L8/2.25: success + failure is just every job result — one len() call.
+        processed_file_count = len(session_result.job_results)
         if processed_file_count > 1:
             console.print()
             console.print("[bold]Session total (all files)[/bold]")

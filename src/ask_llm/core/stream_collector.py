@@ -45,7 +45,9 @@ def stream_and_collect(
     Returns:
         ``(response, reasoning, output_token_count, latency_seconds)``.
     """
-    start_time = time.time()
+    # L4/2.25: perf_counter for durations — time.time() steps with NTP/DST
+    # and can distort measured latency.
+    start_time = time.perf_counter()
     response_parts: list[str] = []
     reasoning_parts: list[str] = []
     output_token_count = 0
@@ -91,5 +93,5 @@ def stream_and_collect(
 
     response = "".join(response_parts).strip()
     reasoning = "".join(reasoning_parts).strip() if reasoning_parts else None
-    latency = time.time() - start_time
+    latency = time.perf_counter() - start_time
     return response, reasoning, output_token_count, latency

@@ -87,3 +87,26 @@ class TestValidateMultiInputOutput:
 
     def test_inplace_bypasses(self, md_tree):
         validate_multi_input_output(str(md_tree / "combined.md"), 3, inplace=True)
+
+
+def test_explicit_binary_file_is_skipped(tmp_path, capsys):
+    """L10/2.25: explicitly-passed binary files are blocked with a clear
+    warning instead of failing later with a decode error."""
+    import os
+
+    from ask_llm.utils.path_resolver import resolve_trans_input_paths
+
+    img = tmp_path / "logo.png"
+    img.write_bytes(b"\x89PNG\r\n\x1a\n")
+    out = resolve_trans_input_paths([str(img)], [".md", ".txt"], recursive_dir=False)
+    assert out == []
+
+
+def test_unknown_text_extension_warns_but_is_kept(tmp_path):
+    """L10/2.25: permissive contract preserved for unknown text-like files."""
+    from ask_llm.utils.path_resolver import resolve_trans_input_paths
+
+    f = tmp_path / "notes.rst"
+    f.write_text("hello", encoding="utf-8")
+    out = resolve_trans_input_paths([str(f)], [".md", ".txt"], recursive_dir=False)
+    assert len(out) == 1 and out[0].endswith("notes.rst")

@@ -189,9 +189,9 @@ class HeadingFormatter(ChunkedLLMJob):
             processor: RequestProcessor instance for LLM API calls
             prompt_template: Custom prompt template (overrides default)
             prompt_file: Path to prompt template file (overrides prompt_template)
-            batch_size: Max headings per API call (default 80). Use smaller value
+            batch_size: Max headings per API call (default 160). Use smaller value
                 if LLM output is truncated.
-            concurrency: Max concurrent API calls (default 4). Set to 1 to disable.
+            concurrency: Max concurrent API calls (default 8). Set to 1 to disable.
             retries: Max retry attempts per batch (default from config)
             retry_delay: Initial retry delay in seconds (default from config)
             retry_delay_max: Max retry delay cap in seconds (default from config)

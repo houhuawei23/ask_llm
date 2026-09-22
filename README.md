@@ -114,20 +114,28 @@ ask-llm batch config.yml --log-format json
 | `ask-llm ask --system`          | Add system prompt for one-shot behavior control                           |
 | `ask-llm ask --include-reasoning` | Show chain-of-thought from reasoner models                              |
 | `ask-llm ask --dry-run`         | Preview prompt and token estimate (no API call)                           |
+| `ask-llm ask --max-tokens`      | Cap completion tokens (2.25)                                              |
 | `ask-llm chat`                  | Start interactive chat                                                    |
+| `ask-llm chat /save`            | Save a chat session, resumable with `--resume` (2.24)                     |
 | `ask-llm chat /search`          | Search message history                                                    |
 | `ask-llm chat /export`          | Export conversation to JSON/Markdown/TXT                                  |
 | `ask-llm trans [FILES...]`      | Translate files (supports directory and glob)                             |
 | `ask-llm trans --glossary`      | Use terminology glossary for consistent translations                      |
 | `ask-llm trans --no-stream-api` | Use non-streaming API calls for higher batch throughput                   |
+| `ask-llm trans --dry-run`       | Estimate chunks/tokens/cost, zero network (2.24)                          |
+| `ask-llm trans --report`        | Export a structured execution report (2.24)                               |
+| `ask-llm format [FILES...]`     | LLM markdown formatting: heading levels (`--type title`) or body (`--type body`); supports `--inplace`, `--resume`, dirs/globs (2.25) |
+| `ask-llm format --dry-run`      | Estimate chunks/requests/cost without API calls (2.25)                    |
 | `ask-llm paper -i PATH`         | Explain a paper: outputs under `./explain/` next to the file or directory |
 | `ask-llm paper --dry-run`       | Preview sections and token estimates                                      |
 | `ask-llm paper --resume`        | Skip completed sections when resuming                                     |
 | `ask-llm batch [CONFIG]`        | Process batch tasks from YAML config                                      |
-| `ask-llm diagnose REPORT`       | Summarize an execution report produced by `--report`                      |
+| `ask-llm batch --dry-run`       | Estimate requests/tokens/cost without API calls (2.24)                    |
+| `ask-llm diagnose REPORT`       | Summarize an execution report produced by `--report` (adds cost estimate in 2.25) |
 | `ask-llm config show`           | Display configuration                                                     |
 | `ask-llm config test`           | Test API connections                                                      |
-| `ask-llm config init`           | Create example config                                                     |
+| `ask-llm config init`           | Create example config (`--yes` to overwrite without prompting, 2.25)      |
+| `ask-llm config get/set KEY`    | Read or write a single config value (2.24)                                |
 
 ### Ollama (Local LLM)
 
@@ -172,7 +180,7 @@ See [docs/BATCH_USAGE.md](docs/BATCH_USAGE.md) for detailed batch processing doc
 - **Output**: `<input_dir>/explain/` (or next to the `.md` file). Files are **numbered in document order**, e.g. `0-meta.explain.md`, `1-abstract.explain.md`, …, `N-full.explain.md`. Recognized **CS/AI-oriented** section titles (among others) map to dedicated prompts: e.g. **Related Work** → `section-related-work.md`, **Model Architecture** → `section-model-architecture.md`. Headings that still do not match any canonical key use `section-generic.md` (`extra:…` keys, filenames like `3-model-architecture.explain.md`). Large **Appendix** sidecars split by `##` use `d-appendices-<slug>.explain.md`.
 - **Preamble**: each output file starts with a short **说明** block (source slice + prompt path + one-line summary of the analysis prompt).
 - **Length & models**: `paper.max_output_tokens` is the requested completion cap; the CLI sets API `max_tokens` to **min(requested, `max_output.maximum`)** from `providers.yml` for that model. **DeepSeek** HTTP caps differ by model: **`deepseek-chat`** ≤8192, **`deepseek-reasoner`** ≤65536 (then `min` with YAML). The **full-document** job (`full`) uses `paper.full_model` (default `deepseek-reasoner`). When the API returns reasoning content, it is written under **推理过程（思维链）** before **正文解析**. On API errors, the log includes **`model=`** and **`max_tokens=`** (from `llm_engine`).
-- **Concurrency**: section jobs use **`GlobalBatchProcessor.process_global_tasks`** (same pipeline as `ask-llm trans`): each job gets its own provider/HTTP client, with Rich per-task progress. Default `paper.concurrency` (e.g. `20`); override with `ask-llm paper -i ... -j 8`. Use `1` to force sequential calls.
+- **Concurrency**: section jobs use **`GlobalBatchProcessor.process_global_tasks`** (same pipeline as `ask-llm trans`): each job gets its own provider/HTTP client, with Rich per-task progress. Default `paper.concurrency` (`32` in the packaged config; pydantic fallback `5`); override with `ask-llm paper -i ... -j 8`. Use `1` to force sequential calls.
 - **Prompts**: canonical tree is `prompts/paper/` at the **repository root** (`ask_llm/prompts/…`). Templates default to **computer science / AI** papers (methodology, experiments, reproducibility, related-work positioning, multiview-style full-paper analysis). Under `src/ask_llm/` the `prompts` entry is a **symlink** to that tree so setuptools package-data stays valid. Override directory via `paper.prompt_dir` in `default_config.yml`.
 - **Pipeline mapping**: `paper.pipeline_config` points to `prompts/paper-explain-pipeline.yml` (project overrides). It is **merged** on load with the bundled **`paper-explain-pipeline.defaults.yml`** (same `prompts/` directory): any key omitted in the project file keeps the default. Edit the project file for small deltas; edit or fork `paper-explain-pipeline.defaults.yml` only when changing the canonical registry, heading aliases, or bundled defaults. The package ships `src/ask_llm/prompts` as a symlink to repo `prompts/` so defaults load in dev and in wheels. Override for one run with `ask-llm paper --pipeline /path/to/paper-explain-pipeline.yml`.
 - **Multiple full-paper prompts**: `full_prompts` in that YAML lists several templates (e.g. `section-full.md` + `outlines.md`). Each gets a separate API call on the same concatenated body; outputs are `N-full-<stem>.explain.md` (e.g. `N-full-outlines.explain.md`). If only **one** full template is configured, the job key stays `full` and the file remains `N-full.explain.md` (backward compatible).

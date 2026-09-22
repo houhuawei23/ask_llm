@@ -28,12 +28,9 @@ dependencies = [
     "tiktoken>=0.5.0",
     "typer>=0.9.0",
     "rich>=13.0.0",
-    "prompt-toolkit>=3.0.0",
     "tqdm>=4.65.0",
     "loguru>=0.7.0",
     "pydantic>=2.0.0",
-    "pydantic-settings>=2.0.0",
-    "litellm>=1.0.0",
     "pyyaml>=6.0.0",
     "llm-api-engine>=0.2.2",    # 使用 llm-api-engine 作为 LLM 引擎（流式 reasoning、并发重试 runner、Ollama 支持）
     "nbformat>=5.0.0",          # Jupyter notebook support for trans .ipynb
@@ -96,7 +93,7 @@ show_error_context = true
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = ["litellm.*", "tiktoken.*", "prompt_toolkit.*"]
+module = ["tiktoken.*"]
 ignore_missing_imports = true
 
 # Typer commands: explicit return types on entrypoints; keep CLI surface typed.

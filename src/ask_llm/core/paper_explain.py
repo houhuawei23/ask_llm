@@ -764,7 +764,10 @@ def explain_output_filename(
         return f"{index}-{section_base}-{section_stem}.explain.md"
     if key.startswith("appendices:h2:"):
         slug = key.split(":", 2)[2]
-        return f"d-appendices-{slug}.explain.md"
+        # L9/2.25: keep the numeric prefix — every other job type carries the
+        # document-order index, and appendix filenames breaking that ordering
+        # scrambled sorted listings and resume-by-index checks.
+        return f"{index}-d-appendices-{slug}.explain.md"
     if key.startswith("extra:"):
         slug = key.split(":", 1)[1]
         return f"{index}-{slug}.explain.md"

@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 2.25.0 (2026-09-23)
+
+三路并行深度审计（核心管线 / 服务+CLI / 配置+测试+项目健康度）后的系统性修复
+与增强，分 6 个阶段落地。753 测试全绿。
 
 ### 行为变更（脚本/CI 需关注）
 
@@ -25,6 +28,19 @@
 - **paper --resume 索引错位检测**（E10）：输出存在但编号全不匹配时警告流水线
   或过滤条件已变更。
 - **`config init --yes`**（L12）：非交互环境可覆盖已有模板，不再死于 Abort。
+
+### 次要修复与清理
+
+- 格式化标题 docstring 默认值更正（160/8，L7）；trans 会话计数去冗余（L8）。
+- **appendix 输出文件名保留数字序号前缀**（L9）：与其它作业类型的文档顺序
+  命名契约一致，排序与按索引 resume 不再被打乱。
+- **trans 输入扩展名分级**（L10）：显式传入已知二进制文件（.png/.pdf/.zip 等）
+  现在明确跳过并提示；未知类文本扩展名警告后保留（宽松契约不变）。
+- 流式延迟计时改用 `time.perf_counter()`（L4），不受系统时钟跳变影响。
+- 文档同步（L11）：README 命令表补 `format` 与 2.24/2.25 特性；paper 并发
+  默认值三处漂移收敛；providers.yml 搜索顺序说明更正（2.23 起无 cwd）；
+  pyproject 移除从未使用的依赖（litellm、prompt-toolkit、pydantic-settings）
+  与过时 mypy override。
 
 ### Fixed
 
