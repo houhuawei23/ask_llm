@@ -132,6 +132,13 @@ class GlobalRateLimiter:
         with self._lock:
             self._config = config
 
+    def reset(self) -> None:
+        """Drop every bucket and the active config (teardown / test isolation)."""
+        with self._lock:
+            self._limiters.clear()
+            self._config = None
+            self._last_wait_warn.clear()
+
     def _key(self, provider: str, model: str | None = None) -> str:
         provider = provider.lower()
         if model:

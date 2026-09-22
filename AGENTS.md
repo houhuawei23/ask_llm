@@ -497,4 +497,5 @@ Providers are handled externally by `llm-api-engine`. Update configuration in `p
   2.20.0 review & refactor with assistance from **ZCode** (agent) and **GLM-5.3** (model). \
   2.21.0 bug fixes & consolidation with assistance from **ZCode** (agent) and **GLM-5.3** (model). \
   2.22.0 correctness & dead-code sweep with assistance from **ZCode** (agent) and **GLM-5.3** (model). \
-  2.23.0 full-audit repair (3C+10H+~20M), test-chain backfill and repo hygiene with assistance from **Claude Code** (agent).
+  2.23.0 full-audit repair (3C+10H+~20M), test-chain backfill and repo hygiene with assistance from **Claude Code** (agent). \
+  2.24.0 six-phase deep audit (security, paid-work protection, retry/concurrency, parsing/cost/export, dry-run & config & chat enhancements) with assistance from **Claude Code** (agent).

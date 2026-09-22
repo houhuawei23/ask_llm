@@ -24,3 +24,9 @@ def set_config(load_result: LoadResult) -> None:
 def get_config_or_none() -> LoadResult | None:
     """Get the current configuration, or None if not set."""
     return _current
+
+
+def reset_config() -> None:
+    """Clear the current configuration (process teardown / test isolation)."""
+    global _current
+    _current = None

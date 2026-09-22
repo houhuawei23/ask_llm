@@ -10,16 +10,6 @@ from ask_llm.core.batch_processor import GlobalBatchProcessor
 from ask_llm.utils.rate_limiter import GlobalRateLimiter, get_global_rate_limiter
 
 
-@pytest.fixture(autouse=True)
-def reset_rate_limiter_singleton():
-    """Reset the singleton's config so tests are isolated from run order."""
-    limiter = get_global_rate_limiter()
-    previous = limiter._config
-    limiter.configure(None)
-    yield
-    limiter.configure(previous)
-
-
 def test_rate_limit_default_fallback():
     config = RateLimitConfig()
     limits = config.get_limits("unknown")

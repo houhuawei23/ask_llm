@@ -13,19 +13,25 @@ from ask_llm.core.models import AppConfig, ProviderConfig, ChatHistory, ChatMess
 def _reset_process_globals():
     """Reset process-wide mutable state around each test.
 
-    ``config.context._current`` and the ``GlobalRateLimiter`` singleton survive
-    across tests otherwise, making results order-dependent: any test that calls
-    ``set_config`` (or configures rate limits) leaks into every later test.
+    The config context, the ``GlobalRateLimiter`` singleton, the provider
+    adapter cache and the TokenCounter warning de-dup sets all survive across
+    tests otherwise, making results order-dependent: any test that calls
+    ``set_config`` (or configures rate limits / warns about approximate
+    tokenizers) leaks into every later test. Uses the public reset APIs
+    (conftest hygiene, plan phase 6) instead of poking private attributes.
     """
-    from ask_llm.config import context
+    from ask_llm.config.context import reset_config
+    from ask_llm.utils.provider_cache import ProviderAdapterCache
     from ask_llm.utils.rate_limiter import GlobalRateLimiter
+    from ask_llm.utils.token_counter import TokenCounter
 
     def _clear() -> None:
-        context._current = None
-        limiter = GlobalRateLimiter()
-        with limiter._lock:
-            limiter._limiters.clear()
-            limiter._config = None
+        reset_config()
+        GlobalRateLimiter().reset()
+        ProviderAdapterCache.clear()
+        TokenCounter.clear_cache()
+        TokenCounter._warned_approximate.clear()
+        TokenCounter._warned_word_fallback = False
 
     _clear()
     yield
