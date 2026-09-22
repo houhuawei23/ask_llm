@@ -55,6 +55,7 @@ class NotebookFileTranslator:
         output: str | None,
         output_is_dir: bool,
         effective_suffix: str,
+        glossary_pairs: list[tuple[str, str]],
         force: bool,
         stream: bool,
         stream_api: bool,
@@ -80,6 +81,7 @@ class NotebookFileTranslator:
             style=options.style,
             custom_prompt_template=None,
             prompt_file=options.prompt_file,
+            glossary_pairs=glossary_pairs,
         )
 
         model_config, fallback_configs = model_config_with_fallback(

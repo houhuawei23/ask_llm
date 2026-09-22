@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from loguru import logger
 
-from ask_llm.core.binary_splitter import BinarySplitter, TokenBudget
+from ask_llm.core.binary_splitter import BinarySplitter, TokenBudget, locate_pieces
 from ask_llm.core.text_splitter import TextChunk
 
 _Meta = dict
@@ -38,20 +38,10 @@ def _merge_meta(a: _Meta, b: _Meta) -> _Meta:
 def _locate_pieces(source: str, pieces: list[str]) -> list[tuple[int, int]]:
     """Map each piece to ``(start, length)`` within *source* (audit 4.3).
 
-    Uses a monotonic find-cursor; a piece that can't be located verbatim (the
-    splitter strips or synthesizes content) falls back to the whole source
-    span rather than reporting a made-up offset.
+    Thin alias for the canonical implementation in ``core.binary_splitter``
+    (M2/2.25 moved it there so the splitter itself shares it).
     """
-    spans: list[tuple[int, int]] = []
-    cursor = 0
-    for part in pieces:
-        pos = source.find(part, cursor) if part else -1
-        if pos != -1:
-            cursor = pos + len(part)
-            spans.append((pos, len(part)))
-        else:
-            spans.append((0, len(source)))
-    return spans
+    return locate_pieces(source, pieces)
 
 
 def _split_by_token_budget(

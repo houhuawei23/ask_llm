@@ -31,6 +31,21 @@ def _try_parse_json_with_latex_escapes(raw: str, brace: int) -> dict | None:
         return None
     blob = raw[brace : last + 1]
 
+    def _escaped(s: str, idx: int) -> bool:
+        """True when s[idx] is preceded by an odd number of backslashes.
+
+        M4/2.25: the old single-char check (``blob[i-1] != "\\\\"``) treated
+        ``\\\\"`` — an escaped backslash followed by a real closing quote — as
+        an escaped quote, so the string boundary was missed and every
+        escaping decision downstream was wrong.
+        """
+        n = 0
+        j = idx - 1
+        while j >= 0 and s[j] == "\\":
+            n += 1
+            j -= 1
+        return n % 2 == 1
+
     # Valid single-char JSON escapes after backslash
     _valid_escape_chars = set('"\\bfnrt/')
     _control_replace = {
@@ -46,7 +61,7 @@ def _try_parse_json_with_latex_escapes(raw: str, brace: int) -> dict | None:
         ch = blob[i]
 
         # Track string boundaries (respect already-escaped quotes)
-        if ch == '"' and (i == 0 or blob[i - 1] != "\\"):
+        if ch == '"' and not _escaped(blob, i):
             in_string = not in_string
             fixed_parts.append(ch)
             i += 1
@@ -72,9 +87,11 @@ def _try_parse_json_with_latex_escapes(raw: str, brace: int) -> dict | None:
                 # so JSON sees \\m which decodes to \m
                 fixed_parts.append("\\\\")
                 i += 1
-        elif in_string and ch in _control_replace:
-            # Literal control character inside string — replace with JSON escape
-            fixed_parts.append(_control_replace[ch])
+        elif in_string and (ch in _control_replace or ord(ch) < 0x20):
+            # Literal control character inside string — replace with its JSON
+            # escape (M4/2.25: any C0 control, not just \n\r\t, breaks
+            # json.loads).
+            fixed_parts.append(_control_replace.get(ch) or f"\\u{ord(ch):04x}")
             i += 1
         else:
             fixed_parts.append(ch)

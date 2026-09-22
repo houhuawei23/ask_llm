@@ -19,6 +19,7 @@ from ask_llm.core.batch_models import (
     BatchTask,
     ModelConfig,
     TaskStatus,
+    estimate_batch_task_tokens,
 )
 from ask_llm.core.concurrent import BoundedRetryRunner, RunMetrics
 from ask_llm.core.constants import (
@@ -37,9 +38,7 @@ from ask_llm.core.telemetry import (
     classify_error,
     should_fallback_for_error,
 )
-from ask_llm.utils.prompt_resolver import expand_prompt
 from ask_llm.utils.rate_limiter import get_global_rate_limiter
-from ask_llm.utils.token_counter import TokenCounter
 
 
 def estimate_output_tokens(task_kind: str, input_tokens: int) -> int:
@@ -255,20 +254,12 @@ class GlobalBatchProcessor:
             if tasks and tasks[0].model_settings
             else DEFAULT_BATCH_FALLBACK_MODEL
         )
-        # M11: tokenize each task's full prompt exactly once. Sorting and the
-        # progress-meta build used to expand+encode the whole batch twice.
-        task_estimates: list[tuple[BatchTask, int]] = [
-            (
-                task,
-                int(
-                    TokenCounter.estimate_tokens(
-                        expand_prompt(task.prompt, task.content),
-                        (task.model_settings.model if task.model_settings else default_model),
-                    )["token_count"]
-                ),
-            )
-            for task in tasks
-        ]
+        # M11/M5: tokenize each task's full prompt exactly once via the shared
+        # estimator. Sorting and the progress-meta build used to expand+encode
+        # the whole batch twice.
+        task_estimates: list[tuple[BatchTask, int]] = estimate_batch_task_tokens(
+            tasks, default_model
+        )
         task_estimates.sort(key=lambda pair: pair[1], reverse=True)
         pending_tasks = [task for task, _ in task_estimates]
 

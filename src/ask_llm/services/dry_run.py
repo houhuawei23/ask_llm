@@ -13,6 +13,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import nbformat
+
 from ask_llm.core.constants import OUTPUT_TOKEN_MULTIPLIERS, TaskKind
 from ask_llm.core.markdown_token_splitter import MarkdownTokenSplitter
 from ask_llm.core.text_splitter import TextSplitter
@@ -21,9 +23,30 @@ from ask_llm.utils.chunk_balance import (
     plain_text_chunks_by_tokens,
     rebalance_translation_chunks,
 )
+from ask_llm.utils.notebook_translator import plan_notebook_translation
 from ask_llm.utils.pricing import estimate_cost_cny, lookup_pricing
 from ask_llm.utils.prompt_resolver import expand_prompt
 from ask_llm.utils.token_counter import TokenCounter
+
+
+def _build_translator(
+    target_language: str,
+    source_language: str | None,
+    style: str | None,
+    prompt_file: str | None,
+    glossary_pairs: list[tuple[str, str]] | None,
+) -> Translator:
+    """Build the same Translator the paid run builds (M10/2.25: glossary-aware)."""
+    from ask_llm.core.translator import TranslationStyle
+
+    return Translator(
+        target_language=target_language,
+        source_language=source_language or "auto",
+        style=style if style else TranslationStyle.FORMAL,
+        custom_prompt_template=None,
+        prompt_file=prompt_file,
+        glossary_pairs=glossary_pairs or [],
+    )
 
 
 @dataclass
@@ -84,34 +107,63 @@ def estimate_translation_file(
     source_language: str | None = None,
     style: str | None = None,
     prompt_file: str | None = None,
+    glossary_pairs: list[tuple[str, str]] | None = None,
     max_chunk_tokens: int,
     balance_chunks: bool = True,
 ) -> DryRunFileEstimate | None:
     """Estimate chunks/tokens for one translation input without any API call.
 
-    Mirrors ``TextFileTranslator._prepare_text_file``'s chunking pipeline
-    (same splitters, same prompt-overhead reservation, same rebalance pass).
+    Mirrors the real run's chunking pipeline (same splitters, same
+    prompt-overhead reservation, same rebalance pass) for text/markdown via
+    ``TextFileTranslator.prepare`` and for notebooks via
+    ``plan_notebook_translation`` (M10/2.25: notebooks were silently skipped,
+    and the glossary — which widens the prompt and shrinks the chunk budget —
+    was ignored, so estimates diverged from the paid run).
     """
     file_path = Path(file_path)
     file_type = TextSplitter.detect_file_type(str(file_path))
-    if file_type not in ("markdown", "text"):
+    if file_type not in ("markdown", "text", "notebook"):
         return None
 
     try:
+        if file_type == "notebook":
+            translator = _build_translator(
+                target_language,
+                source_language,
+                style,
+                prompt_file,
+                glossary_pairs,
+            )
+            # Planner raises FileNotFoundError for missing notebooks; a
+            # missing/unreadable file estimates as zero rather than failing
+            # the whole dry run, matching the text path below.
+            try:
+                task_data = plan_notebook_translation(
+                    str(file_path),
+                    model,
+                    prompt_template=translator.prompt_template_for_batch(),
+                    max_chunk_tokens=max_chunk_tokens,
+                    balance_chunks=balance_chunks,
+                )
+            except (OSError, ValueError, nbformat.ValidationError):
+                return None
+            if not task_data:
+                return None
+            input_tokens = sum(
+                TokenCounter.count_tokens(content, model) for _, content in task_data
+            )
+            return DryRunFileEstimate(
+                path=str(file_path), chunks=len(task_data), input_tokens=input_tokens
+            )
+
         content = file_path.read_text(encoding="utf-8")
     except (OSError, UnicodeError):
         return None
     if not content.strip():
         return None
 
-    from ask_llm.core.translator import TranslationStyle
-
-    translator = Translator(
-        target_language=target_language,
-        source_language=source_language or "auto",
-        style=style if style else TranslationStyle.FORMAL,
-        custom_prompt_template=None,
-        prompt_file=prompt_file,
+    translator = _build_translator(
+        target_language, source_language, style, prompt_file, glossary_pairs
     )
     prompt_overhead = TokenCounter.count_tokens(translator.prompt_template_for_batch(), model)
 
@@ -158,6 +210,7 @@ def estimate_translation_run(
     source_language: str | None = None,
     style: str | None = None,
     prompt_file: str | None = None,
+    glossary_pairs: list[tuple[str, str]] | None = None,
     max_chunk_tokens: int,
     balance_chunks: bool = True,
     pricing_map: dict[tuple[str, str], dict[str, float]],
@@ -172,6 +225,7 @@ def estimate_translation_run(
             source_language=source_language,
             style=style,
             prompt_file=prompt_file,
+            glossary_pairs=glossary_pairs,
             max_chunk_tokens=max_chunk_tokens,
             balance_chunks=balance_chunks,
         )

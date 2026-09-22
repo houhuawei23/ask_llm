@@ -55,3 +55,21 @@ class TestEdgeCases:
     def test_plain_text_untouched(self):
         body = "普通的译文内容。"
         assert unwrap_translation_payload(body) == body
+
+
+def test_escaped_backslash_before_quote_does_not_break_tracking():
+    """M4/2.25: \\\\" (escaped backslash + real closing quote) must close the
+    string — the old single-char check kept the tracker 'inside' the string,
+    so later invalid LaTeX escapes outside the true string were never fixed
+    and the payload fell back to raw JSON."""
+    raw = r'{"translation": "backslash \\", "x": "\mathcal{V}"}'
+    out = unwrap_translation_payload(raw)
+    assert out == "backslash \\"
+
+
+def test_literal_control_chars_in_string_are_escaped():
+    """M4/2.25: any C0 control char (not just \\n\\r\\t) inside a string value
+    must be replaced with its JSON escape so the payload still unwraps."""
+    raw = '{"translation": "a\x01b"}'
+    out = unwrap_translation_payload(raw)
+    assert out == "a\x01b"

@@ -33,6 +33,61 @@ def _is_markdown_cell(cell: NotebookNode) -> bool:
     return bool(cell.cell_type == "markdown")
 
 
+def plan_notebook_translation(
+    input_path: str,
+    model: str,
+    *,
+    prompt_template: str,
+    max_chunk_tokens: int = 2400,
+    balance_chunks: bool = True,
+) -> list[tuple[int, str]]:
+    """Build the (cell_index, chunk_content) translation plan for a notebook.
+
+    M10/2.25: extracted from ``NotebookTranslator.translate_notebook`` so the
+    ``trans --dry-run`` estimate walks the *same* chunking pipeline (same cell
+    extraction, splitter, prompt-overhead reservation, rebalance) instead of
+    silently skipping notebooks. ``prompt_template`` is measured here for
+    chunk sizing (D2) exactly as the paid run does.
+    """
+    input_file = Path(input_path)
+    if not input_file.exists():
+        raise FileNotFoundError(f"Input notebook not found: {input_path}")
+    if input_file.suffix != ".ipynb":
+        raise ValueError(f"Input file must be a Jupyter notebook (.ipynb): {input_path}")
+
+    with open(input_path, encoding="utf-8") as f:
+        notebook = nbformat.read(f, as_version=4)
+
+    tasks_data: list[tuple[int, str]] = []
+    prompt_overhead = TokenCounter.count_tokens(prompt_template, model)
+    for i, cell in enumerate(notebook.cells):
+        if not _is_markdown_cell(cell):
+            continue
+        original_text = cell.source
+        if isinstance(original_text, list):
+            original_text = "".join(original_text)
+        if not original_text.strip():
+            continue
+
+        raw_chunks = _split_markdown_cell_tokens(
+            original_text, model, max_chunk_tokens, prompt_overhead
+        )
+        tmp_chunks = [
+            TextChunk(content=s, chunk_id=j, start_pos=0, end_pos=len(s), metadata={})
+            for j, s in enumerate(raw_chunks)
+        ]
+        balanced = rebalance_translation_chunks(
+            tmp_chunks,
+            model,
+            max_chunk_tokens=max_chunk_tokens,
+            enabled=balance_chunks,
+            prompt_overhead=prompt_overhead,
+        )
+        for part in balanced:
+            tasks_data.append((i, part.content))
+    return tasks_data
+
+
 class NotebookTranslator:
     """
     Translate Jupyter notebook markdown cells using LLM API.
@@ -91,39 +146,19 @@ class NotebookTranslator:
         with open(input_path, encoding="utf-8") as f:
             notebook = nbformat.read(f, as_version=4)
 
-        # Build translation tasks: (cell_index, chunk_content) for markdown cells
-        tasks_data: list[tuple[int, str]] = []
+        # Build translation tasks via the shared planner (M10/2.25) — the same
+        # pipeline the dry-run estimator walks. The batch prompt template is
+        # measured once here for chunk sizing (D2) and reused for task
+        # construction below.
         model = self.model_config.model
-        # Measure the per-chunk prompt template once (D2) so chunk sizing
-        # reserves room for prompt + content across all cells. The same template
-        # is reused for BatchTask construction below.
         prompt_template = self.translator.prompt_template_for_batch()
-        prompt_overhead = TokenCounter.count_tokens(prompt_template, model)
-        for i, cell in enumerate(notebook.cells):
-            if not _is_markdown_cell(cell):
-                continue
-            original_text = cell.source
-            if isinstance(original_text, list):
-                original_text = "".join(original_text)
-            if not original_text.strip():
-                continue
-
-            raw_chunks = _split_markdown_cell_tokens(
-                original_text, model, max_chunk_tokens, prompt_overhead
-            )
-            tmp_chunks = [
-                TextChunk(content=s, chunk_id=j, start_pos=0, end_pos=len(s), metadata={})
-                for j, s in enumerate(raw_chunks)
-            ]
-            balanced = rebalance_translation_chunks(
-                tmp_chunks,
-                model,
-                max_chunk_tokens=max_chunk_tokens,
-                enabled=balance_chunks,
-                prompt_overhead=prompt_overhead,
-            )
-            for part in balanced:
-                tasks_data.append((i, part.content))
+        tasks_data = plan_notebook_translation(
+            input_path,
+            model,
+            prompt_template=prompt_template,
+            max_chunk_tokens=max_chunk_tokens,
+            balance_chunks=balance_chunks,
+        )
 
         if not tasks_data:
             logger.info("No markdown cells to translate")

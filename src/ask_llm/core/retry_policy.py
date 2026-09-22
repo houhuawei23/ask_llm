@@ -7,9 +7,9 @@ without modifying the runner internals.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-from ask_llm.core.error_keywords import TRANSIENT_KEYWORDS, keyword_matches
+from ask_llm.core.error_keywords import TERMINAL_KEYWORDS, TRANSIENT_KEYWORDS, keyword_matches
 
 # Default keywords indicating a transient / retryable error message.
 # Derived from the single keyword rule table (P4.8): every transient rule's
@@ -26,10 +26,14 @@ class RetryPolicy:
     Attributes:
         max_retries: Hard cap on retry attempts for any single task.
         transient_keywords: Lowercased substrings that mark an error transient.
+        terminal_keywords: Keywords that mark an error terminal; a match wins
+            over any transient match (M6/2.25) so e.g. "connection failed:
+            invalid SSL certificate" is not retried via its "connection" word.
     """
 
     max_retries: int = 3
     transient_keywords: tuple[str, ...] = DEFAULT_TRANSIENT_KEYWORDS
+    terminal_keywords: tuple[str, ...] = field(default_factory=lambda: TERMINAL_KEYWORDS)
 
     def is_retryable(self, error_message: str) -> bool:
         """Return True if *error_message* looks transient/retryable.
@@ -42,6 +46,8 @@ class RetryPolicy:
         if not error_message:
             return True
         lower = error_message.lower()
+        if any(keyword_matches(kw, lower) for kw in self.terminal_keywords):
+            return False
         return any(keyword_matches(kw, lower) for kw in self.transient_keywords)
 
 

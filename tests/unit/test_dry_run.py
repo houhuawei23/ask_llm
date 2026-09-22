@@ -98,3 +98,53 @@ class TestBatchDryRun:
         report = DryRunReport(provider="p", model="m", kind="batch", task_count=7)
         lines = report.render()
         assert any("Tasks: 7" in line for line in lines)
+
+
+class TestNotebookDryRun:
+    def _notebook(self, tmp_path: Path) -> Path:
+        import nbformat
+
+        nb = nbformat.v4.new_notebook()
+        nb.cells.append(nbformat.v4.new_markdown_cell("# Title\n\n" + "Cell text. " * 100))
+        nb.cells.append(nbformat.v4.new_code_cell("print('unchanged')"))
+        nb.cells.append(nbformat.v4.new_markdown_cell("Second **markdown** cell."))
+        p = tmp_path / "nb.ipynb"
+        nbformat.write(nb, str(p))
+        return p
+
+    def test_notebook_is_estimated_not_skipped(self, tmp_path: Path):
+        """M10/2.25: .ipynb inputs get a real estimate instead of a silent
+        zero-file report."""
+        est = estimate_translation_file(
+            self._notebook(tmp_path),
+            "gpt-4",
+            target_language="en",
+            max_chunk_tokens=100,
+            balance_chunks=True,
+        )
+        assert est is not None
+        assert est.chunks >= 2  # two markdown cells
+        assert est.input_tokens > 0
+
+    def test_notebook_run_report_includes_file(self, tmp_path: Path):
+        report = estimate_translation_run(
+            [self._notebook(tmp_path)],
+            "gpt-4",
+            "deepseek",
+            target_language="en",
+            max_chunk_tokens=100,
+            pricing_map={},
+        )
+        assert report.files and report.task_count == 0
+        assert report.input_tokens > 0
+
+    def test_missing_notebook_estimates_none(self, tmp_path: Path):
+        assert (
+            estimate_translation_file(
+                tmp_path / "missing.ipynb",
+                "gpt-4",
+                target_language="en",
+                max_chunk_tokens=100,
+            )
+            is None
+        )

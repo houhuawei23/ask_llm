@@ -270,6 +270,7 @@ def trans(
             )
 
             if dry_run:
+                from ask_llm.core.translator import Translator
                 from ask_llm.services.dry_run import estimate_translation_run
                 from ask_llm.utils.path_resolver import resolve_trans_input_paths
 
@@ -281,6 +282,10 @@ def trans(
                 if not input_paths:
                     console.print_error("No input files matched.")
                     raise typer.Exit(1)
+                # M10/2.25: the glossary widens the prompt and shrinks the
+                # chunk budget — the dry run must size chunks the same way the
+                # paid run does.
+                glossary_pairs = Translator.load_glossary(glossary) if glossary else []
                 dry_report = estimate_translation_run(
                     input_paths,
                     final_model,
@@ -291,6 +296,7 @@ def trans(
                     else source_lang,
                     style=trans_cfg.style,
                     prompt_file=prompt_file,
+                    glossary_pairs=glossary_pairs,
                     max_chunk_tokens=(
                         max_chunk_tokens
                         if max_chunk_tokens is not None

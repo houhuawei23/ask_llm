@@ -110,15 +110,19 @@ def _rules() -> tuple[KeywordRule, ...]:
         KeywordRule("too long", m, False),
         KeywordRule("maximum context", m, False),
         # Network — mostly transient; TLS/proxy failures are usually config.
+        # M6/2.25: the terminal cert/proxy signatures must be checked BEFORE
+        # the wide transient words — "connection failed: invalid SSL
+        # certificate" matched "connection" first and was retried forever even
+        # though no retry can fix a bad cert or proxy config.
+        KeywordRule("ssl", n, False),
+        KeywordRule("certificate", n, False),
+        KeywordRule("proxy", n, False),
         KeywordRule("connection", n, True),
         KeywordRule("connect", n, True),
         KeywordRule("network", n, True),
         KeywordRule("dns", n, True),
         KeywordRule("unreachable", n, True),
         KeywordRule("refused", n, True),
-        KeywordRule("ssl", n, False),
-        KeywordRule("certificate", n, False),
-        KeywordRule("proxy", n, False),
         # Transient server/overload signatures without a more specific
         # category. Deliberately BEFORE the wide validation words (M2):
         # "502: invalid upstream response" must be treated as transient.
@@ -145,6 +149,16 @@ ERROR_KEYWORD_RULES: tuple[KeywordRule, ...] = _rules()
 
 # Derived: retryable keywords (drives retry_policy.DEFAULT_TRANSIENT_KEYWORDS).
 TRANSIENT_KEYWORDS: tuple[str, ...] = tuple(r.keyword for r in ERROR_KEYWORD_RULES if r.transient)
+
+# Derived: terminal keywords (M6/2.25). classify_error_message resolves the
+# table with first-match-wins precedence, but the retry policy only saw the
+# transient half — "connection failed: invalid SSL certificate" matched the
+# wide "connection" transient keyword and burned the whole retry budget on a
+# cert/proxy config error no retry can fix. The policy now treats a terminal
+# keyword match as authoritative, mirroring the table's precedence.
+TERMINAL_KEYWORDS: tuple[str, ...] = tuple(
+    r.keyword for r in ERROR_KEYWORD_RULES if not r.transient
+)
 
 # Numeric keywords ("401", "500", ...) match on word boundaries only, so
 # "context length is 15000" no longer trips the "500" server-error rule.

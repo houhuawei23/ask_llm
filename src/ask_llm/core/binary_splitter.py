@@ -90,6 +90,49 @@ class TokenBudget:
         return TokenCounter.split_hard_by_max_tokens(text, self._raw_content_cap, self.model)
 
 
+def locate_pieces(source: str, pieces: list[str]) -> list[tuple[int, int]]:
+    """Map each piece to ``(start, length)`` within *source* (M2/2.25).
+
+    Uses a monotonic find-cursor; a piece that can't be located verbatim (the
+    splitter strips or synthesizes content) falls back to the whole source
+    span rather than reporting a made-up offset. Moved here from
+    ``utils.chunk_balance`` (which now imports it) so the splitter itself can
+    use the same exact piece-location for hard-split spans.
+    """
+    spans: list[tuple[int, int]] = []
+    cursor = 0
+    for part in pieces:
+        pos = source.find(part, cursor) if part else -1
+        if pos != -1:
+            cursor = pos + len(part)
+            spans.append((pos, len(part)))
+        else:
+            spans.append((0, len(source)))
+    return spans
+
+
+def _stripped_span_chunk(raw: str, chunk_id: int, raw_start: int, type_name: str) -> TextChunk:
+    """Build a chunk whose span covers exactly its stripped content.
+
+    M2/2.25: the sentence-group path strips content before emitting it but
+    used to span the unstripped raw region (``end_pos`` off by the stripped
+    whitespace), so persisted spans drifted from the real text. The strip
+    offset is now subtracted from the raw start; leftover whitespace between
+    chunks appears as inter-span gaps, which position-aware reassembly
+    understands.
+    """
+    content = raw.strip()
+    lead = len(raw) - len(raw.lstrip())
+    start = raw_start + lead
+    return TextChunk(
+        content=content,
+        chunk_id=chunk_id,
+        start_pos=start,
+        end_pos=start + len(content),
+        metadata={"type": type_name},
+    )
+
+
 class BinarySplitter:
     """Split Markdown with the heading/paragraph binary strategy under a budget.
 
@@ -374,13 +417,7 @@ class BinarySplitter:
             cand = current_chunk + sentence if current_chunk else sentence
             if current_chunk and not self.budget.fits(cand):
                 chunks.append(
-                    TextChunk(
-                        content=current_chunk.strip(),
-                        chunk_id=chunk_id,
-                        start_pos=current_pos,
-                        end_pos=current_pos + len(current_chunk),
-                        metadata={"type": "sentence_group"},
-                    )
+                    _stripped_span_chunk(current_chunk, chunk_id, current_pos, "sentence_group")
                 )
                 chunk_id += 1
                 current_pos += len(current_chunk)
@@ -390,13 +427,7 @@ class BinarySplitter:
 
         if current_chunk.strip():
             chunks.append(
-                TextChunk(
-                    content=current_chunk.strip(),
-                    chunk_id=chunk_id,
-                    start_pos=current_pos,
-                    end_pos=current_pos + len(current_chunk),
-                    metadata={"type": "sentence_group"},
-                )
+                _stripped_span_chunk(current_chunk, chunk_id, current_pos, "sentence_group")
             )
 
         return self._enforce_budget_on_chunks(chunks, start_chunk_id)
@@ -461,36 +492,45 @@ class BinarySplitter:
     def _enforce_budget_on_chunks(
         self, chunks: list[TextChunk], start_chunk_id: int
     ) -> list[TextChunk]:
-        """Hard-split any chunk that still exceeds the budget (e.g. one very long sentence)."""
+        """Hard-split any chunk that still exceeds the budget (e.g. one very long sentence).
+
+        M2/2.25: spans survive this pass. Chunks that already fit keep their
+        original ``start_pos``/``end_pos`` (they may be narrower than the raw
+        source region the caller measured, e.g. stripped sentence groups), and
+        hard-split pieces are located verbatim inside the parent content so
+        each piece's span points at its true text in the original document —
+        instead of being rebuilt cumulatively from content lengths, which
+        silently drifted every subsequent span.
+        """
         if not chunks:
             return []
         out: list[TextChunk] = []
         nid = start_chunk_id
-        pos = chunks[0].start_pos
         for ch in chunks:
             if self.budget.fits(ch.content):
                 out.append(
                     TextChunk(
                         content=ch.content,
                         chunk_id=nid,
-                        start_pos=pos,
-                        end_pos=pos + len(ch.content),
+                        start_pos=ch.start_pos,
+                        end_pos=ch.end_pos,
                         metadata=ch.metadata,
                     )
                 )
                 nid += 1
-                pos += len(ch.content)
                 continue
-            for piece in self.budget.hard_split(ch.content):
+            pieces = self.budget.hard_split(ch.content)
+            for piece, (rel_start, rel_len) in zip(
+                pieces, locate_pieces(ch.content, pieces), strict=False
+            ):
                 out.append(
                     TextChunk(
                         content=piece,
                         chunk_id=nid,
-                        start_pos=pos,
-                        end_pos=pos + len(piece),
+                        start_pos=ch.start_pos + rel_start,
+                        end_pos=ch.start_pos + rel_start + rel_len,
                         metadata={**ch.metadata, "type": "hard_token_split"},
                     )
                 )
                 nid += 1
-                pos += len(piece)
         return out

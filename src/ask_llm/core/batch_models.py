@@ -47,15 +47,18 @@ class BatchTask(BaseModel):
     return_reasoning: bool = False
 
 
-def sort_batch_tasks_by_estimated_input(
+def estimate_batch_task_tokens(
     tasks: list[BatchTask],
     default_model: str,
-) -> list[BatchTask]:
-    """
-    Sort tasks by descending estimated full prompt tokens.
+) -> list[tuple[BatchTask, int]]:
+    """Estimate each task's full prompt tokens, tokenizing each task once.
 
-    When concurrent workers are fewer than tasks, heavy requests start earlier and reduce
-    wall-clock tail latency.
+    M5/2.25: single source of truth for longest-first batch ordering — the
+    previously dead ``sort_batch_tasks_by_estimated_input`` duplicated the
+    inline estimate-and-sort in ``batch_processor.process_global_tasks`` and
+    had already drifted (it re-encoded per call instead of tokenizing once,
+    M11). Callers sort the returned pairs themselves and may reuse the
+    estimates for progress metadata.
     """
 
     def _estimate(t: BatchTask) -> int:
@@ -63,7 +66,7 @@ def sort_batch_tasks_by_estimated_input(
         full = expand_prompt(t.prompt, t.content)
         return int(TokenCounter.estimate_tokens(full, model)["token_count"])
 
-    return sorted(tasks, key=_estimate, reverse=True)
+    return [(t, _estimate(t)) for t in tasks]
 
 
 class AttemptRecord(BaseModel):

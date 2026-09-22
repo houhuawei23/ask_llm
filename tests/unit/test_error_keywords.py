@@ -6,7 +6,7 @@ from ask_llm.core.error_keywords import (
     ErrorCategory,
     classify_error_message,
 )
-from ask_llm.core.retry_policy import DEFAULT_TRANSIENT_KEYWORDS
+from ask_llm.core.retry_policy import DEFAULT_TRANSIENT_KEYWORDS, RetryPolicy
 from ask_llm.core.telemetry import classify_error
 
 
@@ -68,3 +68,16 @@ class TestTransientDerivation:
                 ErrorCategory.MODEL_ERROR,
             ):
                 assert not rule.transient, f"{rule.keyword} should be terminal"
+
+
+def test_cert_and_proxy_errors_not_retried_via_connection_keyword():
+    """M6/2.25: 'connection failed: invalid SSL certificate' must be terminal —
+    the terminal cert/proxy rules are checked before the wide transient
+    'connection'/'connect' rules, so a bad cert/proxy config can't burn the
+    retry budget."""
+    policy = RetryPolicy()
+    assert not policy.is_retryable("connection failed: invalid SSL certificate")
+    assert not policy.is_retryable("connection error: proxy authentication required")
+    # Genuine transient connection failures remain retryable.
+    assert policy.is_retryable("connection refused")
+    assert policy.is_retryable("connection timed out")

@@ -1,5 +1,7 @@
 """Unit tests for BinarySplitter + TokenBudget (P3.2)."""
 
+from itertools import pairwise
+
 from ask_llm.core.binary_splitter import BinarySplitter, TokenBudget
 from ask_llm.utils.token_counter import TokenCounter
 
@@ -233,3 +235,25 @@ class TestAudit41NoProgressFallback:
         # content equality is checked whitespace-insensitively.
         joined = "".join(c.content for c in chunks)
         assert " ".join(joined.split()) == " ".join(text.split())
+
+
+def test_spans_point_exactly_at_content_after_budget_enforcement():
+    """M2/2.25: every chunk span must satisfy original[start:end] == content —
+    stripped sentence groups and hard-split pieces used to drift."""
+    from ask_llm.core.binary_splitter import BinarySplitter, TokenBudget
+
+    budget = TokenBudget(model="gpt-4", max_tokens=40)
+    splitter = BinarySplitter(budget)
+    text = (
+        "Alpha paragraph one. Alpha paragraph two. Alpha three.\n\n"
+        "Beta paragraph one. Beta paragraph two. Beta three.\n\n"
+        "Gamma paragraph one. Gamma paragraph two. Gamma three."
+    ) * 4
+    chunks = splitter.split(text)
+    assert len(chunks) > 1
+    for c in chunks:
+        assert text[c.start_pos : c.end_pos] == c.content
+    # Spans are ordered and non-overlapping.
+    spans = [(c.start_pos, c.end_pos) for c in sorted(chunks, key=lambda c: c.chunk_id)]
+    for (_, prev_end), (next_start, _) in pairwise(spans):
+        assert prev_end <= next_start

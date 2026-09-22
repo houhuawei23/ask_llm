@@ -10,6 +10,22 @@
 
 ### Fixed
 
+- **chunk span 不再漂移**（M2）：句子组分句先 strip 内容却按未 strip 长度记
+  span；预算强制阶段又从内容长度累加重建所有位置——两者都让 FormatCheckpoint
+  持久化的 span 偏离真实文本。现在未超限 chunk 透传原 span，hard-split 片段在
+  父内容内精确定位（`locate_pieces` 从 chunk_balance 上移共享），不变量
+  `original[start:end] == content` 对所有切分路径成立。
+- **JSON payload 转义跟踪**（M4）：`\\"`（转义反斜杠+真闭引号）曾被误判为转义
+  引号，导致后续转义修复全错；现在按前导反斜杠计数判断。字符串内的任意 C0
+  控制字符（不再只有 \n\r\t）都会替换为 JSON 转义。
+- **证书/代理配置错误不再无限重试**（M6）："connection failed: invalid SSL
+  certificate" 曾因宽泛的 "connection" 瞬态关键词被反复重试；终态关键词
+  （ssl/certificate/proxy 等）现在对重试判定具有优先权。
+- **trans --dry-run 支持 notebook 与 glossary**（M10）：.ipynb 此前被静默跳过
+  （报告 0 文件 0 token 直接 exit 0），glossary 也未参与估算——现在 dry-run
+  走与付费运行相同的 notebook 分块管线（`plan_notebook_translation` 共享
+  helper）并计入 glossary。
+- **notebook 翻译尊重 glossary**（M11）：`--glossary` 此前对 .ipynb 静默失效。
 - **trans --resume 导出不再误报冲突**（H1）：resume 运行合法覆盖上一次的部分
   导出——此前预检豁免了 resume，但导出时的存在性检查没有豁免，导致补完剩余
   chunk 后死于 "Output file already exists"。
@@ -24,6 +40,9 @@
   `--report` JSON 均改为 tmp+fsync+rename 原子写；报告写入自动创建父目录。
 - **worker 异常不再丢弃已完成结果**（L1）：异常传播时已收集的部分结果挂在
   `exc.partial_results` 上，调用方可汇报已完成部分。
+- **批处理排序逻辑单一来源**（M5）：删除 `batch_models` 中已漂移的死排序函数，
+  抽出 `estimate_batch_task_tokens` 供排序与进度元数据共享（每任务仅 tokenize
+  一次）。
 - **ask 输入路径校验错误逃逸错误处理**（H3）：`validate_input_source` 移入
   `cli_errors` 块内，不存在的输入文件现在输出干净的 CLI 错误而非裸 traceback。
 
