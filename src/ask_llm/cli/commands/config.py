@@ -57,14 +57,27 @@ def _config_get_set(
         load_result = ConfigLoader.load(config_path)
         set_config(load_result)
         # Walk both the provider config and the unified config.
-        target: object = load_result.app_config
+        # M17/2.25: a sentinel distinguishes "no such attribute/key" from a
+        # legitimately-None value, so typos error while nullable keys print.
+        _missing_sentinel = object()
+        # Unified sections (translation.*, format_body.*, …) live on
+        # unified_config, providers on app_config — start the walk at the
+        # right root so non-provider keys are reachable too.
+        first_segment = key_path.split(".", 1)[0]
+        root = (
+            load_result.unified_config
+            if hasattr(load_result.unified_config, first_segment)
+            else load_result.app_config
+        )
+        target: object = root
         for part in key_path.split("."):
-            target = target.get(part) if isinstance(target, dict) else getattr(target, part, None)
-            if target is None:
-                break
-        if target is None:
-            console.print_error(f"Key not found: {key_path}")
-            raise typer.Exit(1)
+            if isinstance(target, dict):
+                target = target.get(part, _missing_sentinel)
+            else:
+                target = getattr(target, part, _missing_sentinel)
+            if target is _missing_sentinel:
+                console.print_error(f"Key not found: {key_path}")
+                raise typer.Exit(1)
         if isinstance(target, list):
             console.print(str(target))
         else:
@@ -121,6 +134,14 @@ def config(
             help="Show configuration provenance: loaded file path and active env-var overrides",
         ),
     ] = False,
+    yes: Annotated[
+        bool,
+        typer.Option(
+            "--yes",
+            "-y",
+            help="With init: overwrite existing files without prompting (script-friendly)",
+        ),
+    ] = False,
     key_path: Annotated[
         str | None,
         typer.Argument(help="Dotted config key for get/set, e.g. providers.deepseek.api_key"),
@@ -146,7 +167,7 @@ def config(
     """
     with cli_errors("config"):
         if action == "init":
-            _config_init(output_path)
+            _config_init(output_path, yes=yes)
             return
 
         if action in ("get", "set"):

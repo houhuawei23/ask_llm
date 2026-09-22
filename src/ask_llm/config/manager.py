@@ -24,6 +24,13 @@ class ConfigManager:
         self._base_config = config
         self._unified_config = unified_config
         self._current_provider = config.default_provider
+        if not config.providers:
+            # M17/2.25: an empty provider table used to raise a bare
+            # StopIteration from the fallback below — obscure and unactionable.
+            raise ValueError(
+                "No providers configured. Add at least one provider to "
+                "providers.yml or default_config.yml, or run 'ask-llm config init'."
+            )
         if self._current_provider not in config.providers:
             # Fail fast with a clear fallback instead of surfacing a confusing
             # "Provider '...' not found" on the first get_provider_config() call.

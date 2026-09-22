@@ -9,10 +9,12 @@ from typing import Annotated
 import typer
 
 from ask_llm.cli.errors import cli_errors
+from ask_llm.config.cli_session import load_pricing_with_hint
 from ask_llm.core.batch_models import TaskStatus
 from ask_llm.core.execution_report import ExecutionReport
 from ask_llm.core.telemetry import ErrorCategory
 from ask_llm.utils.console import console
+from ask_llm.utils.pricing import estimate_cost_cny, lookup_pricing
 
 
 def diagnose(
@@ -28,6 +30,14 @@ def diagnose(
             min=1,
         ),
     ] = 10,
+    providers_pricing: Annotated[
+        str | None,
+        typer.Option(
+            "--providers-pricing",
+            help="Path to providers.yml (pricing_per_million_tokens). "
+            "Default search: ASK_LLM_PROVIDERS_YML, package root, ~/.config/ask_llm/providers.yml",
+        ),
+    ] = None,
 ) -> None:
     """Summarize an execution report and highlight failure patterns.
 
@@ -76,6 +86,10 @@ def diagnose(
         model_stats: dict[str, dict[str, int]] = defaultdict(
             lambda: {"attempts": 0, "success": 0, "failed": 0, "tokens": 0, "latency_ms": 0}
         )
+        # E6/2.25: per-model token split so a cost estimate can be attached.
+        model_token_split: dict[str, dict[str, int]] = defaultdict(
+            lambda: {"input": 0, "output": 0}
+        )
         for task in report.tasks:
             for attempt in task.attempts:
                 key = f"{attempt.provider}/{attempt.model}"
@@ -86,8 +100,33 @@ def diagnose(
                         attempt.output_tokens or 0
                     )
                     model_stats[key]["latency_ms"] += int((attempt.latency or 0) * 1000)
+                    model_token_split[key]["input"] += attempt.input_tokens or 0
+                    model_token_split[key]["output"] += attempt.output_tokens or 0
                 else:
                     model_stats[key]["failed"] += 1
+
+        # E6/2.25: cost estimate from the pricing catalog, per provider/model.
+        pricing_map, pricing_source = load_pricing_with_hint(providers_pricing)
+        if pricing_map and model_token_split:
+            console.print()
+            console.print("[bold]Cost Estimate[/bold]")
+            if pricing_source:
+                console.print(f"  Pricing source: {pricing_source.name}")
+            total_cost = 0.0
+            any_price = False
+            for key, split in sorted(model_token_split.items()):
+                provider_name, model_name = key.split("/", 1)
+                row = lookup_pricing(pricing_map, provider_name, model_name)
+                if row is None:
+                    continue
+                any_price = True
+                cost = estimate_cost_cny(row, split["input"], split["output"])
+                total_cost += cost
+                console.print(f"  {key}: ¥{cost:.4f}")
+            if any_price:
+                console.print(f"  [bold]Total: ¥{total_cost:.4f}[/bold]")
+            else:
+                console.print("  Unavailable — no pricing entries for the models used")
 
         if model_stats:
             console.print()

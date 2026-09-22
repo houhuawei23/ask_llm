@@ -20,6 +20,7 @@ from ask_llm.core.batch_models import (
     BatchTask,
     TaskStatus,
 )
+from ask_llm.core.constants import OUTPUT_TOKEN_MULTIPLIERS, TaskKind
 from ask_llm.core.execution_report import build_report_from_batch_results
 from ask_llm.core.global_batch_runner import run_global_batch_tasks
 from ask_llm.core.models import AppConfig
@@ -88,6 +89,8 @@ class PaperSessionResult:
     # are written to disk before the failure is reported.
     succeeded_count: int = 0
     failed_count: int = 0
+    # E9/2.25: section keys the failed jobs map to (informational).
+    sections: str | None = None
 
 
 class PaperService:
@@ -283,14 +286,30 @@ class PaperService:
         self._print_usage(statistics)
 
         if failed:
+            # E9/E11/2.25: failures name the section (via idx_to_meta) and
+            # suggest the exact retry command instead of bare numeric ids.
+            sections_tried = ", ".join(
+                sorted(idx_to_meta[r.task_id][0] for r in failed if r.task_id in idx_to_meta)
+            )
             for r in failed:
-                console.print_error(f"Paper job {r.task_id} failed: {r.error or 'unknown error'}")
-            errors = "; ".join(f"job {r.task_id}: {r.error or 'unknown'}" for r in failed)
+                key = idx_to_meta.get(r.task_id, ("?", None, None))[0]
+                console.print_error(
+                    f"Paper job {r.task_id} ({key}) failed: {r.error or 'unknown error'}"
+                )
+            console.print_info(
+                "Re-run with --resume (and the same --run/--sections filters) "
+                "to retry only these failed jobs."
+            )
+            errors = "; ".join(
+                f"job {r.task_id} ({idx_to_meta.get(r.task_id, ('?',))[0]}): {r.error or 'unknown'}"
+                for r in failed
+            )
             return PaperSessionResult(
                 status="failed",
                 error=errors,
                 succeeded_count=len(results) - len(failed),
                 failed_count=len(failed),
+                sections=sections_tried or None,
             )
         return PaperSessionResult()
 
@@ -463,29 +482,66 @@ class PaperService:
         section_job_model: str,
         current_provider: str,
     ) -> None:
-        """Print a preview of planned jobs and token estimates without calling APIs."""
+        """Print a preview of planned jobs and token estimates without calling APIs.
+
+        E9/2.25: output estimates use OUTPUT_TOKEN_MULTIPLIERS (like the
+        trans/batch dry runs) and full-paper jobs are priced at their own
+        (typically pricier) full_model, not the section model.
+        """
         console.print(f"\n[bold]Dry Run — {len(jobs)} job(s) planned:[/bold]")
-        total_tokens = 0
+        output_multiplier = OUTPUT_TOKEN_MULTIPLIERS.get(
+            TaskKind.PAPER_EXPLAIN, OUTPUT_TOKEN_MULTIPLIERS[TaskKind.BATCH]
+        )
+        section_tokens = 0
+        full_tokens = 0
         for idx, (key, body, appendix_h2) in enumerate(jobs):
             _template, full_prompt = self._render_job_prompt(
                 bundle, key, body, appendix_h2, explain_pipeline, prompt_dir
             )
             job_model = full_model_name if key.startswith("full") else section_job_model
             tok = TokenCounter.count_tokens(full_prompt, job_model)
-            total_tokens += tok
+            if key.startswith("full"):
+                full_tokens += tok
+            else:
+                section_tokens += tok
             console.print(f"  [{idx:2}] {key:<30} {tok:>6} tokens")
+        total_tokens = section_tokens + full_tokens
         console.print(f"\n  Total estimated input: {total_tokens:,} tokens across {len(jobs)} jobs")
         if self.pricing_map:
-            console.print(
-                format_cost_estimate(
-                    current_provider,
-                    section_job_model,
-                    total_tokens,
-                    total_tokens * 3,
-                    self.pricing_map,
-                    pricing_source=self.pricing_source,
+            if section_tokens and full_tokens:
+                console.print(
+                    format_cost_estimate(
+                        current_provider,
+                        section_job_model,
+                        section_tokens,
+                        int(section_tokens * output_multiplier),
+                        self.pricing_map,
+                        pricing_source=self.pricing_source,
+                    )
                 )
-            )
+                console.print(
+                    format_cost_estimate(
+                        current_provider,
+                        full_model_name,
+                        full_tokens,
+                        int(full_tokens * output_multiplier),
+                        self.pricing_map,
+                        pricing_source=self.pricing_source,
+                    )
+                )
+            else:
+                in_tokens = total_tokens
+                model = full_model_name if full_tokens else section_job_model
+                console.print(
+                    format_cost_estimate(
+                        current_provider,
+                        model,
+                        in_tokens,
+                        int(in_tokens * output_multiplier),
+                        self.pricing_map,
+                        pricing_source=self.pricing_source,
+                    )
+                )
 
     def _apply_resume_or_force(
         self,
@@ -512,6 +568,17 @@ class PaperService:
             skipped = len(original_jobs) - len(filtered)
             if skipped:
                 console.print_info(f"--resume: skipping {skipped} already-completed section(s)")
+            elif any(explain_root.glob("*.explain.md")):
+                # E10/2.25: resume maps jobs to outputs by *index*. If the
+                # pipeline YAML, --run/--sections or section content changed,
+                # the numbering shifts and nothing matches — existing outputs
+                # may be stale rather than "not yet produced".
+                console.print_warning(
+                    f"--resume matched no existing outputs in {explain_root}, but output "
+                    "file(s) exist with different numbering. If the pipeline config or "
+                    "--run/--sections selection changed since the first run, indexes have "
+                    "shifted — delete stale outputs or re-run without --resume."
+                )
             return filtered, skipped
 
         for idx, (key, _, _) in enumerate(jobs):

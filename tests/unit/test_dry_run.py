@@ -148,3 +148,36 @@ class TestNotebookDryRun:
             )
             is None
         )
+
+
+class TestFormatDryRun:
+    def test_body_format_estimates_chunks(self, md_file: Path):
+        """E3/2.25: format --dry-run reuses the body splitter and FORMAT output
+        multiplier."""
+        from ask_llm.services.dry_run import estimate_format_run
+
+        report = estimate_format_run(
+            [md_file], "gpt-4", "deepseek", format_type="body", max_chunk_tokens=100, pricing_map={}
+        )
+        assert report.files
+        assert report.est_output_tokens == report.input_tokens  # FORMAT multiplier 1.0
+
+    def test_title_format_counts_heading_batches(self, tmp_path: Path):
+        from ask_llm.services.dry_run import estimate_format_run
+
+        doc = tmp_path / "doc.md"
+        doc.write_text(
+            "\n".join(f"# Heading {i}\n\nsome text {i}" for i in range(30)), encoding="utf-8"
+        )
+        report = estimate_format_run(
+            [doc],
+            "gpt-4",
+            "deepseek",
+            format_type="title",
+            max_chunk_tokens=100,
+            heading_batch_size=10,
+            pricing_map={},
+        )
+        assert report.files
+        # 30 headings / batch size 10 -> 3 batches
+        assert report.files[0].chunks == 3

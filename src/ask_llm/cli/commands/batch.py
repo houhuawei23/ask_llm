@@ -89,10 +89,19 @@ def batch(
         bool,
         typer.Option(
             "--dry-run",
+            "-n",
             help="Estimate requests, tokens and cost without any API call "
             "(requires models in the batch YAML; skips connection tests)",
         ),
     ] = False,
+    providers_pricing: Annotated[
+        str | None,
+        typer.Option(
+            "--providers-pricing",
+            help="Path to providers.yml (pricing_per_million_tokens). "
+            "Default search: ASK_LLM_PROVIDERS_YML, package root, ~/.config/ask_llm/providers.yml",
+        ),
+    ] = None,
     skip_validation: Annotated[
         bool,
         typer.Option(
@@ -169,7 +178,7 @@ def batch(
                     )
                     raise typer.Exit(1)
 
-                pricing_map, pricing_source = load_pricing_with_hint(None)
+                pricing_map, pricing_source = load_pricing_with_hint(providers_pricing)
                 for model_config in provider_models:
                     dry_report = estimate_batch_run(
                         [(t.prompt, t.content) for t in tasks],
@@ -180,7 +189,7 @@ def batch(
                     for line in dry_report.render(pricing_source=pricing_source):
                         console.print(line)
                 return
-            pricing_map, _pricing_source = load_pricing_with_hint(None)
+            pricing_map, _pricing_source = load_pricing_with_hint(providers_pricing)
             effective_threads = threads if threads is not None else batch_cfg.threads
             effective_retries = retries if retries is not None else batch_cfg.retries
 

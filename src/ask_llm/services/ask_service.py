@@ -75,10 +75,18 @@ class AskResult:
 
     @property
     def output_content(self) -> str:
-        """Content formatted for file output (metadata prepended when included)."""
+        """Content formatted for file output (metadata prepended when included).
+
+        E2/2.25: reasoning captured via ``--include-reasoning`` is appended —
+        console mode prints it live, but it used to vanish in file mode.
+        """
+        parts = ""
         if self.metadata and self.include_metadata:
-            return self.metadata.format() + self.content
-        return self.content
+            parts += self.metadata.format()
+        parts += self.content
+        if self.reasoning:
+            parts += "\n\n## Reasoning\n\n" + self.reasoning
+        return parts
 
 
 @dataclass
@@ -210,6 +218,7 @@ class AskService:
         prompt_template: str | None = None,
         system_prompt: str | None = None,
         return_reasoning: bool = False,
+        max_tokens: int | None = None,
     ) -> ProcessingResult:
         """Process content non-streamingly and return a result with metadata.
 
@@ -218,6 +227,7 @@ class AskService:
             prompt_template: Prompt template with {content} placeholder.
             system_prompt: Optional system prompt.
             return_reasoning: Request reasoning content from reasoner models.
+            max_tokens: Completion token cap (E1/2.25; omit for provider default).
 
         Returns:
             Processing result with metadata.
@@ -229,6 +239,7 @@ class AskService:
             model=self.model,
             system_prompt=system_prompt,
             return_reasoning=return_reasoning,
+            max_tokens=max_tokens,
         )
 
     def iter_stream(
@@ -286,6 +297,7 @@ class AskService:
         system_prompt: str | None = None,
         include_metadata: bool = False,
         return_reasoning: bool = False,
+        max_tokens: int | None = None,
     ) -> AskResult:
         """Process content and prepare file-output result.
 
@@ -304,6 +316,7 @@ class AskService:
             prompt_template=prompt_template,
             system_prompt=system_prompt,
             return_reasoning=return_reasoning,
+            max_tokens=max_tokens,
         )
         return AskResult(
             content=result.content,

@@ -13,8 +13,12 @@ import typer
 from ask_llm.utils.console import console
 
 
-def _config_init(output_path: str | None = None) -> None:
-    """Generate default_config.yml and providers.yml templates."""
+def _config_init(output_path: str | None = None, *, yes: bool = False) -> None:
+    """Generate default_config.yml and providers.yml templates.
+
+    ``yes`` (L12/2.25) overwrites existing files without prompting, so
+    scripts and non-interactive environments don't die on typer's Abort.
+    """
     pkg_dir = Path(__file__).resolve().parent.parent / "config"
     pkg_config = pkg_dir / "default_config.yml"
     pkg_providers = pkg_dir / "providers.yml"
@@ -30,7 +34,7 @@ def _config_init(output_path: str | None = None) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.exists():
         console.print_warning(f"File exists: {dest}")
-        if not typer.confirm("Overwrite?"):
+        if not yes and not typer.confirm("Overwrite?"):
             raise typer.Exit(0)
 
     try:
@@ -46,7 +50,7 @@ def _config_init(output_path: str | None = None) -> None:
         providers_dest = dest.parent / "providers.yml"
         if providers_dest.exists():
             console.print_warning(f"File exists: {providers_dest}")
-            if not typer.confirm("Overwrite providers.yml?"):
+            if not yes and not typer.confirm("Overwrite providers.yml?"):
                 return
         try:
             providers_dest.write_text(pkg_providers.read_text(encoding="utf-8"), encoding="utf-8")

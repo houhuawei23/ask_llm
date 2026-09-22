@@ -64,7 +64,7 @@ class DryRunReport:
 
     provider: str
     model: str
-    kind: str  # "translation" | "batch"
+    kind: str  # "translation" | "batch" | "format"
     files: list[DryRunFileEstimate] = field(default_factory=list)
     task_count: int = 0
     input_tokens: int = 0
@@ -78,7 +78,7 @@ class DryRunReport:
             f"[bold]Dry run[/bold] — no API calls were made{src}",
             f"  Provider/model: {self.provider}/{self.model}",
         ]
-        if self.kind == "translation":
+        if self.kind in ("translation", "format"):
             for est in self.files:
                 lines.append(f"  {est.path}: {est.chunks} chunk(s), ≈{est.input_tokens:,} in")
         else:
@@ -94,7 +94,7 @@ class DryRunReport:
         return lines
 
     def _request_count(self) -> int:
-        if self.kind == "translation":
+        if self.kind in ("translation", "format"):
             return sum(est.chunks for est in self.files)
         return self.task_count
 
@@ -254,3 +254,57 @@ def estimate_batch_run(
         composed = expand_prompt(prompt, content)
         report.input_tokens += TokenCounter.estimate_tokens(composed, model)["token_count"]
     return _finalize(report, pricing_map)
+
+
+def estimate_format_run(
+    file_paths: Sequence[str | Path],
+    model: str,
+    provider: str,
+    *,
+    format_type: str = "body",
+    max_chunk_tokens: int,
+    heading_batch_size: int = 160,
+    pricing_map: dict[tuple[str, str], dict[str, float]],
+) -> DryRunReport:
+    """Build the format dry-run report (E3/2.25).
+
+    Body files reuse the same ``MarkdownTokenSplitter`` chunking the paid run
+    uses; title files count heading batches via ``HeadingExtractor`` (one LLM
+    request per ``heading_batch_size`` headings). Output uses the FORMAT
+    multiplier from ``OUTPUT_TOKEN_MULTIPLIERS``.
+    """
+    report = DryRunReport(provider=provider, model=model, kind="format")
+    output_multiplier = OUTPUT_TOKEN_MULTIPLIERS.get(
+        TaskKind.FORMAT, OUTPUT_TOKEN_MULTIPLIERS[TaskKind.BATCH]
+    )
+    from ask_llm.core.md_heading_formatter import HeadingExtractor
+
+    for path in file_paths:
+        path = Path(path)
+        try:
+            content = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            continue
+        if not content.strip():
+            continue
+
+        if format_type == "title":
+            # One request per heading batch, matching HeadingFormatter.
+            headings = HeadingExtractor.extract(content)
+            requests = max(1, -(-len(headings) // max(1, heading_batch_size)))
+            input_tokens = TokenCounter.count_tokens(content, model)
+        else:
+            chunks = MarkdownTokenSplitter(model, max_chunk_tokens).split(content)
+            requests = len(chunks)
+            input_tokens = sum(TokenCounter.count_tokens(c.content, model) for c in chunks)
+
+        report.files.append(
+            DryRunFileEstimate(path=str(path), chunks=requests, input_tokens=input_tokens)
+        )
+        report.input_tokens += input_tokens
+    report.task_count = len(report.files)
+    report.est_output_tokens = int(report.input_tokens * output_multiplier)
+    row = lookup_pricing(pricing_map, provider, model)
+    if row is not None:
+        report.est_cost_cny = estimate_cost_cny(row, report.input_tokens, report.est_output_tokens)
+    return report

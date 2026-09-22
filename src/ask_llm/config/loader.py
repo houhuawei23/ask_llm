@@ -75,6 +75,13 @@ class ConfigLoader:
                     data = {}
                 resolved = resolve_env_vars(data)
                 if not isinstance(resolved, dict):
+                    # M17/2.25: a list/scalar YAML root used to be silently
+                    # coerced to {} — the whole user config layer vanished
+                    # with no hint. Warn loudly instead.
+                    logger.warning(
+                        f"Config file {path} does not contain a YAML mapping "
+                        f"(got {type(resolved).__name__}); its contents were ignored."
+                    )
                     resolved = {}
                 return resolved
         except yaml.YAMLError as e:
@@ -284,15 +291,8 @@ class ConfigLoader:
                     model_names.insert(0, provider_default_model)
 
                 converted_config["models"] = model_names
-
-                if not default_model and provider_default_model:
-                    default_model = provider_default_model
-                elif not default_model and model_names:
-                    default_model = model_names[0]
             elif provider_default_model:
                 converted_config["models"] = [provider_default_model]
-                if not default_model:
-                    default_model = provider_default_model
             else:
                 converted_config["models"] = []
 
@@ -309,6 +309,15 @@ class ConfigLoader:
                 converted_config["timeout"] = provider_config["timeout"]
 
             converted_providers[name] = converted_config
+
+        # M18/2.25: the global default_model now derives from the *default
+        # provider*, not whichever provider dict iteration happened to visit
+        # first (an `ollama` user with no explicit default_model used to get
+        # a deepseek model name as the last-resort fallback).
+        if not default_model and default_provider:
+            dp_models = converted_providers.get(default_provider, {}).get("models") or []
+            if dp_models:
+                default_model = dp_models[0]
 
         return {
             "default_provider": default_provider,

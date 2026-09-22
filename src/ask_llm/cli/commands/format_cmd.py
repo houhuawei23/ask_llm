@@ -11,6 +11,7 @@ from ask_llm.cli.errors import cli_errors
 from ask_llm.config.cli_session import (
     gate_api_key_or_exit,
     load_cli_session,
+    load_pricing_with_hint,
     resolve_and_prepare,
 )
 from ask_llm.core.processor import RequestProcessor
@@ -205,6 +206,14 @@ def format_cmd(
             help="从 checkpoint 文件恢复未完成的格式化",
         ),
     ] = None,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run",
+            "-n",
+            help="估算 chunk/请求数与 token，不调用 API（E3/2.25）",
+        ),
+    ] = False,
 ) -> None:
     """
     使用 LLM 格式化 Markdown 文档。
@@ -246,6 +255,39 @@ def format_cmd(
         )
         gate_api_key_or_exit(config_manager, _final_provider)
 
+        # E3/2.25: zero-network estimate — same splitters as the paid run.
+        if dry_run:
+            from ask_llm.services.dry_run import estimate_format_run
+
+            resolved_paths = discover_markdown_files(
+                files, recursive=recursive, max_depth=max_depth
+            )
+            if not resolved_paths:
+                console.print_error("未找到可格式化的 Markdown 文件")
+                raise typer.Exit(1)
+            if type_lower == "title":
+                fh_config = load_result.unified_config.format_heading
+                _prompt_resolved = prompt_file or fh_config.default_prompt_file
+                _batch_size = heading_batch_size or fh_config.batch_size
+            else:
+                fb_config = load_result.unified_config.format_body
+                _prompt_resolved = prompt_file or fb_config.default_prompt_file
+                _batch_size = heading_batch_size or 160
+            pricing_map, pricing_source = load_pricing_with_hint(None)
+            dry_report = estimate_format_run(
+                [str(p) for p in resolved_paths],
+                final_model,
+                _final_provider,
+                format_type=type_lower,
+                max_chunk_tokens=body_max_chunk_tokens
+                or load_result.unified_config.format_body.max_chunk_tokens,
+                heading_batch_size=_batch_size,
+                pricing_map=pricing_map,
+            )
+            for line in dry_report.render(pricing_source=pricing_source):
+                console.print(line)
+            raise typer.Exit(0)
+
         provider_config = config_manager.get_provider_config()
 
         llm_provider = create_engine_adapter(provider_config, default_model=final_model)
@@ -254,6 +296,13 @@ def format_cmd(
 
         # Handle --resume mode after config and processor are ready
         if resume:
+            # E8/2.25: the checkpoint carries the source file; explicit FILES
+            # are ignored — say so instead of silently swallowing them.
+            if files:
+                console.print_warning(
+                    f"--resume ignores positional file argument(s): {', '.join(map(str, files))}. "
+                    "The source file comes from the checkpoint."
+                )
             if type_lower == "title":
                 fh_config = load_result.unified_config.format_heading
                 prompt_resolved = prompt_file or fh_config.default_prompt_file

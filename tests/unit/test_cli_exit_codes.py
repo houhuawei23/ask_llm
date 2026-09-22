@@ -292,3 +292,55 @@ def test_ask_missing_input_file_is_clean_cli_error():
     assert response.exit_code == 1, response.output
     assert "Input file not found" in response.output
     assert not isinstance(response.exception, FileNotFoundError)
+
+
+def test_config_init_yes_overwrites_without_prompt(tmp_path):
+    """L12/2.25: `config init --yes` overwrites existing files without
+    prompting — non-interactive scripts must not die on typer's Abort."""
+    target = tmp_path / "default_config.yml"
+    target.write_text("existing: true", encoding="utf-8")
+
+    ok = runner.invoke(app, ["config", "init", "-o", str(target), "--yes"])
+    assert ok.exit_code == 0, ok.output
+    assert "existing: true" not in target.read_text(encoding="utf-8")
+
+
+def test_config_init_existing_target_prompts_and_aborts_cleanly(tmp_path):
+    """Without --yes an existing target still prompts (aborting in
+    non-interactive contexts) — behavior preserved for interactive use."""
+    target = tmp_path / "default_config.yml"
+    target.write_text("existing: true", encoding="utf-8")
+
+    aborted = runner.invoke(app, ["config", "init", "-o", str(target)], input="n\n")
+    assert aborted.exit_code == 0  # user declined -> clean exit, no overwrite
+    assert target.read_text(encoding="utf-8") == "existing: true"
+
+
+def test_config_get_distinguishes_missing_key_from_none(tmp_path):
+    """M17/2.25: a typo'd key errors; a nullable key that exists prints None
+    instead of a misleading 'Key not found'."""
+    import yaml
+
+    config = {
+        "default_provider": "prov_a",
+        "providers": {
+            "prov_a": {
+                "base_url": "https://a.example.com/v1",
+                "api_key": "sk-test",
+                "models": [{"name": "a-model"}],
+            },
+        },
+    }
+    config_path = tmp_path / "default_config.yml"
+    config_path.write_text(yaml.dump(config), encoding="utf-8")
+
+    missing = runner.invoke(
+        app, ["config", "get", "translation.nonexistent_key_xyz", "--config", str(config_path)]
+    )
+    assert missing.exit_code == 1
+    assert "Key not found" in missing.output
+
+    nullable = runner.invoke(
+        app, ["config", "get", "translation.default_prompt_file", "--config", str(config_path)]
+    )
+    assert nullable.exit_code == 0, nullable.output

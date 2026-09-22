@@ -59,7 +59,9 @@ def trans(
         typer.Option(
             "--target-lang",
             "-t",
-            help="Target language code (from default_config.yml if not set)",
+            help="Target language code (from default_config.yml if not set). "
+            "Note: in trans, -t/-T/-s mean target-lang/threads/source-lang — "
+            "other commands use them for temperature/type/system.",
         ),
     ] = None,
     source_lang: Annotated[
@@ -157,7 +159,7 @@ def trans(
         typer.Option(
             "--providers-pricing",
             help="Path to providers.yml (pricing_per_million_tokens). "
-            "Default search: ASK_LLM_PROVIDERS_YML, ./providers.yml, package root, ~/.config/ask_llm/providers.yml",
+            "Default search: ASK_LLM_PROVIDERS_YML, package root, ~/.config/ask_llm/providers.yml",
         ),
     ] = None,
     no_balance_chunks: Annotated[
@@ -173,6 +175,20 @@ def trans(
             "--max-chunk-tokens",
             help="Max estimated body tokens per chunk after rebalance (default: config)",
             min=256,
+        ),
+    ] = None,
+    temperature: Annotated[
+        float | None,
+        typer.Option(
+            "--temperature",
+            help="Sampling temperature override (E4/2.25; default: config translation.temperature)",
+        ),
+    ] = None,
+    include_original: Annotated[
+        bool | None,
+        typer.Option(
+            "--include-original/--no-include-original",
+            help="Keep the original text next to each translated chunk (E4/2.25; default: config)",
         ),
     ] = None,
     skip_api_key_check: Annotated[
@@ -208,6 +224,7 @@ def trans(
         bool,
         typer.Option(
             "--dry-run",
+            "-n",
             help="Estimate chunks, tokens and cost without any API call",
         ),
     ] = False,
@@ -327,8 +344,10 @@ def trans(
                 ),
                 max_output_tokens=trans_cfg.max_output_tokens,
                 preserve_format=preserve_format,
-                include_original=trans_cfg.include_original,
-                temperature=trans_cfg.temperature,
+                include_original=(
+                    include_original if include_original is not None else trans_cfg.include_original
+                ),
+                temperature=temperature if temperature is not None else trans_cfg.temperature,
                 translatable_extensions=trans_cfg.translatable_extensions,
                 recursive_dir=trans_cfg.recursive_dir,
                 prompt_file=prompt_file,

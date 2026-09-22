@@ -334,3 +334,34 @@ class TestConfigManager:
         models = manager.get_available_models()
 
         assert "test-model" in models
+
+
+def test_default_model_derived_from_default_provider():
+    """M18/2.25: the global default_model falls back to the *default
+    provider's* first model, not the first provider in dict order."""
+    import yaml
+
+    from ask_llm.config.loader import ConfigLoader
+
+    data = yaml.safe_load(
+        """
+default_provider: local
+providers:
+  cloud:
+    base_url: https://cloud.example.com/v1
+    api_key: sk-test
+    default_model: cloud-large
+    models:
+      - cloud-large
+      - cloud-small
+  local:
+    base_url: http://localhost:11434/v1
+    api_key: ollama
+    default_model: local-model
+    models:
+      - local-model
+"""
+    )
+    converted = ConfigLoader._convert_providers_format(data)
+    assert converted["default_provider"] == "local"
+    assert converted["default_model"] == "local-model"

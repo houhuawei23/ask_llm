@@ -8,8 +8,32 @@
   后旧 checkpoint 会拒绝 resume（digest 不匹配，提示删除后重跑）——这是安全
   失败，避免换参数后静默沿用旧结果。
 
+### Added
+
+- **ask `--max-tokens`**（E1）：单次请求可显式限制补全 token 数。
+- **ask `-o` 输出包含 reasoning**（E2）：`--include-reasoning` 时文件输出附加
+  reasoning 段落（此前仅控制台显示，文件模式静默丢失）。
+- **format `--dry-run`**（E3）：复用真实分块/标题批次逻辑估算 chunk、请求数与
+  成本，零网络调用；trans/batch 的 `--dry-run` 补充 `-n` 短别名（E7）。
+- **trans `--temperature` / `--include-original`**（E4）：原配置项提升为 CLI
+  旗标，可覆盖配置。
+- **batch `--providers-pricing`**（E5）：与 trans/paper 一致的定价目录覆盖。
+- **diagnose 成本估算**（E6）：按 provider/model 显示执行报告的预估成本。
+- **format --resume 忽略位置参数时给出警告**（E8）。
+- **paper 失败消息带 section 名并提示重试命令**（E9/E11）；paper dry-run 采用
+  `OUTPUT_TOKEN_MULTIPLIERS` 输出倍率，full 作业按 full_model 计价。
+- **paper --resume 索引错位检测**（E10）：输出存在但编号全不匹配时警告流水线
+  或过滤条件已变更。
+- **`config init --yes`**（L12）：非交互环境可覆盖已有模板，不再死于 Abort。
+
 ### Fixed
 
+- **配置错误可见性**（M17）：YAML 根非映射时不再静默当空配置（改为警告）；
+  未设置的 `${VAR}` 占位符从 DEBUG 提升为警告；空 providers 表给出明确错误
+  而非裸 StopIteration；`config get` 区分"键不存在"与"值为 None"，且
+  translation/format 等 unified 段的键现在可查询。
+- **全局 default_model 从 default_provider 推导**（M18）：`default_provider:
+  ollama` 的用户不再拿到字典序首个 provider（deepseek）的模型名。
 - **format --resume 摘要检查覆盖当前参数**（M7）：此前 digest 由 checkpoint 自身
   存储的 model/prompt/预算重算，只能检出源文件变更——换了 `--model` 或 prompt
   后恢复会静默用新设置重试失败块。现在用当前运行的参数计算，不匹配即拒绝。

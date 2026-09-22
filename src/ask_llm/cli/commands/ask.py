@@ -130,6 +130,13 @@ def ask(
             help="Include reasoning content from reasoner models (e.g., DeepSeek)",
         ),
     ] = False,
+    max_tokens: Annotated[
+        int | None,
+        typer.Option(
+            "--max-tokens",
+            help="Completion token cap (E1/2.25; omit for the provider default)",
+        ),
+    ] = None,
     dry_run: Annotated[
         bool,
         typer.Option(
@@ -232,6 +239,7 @@ def ask(
                 system_prompt=system,
                 include_metadata=metadata,
                 return_reasoning=include_reasoning,
+                max_tokens=max_tokens,
             )
             service.write_output(output_path, result.output_content, force=force)
             console.print_success(f"Output saved to: {output_path}")
@@ -253,6 +261,7 @@ def ask(
                     prompt_template=prompt_template,
                     system_prompt=system,
                     return_reasoning=include_reasoning,
+                    max_tokens=max_tokens,
                 )
                 if processing_result.reasoning:
                     console.print("[bold yellow]Reasoning:[/bold yellow]")
