@@ -577,14 +577,13 @@ class HeadingFormatter(ChunkedLLMJob):
             formatted_headings = [f"{hashes} {title}" for hashes, title in matches]
 
         if len(formatted_headings) > expected_count:
-            if take_last_only:
-                formatted_headings = formatted_headings[-expected_count:]
-            else:
-                # H7: the LLM emitted extra heading-looking lines (commentary,
-                # echoed input). Truncate in order instead of letting the
-                # apply-stage count check fail the whole file — by this point
-                # every batch's API cost is already sunk.
-                formatted_headings = formatted_headings[:expected_count]
+            # H7/M8: the LLM emitted extra heading-looking lines (commentary,
+            # echoed input). Commentary, when present, is prepended — echoing
+            # the requested headings — so the real headings sit at the end:
+            # take the tail, mirroring the context-batch path. Truncate instead
+            # of letting the apply-stage count check fail the whole file — by
+            # this point every batch's API cost is already sunk.
+            formatted_headings = formatted_headings[-expected_count:]
 
         # Validate count
         if len(formatted_headings) != expected_count:

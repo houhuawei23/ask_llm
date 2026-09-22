@@ -330,3 +330,137 @@ def test_resume_clean_success_returns_ok_outcome(service, mock_config, tmp_path)
 
     assert outcome.ok
     mock_remove.assert_called_once_with(str(cp_path))
+
+
+def test_resume_with_changed_current_model_refuses(service, tmp_path):
+    """M7/2.25: the digest must be computed from the *current* run's options.
+    The old code recomputed it from the checkpoint's own stored values, so a
+    resume under a different --model silently passed the check."""
+    src = _write_source(tmp_path)
+    cp_path = tmp_path / "doc.md.body_checkpoint.json"
+    cp_path.write_text("{}", encoding="utf-8")
+
+    from ask_llm.core.format_checkpoint import compute_format_digest
+
+    mock_checkpoint = MagicMock()
+    mock_checkpoint.version = CHECKPOINT_VERSION
+    mock_checkpoint.source_file = str(src)
+    mock_checkpoint.format_type = "body"
+    mock_checkpoint.prompt_template = "PROMPT"
+    mock_checkpoint.model = "gpt-4"
+    mock_checkpoint.max_chunk_tokens = None
+    # Digest consistent with the checkpoint's own (stored) options.
+    mock_checkpoint.config_digest = compute_format_digest(
+        src,
+        prompt_template="PROMPT",
+        model="gpt-4",
+        max_chunk_tokens=None,
+        format_type="body",
+    )
+    mock_checkpoint.failed_chunks = []
+    mock_checkpoint.successful_chunks = []
+
+    with patch("ask_llm.services.format_service.FormatCheckpoint") as mock_cls:
+        mock_cls.load.return_value = mock_checkpoint
+        with pytest.raises(RuntimeError, match="不一致"):
+            service.resume_from_checkpoint(
+                str(cp_path),
+                output=None,
+                inplace=False,
+                force=True,
+                current_model="other-model",
+            )
+
+
+def test_resume_with_matching_current_options_succeeds(service, tmp_path, mock_config):
+    """M7/2.25: passing the same options the checkpoint was created with must
+    still resume."""
+    src = _write_source(tmp_path)
+    cp_path = tmp_path / "doc.md.body_checkpoint.json"
+    cp_path.write_text("{}", encoding="utf-8")
+
+    from ask_llm.core.format_checkpoint import compute_format_digest
+
+    mock_checkpoint = MagicMock()
+    mock_checkpoint.version = CHECKPOINT_VERSION
+    mock_checkpoint.source_file = str(src)
+    mock_checkpoint.format_type = "body"
+    mock_checkpoint.prompt_template = "PROMPT"
+    mock_checkpoint.model = "gpt-4"
+    mock_checkpoint.max_chunk_tokens = None
+    mock_checkpoint.config_digest = compute_format_digest(
+        src,
+        prompt_template="PROMPT",
+        model="gpt-4",
+        max_chunk_tokens=None,
+        format_type="body",
+    )
+    mock_checkpoint.failed_chunks = []
+    mock_checkpoint.successful_chunks = []
+
+    body_result = _make_body_result()
+
+    with (
+        patch("ask_llm.services.format_service.get_config_or_none") as mock_get_config,
+        patch("ask_llm.services.format_service.FormatCheckpoint") as mock_cls,
+        patch("ask_llm.services.format_service.BodyFormatter") as mock_bf,
+        patch("ask_llm.services.format_service.FileHandler") as mock_fh,
+        patch("ask_llm.services.format_service.load_prompt_template", return_value="PROMPT"),
+    ):
+        mock_get_config.return_value = mock_config
+        mock_cls.load.return_value = mock_checkpoint
+        mock_bf.resume_from_checkpoint.return_value = body_result
+        mock_fh.read.return_value = "body"
+        outcome = service.resume_from_checkpoint(
+            str(cp_path),
+            output=str(tmp_path / "out.md"),
+            inplace=False,
+            force=True,
+            current_model="gpt-4",
+            current_prompt_file="prompt.md",
+            current_format_type="body",
+        )
+    assert outcome.ok
+
+
+def test_sequential_run_continues_after_single_file_error(tmp_path, monkeypatch):
+    """M9/2.25: one unexpected per-file error in a sequential multi-file run
+    must not abort the remaining files."""
+    import ask_llm.services.format_service as fs_mod
+
+    calls: list[str] = []
+
+    def fake_format_one(file_path, **kwargs):
+        calls.append(str(file_path))
+        if "bad" in str(file_path):
+            raise RuntimeError("写入失败")
+        return MagicMock()
+
+    monkeypatch.setattr(fs_mod, "format_one", fake_format_one)
+
+    bad = tmp_path / "bad.md"
+    good = tmp_path / "good.md"
+    bad.write_text("# x\n", encoding="utf-8")
+    good.write_text("# y\n", encoding="utf-8")
+
+    stats = fs_mod.run_format(
+        [str(bad), str(good)],
+        format_type="body",
+        processor=MagicMock(),
+        model="gpt-4",
+        prompt_file_resolved="p.md",
+        heading_batch_size=None,
+        heading_concurrency=None,
+        body_max_chunk_tokens=None,
+        body_concurrency=None,
+        output=None,
+        inplace=False,
+        force=True,
+        max_workers=1,  # sequential path
+        retries=None,
+        retry_delay=None,
+        retry_delay_max=None,
+    )
+    assert calls == [str(bad), str(good)]
+    assert stats.failed_count == 1
+    assert stats.successful_count == 1

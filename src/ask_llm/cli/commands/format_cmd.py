@@ -254,11 +254,24 @@ def format_cmd(
 
         # Handle --resume mode after config and processor are ready
         if resume:
+            if type_lower == "title":
+                fh_config = load_result.unified_config.format_heading
+                prompt_resolved = prompt_file or fh_config.default_prompt_file
+            else:
+                fb_config = load_result.unified_config.format_body
+                prompt_resolved = prompt_file or fb_config.default_prompt_file
             outcome = format_service.resume_from_checkpoint(
                 resume,
                 output=output,
                 inplace=inplace,
                 force=force,
+                # M7/2.25: digest against the *current* run's options so a
+                # resume under a different model/type/prompt refuses instead
+                # of silently retrying failed chunks with new settings.
+                current_model=final_model,
+                current_prompt_file=prompt_resolved,
+                current_max_chunk_tokens=body_max_chunk_tokens,
+                current_format_type=type_lower,
             )
             # 2.7: map remaining failures to a non-zero exit code, consistent
             # with the fresh-run policy (any failed file/chunk ⇒ exit 1).

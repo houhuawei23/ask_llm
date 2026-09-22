@@ -236,7 +236,9 @@ class FileHandler:
             Output file path
         """
         if custom_path:
-            return str(custom_path)
+            # M12/2.25: a literal-`~` custom path must not create a './~'
+            # directory in cwd.
+            return str(Path(custom_path).expanduser())
 
         if suffix is None:
             lr = get_config_or_none()
@@ -245,7 +247,7 @@ class FileHandler:
             else:
                 suffix = _DEFAULT_OUTPUT_SUFFIX
 
-        input_file = Path(input_path)
+        input_file = Path(input_path).expanduser()
         ext = input_file.suffix
         stem = input_file.stem
 

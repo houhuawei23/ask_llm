@@ -8,7 +8,7 @@ import shlex
 import subprocess
 import time
 from datetime import datetime
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from loguru import logger
 
@@ -129,8 +129,13 @@ class ChatSession:
             if not ok:
                 # Plan 5.4: a failed initial reply used to silently drop the
                 # seeded context (the generic handler pops the trailing user
-                # message). Re-add it so the conversation keeps its context.
-                session.history.add_message(MessageRole.USER, initial_context)
+                # message). Re-add it so the conversation keeps its context —
+                # M14/2.25: the same *templated* content the seed used, not
+                # the raw context, so history is identical either way.
+                session.history.add_message(
+                    MessageRole.USER,
+                    processor.format_prompt(initial_context, prompt_template),
+                )
                 console.print_warning(
                     "Initial reply failed; the seeded context is kept in history."
                 )
@@ -245,8 +250,13 @@ class ChatSession:
 
             # Stream response
             response_parts: list[str] = []
-            stream = self.provider.call(
+            raw_stream = self.provider.call(
                 messages=messages, temperature=self.temperature, model=self.model, stream=True
+            )
+            # M15/2.25: protocols allow a plain str return; iterating it
+            # directly yields characters (pathologically slow rich printing).
+            stream: Any = (
+                iter([raw_stream]) if isinstance(raw_stream, (str, ReasoningChunk)) else raw_stream
             )
 
             for chunk in stream:
@@ -655,8 +665,6 @@ class ChatSession:
                 console.print_warning("No previous command")
                 return True
 
-        self._last_shell_cmd = cmd
-
         console.print(f"[dim]$ {cmd}[/dim]")
 
         try:
@@ -680,6 +688,10 @@ class ChatSession:
             except ValueError as e:
                 console.print_error(f"Cannot parse command ({e}); balance your quotes and retry.")
                 return True
+
+            # M16/2.25: record only after validation passes — `!!` must not
+            # repeat a command that was just rejected.
+            self._last_shell_cmd = cmd
 
             result = subprocess.run(
                 cmd_parts,

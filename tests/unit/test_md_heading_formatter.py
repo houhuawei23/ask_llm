@@ -234,11 +234,14 @@ That's all!"""
         assert result.stats.batches_failed == 1
 
     def test_parse_truncates_extra_headings_without_context(self):
-        """H7: with no context (take_last_only=False), extra heading-looking
-        lines in the LLM response are truncated in order instead of failing the
-        apply-stage count check and scrapping the whole paid-for file."""
+        """H7/M8/2.25: with no context (take_last_only=False), extra
+        heading-looking lines in the LLM response are truncated from the TAIL
+        (models prepend commentary before echoing the requested headings) —
+        truncation no longer discards the real headings nor fails the
+        apply-stage count check on a paid-for file."""
         mock_response = (
-            "# Title\n# Section\nNote: both headings above look good!\n# Stray commentary heading\n"
+            "Sure! Here are the formatted headings:\n# Stray commentary heading\n"
+            "# Title\n# Section\n"
         )
         processor = self._create_mock_processor(mock_response)
         formatter = HeadingFormatter(processor=processor, prompt_template=_TEST_PROMPT_TEMPLATE)

@@ -88,3 +88,18 @@ class TestAtomicWrite:
         target = tmp_path / "nested" / "out.md"
         FileHandler.write(target, "hello", force=True)
         assert target.read_text(encoding="utf-8") == "hello"
+
+
+def test_generate_output_path_expands_tilde(tmp_path, monkeypatch):
+    """M12/2.25: `~/` in either the input-derived or custom output path must
+    expand to the home directory, not create a literal './~' dir in cwd."""
+    from ask_llm.utils.file_handler import FileHandler
+
+    monkeypatch.setattr(Path, "cwd", staticmethod(lambda: tmp_path))
+    out = FileHandler.generate_output_path("~/notes/input.md", "~/out/result.md")
+    assert not out.startswith("~")
+    assert Path(out).is_absolute() and str(Path.home()) in out
+
+    out2 = FileHandler.generate_output_path("~/notes/input.md", None)
+    assert "~" not in out2
+    assert Path(out2).is_absolute()

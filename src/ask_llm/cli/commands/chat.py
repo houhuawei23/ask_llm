@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Annotated
 
 import typer
@@ -122,7 +123,9 @@ def chat(
         # Load initial context
         initial_context = None
         if input_file:
-            initial_context = FileHandler.read(input_file)
+            # L5/2.25: expand ~ so `chat -i '~/ctx.md'` doesn't report the
+            # file missing (ask already expands).
+            initial_context = FileHandler.read(os.path.expanduser(input_file))
             console.print_info(f"Loaded context: {len(initial_context)} characters")
 
         # Load prompt template (file path or literal template string).

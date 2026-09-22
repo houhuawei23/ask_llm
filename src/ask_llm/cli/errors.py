@@ -19,6 +19,27 @@ def raise_unexpected_cli_error(command_name: str, exc: Exception) -> None:
     raise typer.Exit(1) from exc
 
 
+_API_ERROR_MARKERS = (
+    "api",
+    "authentication",
+    "rate limit",
+    "provider",
+    "http",
+    "timeout",
+    "request",
+    "model",
+)
+
+
+def _render_runtime_error(e: RuntimeError) -> str:
+    """Prefix API-origin RuntimeErrors; render service RuntimeErrors plainly."""
+    message = str(e)
+    lowered = message.lower()
+    if any(marker in lowered for marker in _API_ERROR_MARKERS):
+        return f"API error: {message}"
+    return message
+
+
 @contextmanager
 def cli_errors(command_name: str) -> Iterator[None]:
     """Outer catch-all for Typer commands: maps common exceptions to exit 1 and logging."""
@@ -47,7 +68,10 @@ def cli_errors(command_name: str) -> Iterator[None]:
         console.print_error(str(e))
         raise typer.Exit(1) from e
     except RuntimeError as e:
-        console.print_error(f"API error: {e}")
+        # L6/2.25: not every RuntimeError is an API error — services raise
+        # them for resume refusal, write failures, etc. Only API-looking
+        # messages keep the "API error:" prefix; the rest render plainly.
+        console.print_error(_render_runtime_error(e))
         raise typer.Exit(1) from e
     except Exception as e:
         raise_unexpected_cli_error(command_name, e)

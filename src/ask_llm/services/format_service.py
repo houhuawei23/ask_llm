@@ -42,6 +42,7 @@ from ask_llm.core.md_heading_formatter import (
 from ask_llm.core.processor import RequestProcessor
 from ask_llm.utils.console import console
 from ask_llm.utils.file_handler import FileHandler
+from ask_llm.utils.prompt_resolver import load_prompt_template
 
 # Built-in default matching default_config.yml so FormatService can resume
 # without an active CLI config (e.g. library / embedded use).
@@ -225,7 +226,14 @@ def run_format(
         for file_path in resolved_files:
             console.print()
             console.print(f"[bold]处理: {file_path}[/bold]")
-            _record(format_one(file_path, **format_kwargs))
+            # M9/2.25: mirror the parallel path's per-file guard — one
+            # unexpected error used to abort the whole sequential run with no
+            # summary for the remaining files.
+            try:
+                _record(format_one(file_path, **format_kwargs))
+            except Exception as exc:
+                console.print_error(f"{file_path}: {exc}")
+                failed_count += 1
     else:
         workers = min(max_workers, len(resolved_files))
         progress_columns = (
@@ -304,6 +312,10 @@ class FormatService:
         output: str | None,
         inplace: bool,
         force: bool,
+        current_model: str | None = None,
+        current_prompt_file: str | None = None,
+        current_max_chunk_tokens: int | None = None,
+        current_format_type: str | None = None,
     ) -> FormatResumeOutcome:
         """Resume formatting from a checkpoint file.
 
@@ -312,6 +324,17 @@ class FormatService:
             output: Explicit output path.
             inplace: Overwrite the source file.
             force: Overwrite existing output file.
+            current_model: The run's model (M7/2.25) — the digest is computed
+                from the *current* run's options, not the checkpoint's own
+                stored values, so resuming with a different ``--model``/
+                ``--type``/prompt file/chunk budget is refused instead of
+                silently retrying failed chunks under new settings. ``None``
+                falls back to the checkpoint's stored value (pre-2.25
+                callers), which only detects source-file edits.
+            current_prompt_file: Resolved prompt path for the current run.
+            current_max_chunk_tokens: Explicit chunk-budget override for the
+                current run (config-default runs pass ``None``).
+            current_format_type: ``"body"``/``"title"`` for the current run.
 
         Supports both body and title checkpoints (P3.5; title resume was
         previously rejected). Refuses pre-v4 checkpoints and checkpoints whose
@@ -336,17 +359,32 @@ class FormatService:
             )
         source_file = checkpoint.source_file
         if checkpoint.config_digest:
+            # M7/2.25: prefer the current run's options; a None argument
+            # (option not explicitly set) falls back to the stored value.
+            current_template = checkpoint.prompt_template
+            if current_prompt_file:
+                current_template = load_prompt_template(current_prompt_file)
             current_digest = compute_format_digest(
                 source_file,
-                prompt_template=checkpoint.prompt_template,
-                model=checkpoint.model,
-                max_chunk_tokens=checkpoint.max_chunk_tokens,
-                format_type=checkpoint.format_type,
+                prompt_template=current_template,
+                model=current_model if current_model is not None else checkpoint.model,
+                max_chunk_tokens=(
+                    current_max_chunk_tokens
+                    if current_max_chunk_tokens is not None
+                    else checkpoint.max_chunk_tokens
+                ),
+                format_type=(
+                    current_format_type
+                    if current_format_type is not None
+                    else checkpoint.format_type
+                ),
             )
             if checkpoint.config_digest != current_digest:
                 raise RuntimeError(
-                    f"checkpoint 与当前源文件不一致（源文件在 checkpoint 创建后被修改过）：{source_file}。"
-                    "为避免把旧结果错拼到新内容上，已拒绝恢复；请删除该 checkpoint 后重新运行。"
+                    f"checkpoint 与当前运行不一致（源文件在 checkpoint 创建后被修改过，或 "
+                    f"model/prompt/chunk 预算/格式化类型发生了变化）：{source_file}。"
+                    "为避免把旧结果错拼到新内容或新设置上，已拒绝恢复；"
+                    "请删除该 checkpoint 后重新运行。"
                 )
 
         console.print_info(f"从 checkpoint 恢复: {checkpoint_path}")
