@@ -153,11 +153,15 @@ def ask(
         console.print_error("No input provided. Use positional argument or -i/--input")
         raise typer.Exit(1)
 
-    # Fail fast before config load or prompt build: a path-looking source that
-    # does not exist must not be billed as literal prompt text (audit 1.4).
-    validate_input_source(source, from_input_option=input_source is None and input_file is not None)
-
     with cli_errors("ask"):
+        # Fail fast before config load or prompt build: a path-looking source
+        # that does not exist must not be billed as literal prompt text
+        # (audit 1.4). Inside cli_errors so its FileNotFoundError renders as a
+        # clean CLI error instead of a raw traceback (H3/2.25).
+        validate_input_source(
+            source, from_input_option=input_source is None and input_file is not None
+        )
+
         load_result, config_manager = load_cli_session(config_path)
 
         final_provider, final_model = resolve_and_prepare(

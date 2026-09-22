@@ -278,3 +278,17 @@ def test_config_show_reports_unresolved_key_as_unconfigured(monkeypatch, tmp_pat
     assert response.exit_code == 0, response.output
     assert "✓ Configured" not in response.output
     assert "✗ Not configured" in response.output
+
+
+# ---------------------------------------------------------------------------
+# H3/2.25: ask input validation must render as a clean CLI error
+# ---------------------------------------------------------------------------
+
+
+def test_ask_missing_input_file_is_clean_cli_error():
+    """H3: a path-looking missing input must exit 1 with a readable message,
+    never escape cli_errors as a raw FileNotFoundError traceback."""
+    response = runner.invoke(app, ["ask", "definitely-missing-input-12345.md"])
+    assert response.exit_code == 1, response.output
+    assert "Input file not found" in response.output
+    assert not isinstance(response.exception, FileNotFoundError)

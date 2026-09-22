@@ -213,3 +213,48 @@ class TestNonResumeCheckpointBackup:
         cp = BatchCheckpoint.create(command="batch", config_digest=digest)
         cp.merge([_success(i) for i in completed])
         cp.save(path)
+
+
+class TestOnResultThreadSafety:
+    def test_on_result_merge_and_save_thread_safe(self, tmp_path, config_manager, monkeypatch):
+        """H2/2.25: on_result fires from per-lane worker threads; concurrent
+        merge+save must not lose results or corrupt the checkpoint."""
+        import threading
+
+        tasks = [_task(i) for i in range(40)]
+        checkpoint_path = tmp_path / "cp.json"
+        digest = compute_checkpoint_digest(None, tasks)
+
+        def fake_runner(tks, *args, **kwargs):
+            on_result = kwargs["on_result"]
+            barrier = threading.Barrier(8)
+
+            def worker(offset: int) -> None:
+                barrier.wait()
+                for i in range(offset, len(tks), 8):
+                    on_result(_success(i))
+
+            threads = [threading.Thread(target=worker, args=(off,)) for off in range(8)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+            return [], None
+
+        monkeypatch.setattr("ask_llm.core.command_runner.run_global_batch_tasks", fake_runner)
+        outcome = run_with_checkpoint(
+            command="batch",
+            config_digest=digest,
+            checkpoint_path=str(checkpoint_path),
+            tasks=tasks,
+            config_manager=config_manager,
+            resume=False,
+            max_retries=1,
+            max_workers=8,
+        )
+
+        # Every concurrent success must land exactly once; a clean full
+        # success then unlinks the checkpoint (existing lifecycle behavior).
+        assert sorted(r.task_id for r in outcome.results) == list(range(40))
+        assert outcome.checkpoint_deleted
+        assert not checkpoint_path.exists()

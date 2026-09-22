@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **trans --resume 导出不再误报冲突**（H1）：resume 运行合法覆盖上一次的部分
+  导出——此前预检豁免了 resume，但导出时的存在性检查没有豁免，导致补完剩余
+  chunk 后死于 "Output file already exists"。
+- **batch 多 lane 运行 checkpoint 竞态**（H2）：`on_result` 会被多个 lane 工作
+  线程并发调用，merge/计数/保存之间无锁，可能丢失结果甚至序列化崩溃；现已用
+  锁将 merge + save 原子化。
+- **ask 输入路径校验错误逃逸错误处理**（H3）：`validate_input_source` 移入
+  `cli_errors` 块内，不存在的输入文件现在输出干净的 CLI 错误而非裸 traceback。
+
 ## 2.24.0 (2026-09-22)
 
 深度审查第二批 + 第三批 + 第四批 + 第五批：数据丢失与已付费工作保护（输出冲突

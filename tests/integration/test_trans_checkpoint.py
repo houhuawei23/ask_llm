@@ -137,3 +137,98 @@ def test_translation_resume_skips_completed_chunks(tmp_path):
     passed_results = mock_export.call_args[0][1]
     assert len(passed_results) == 1
     assert passed_results[0].task_id == 0
+
+
+def _success_result() -> BatchResult:
+    return BatchResult(
+        task_id=0,
+        prompt="Translate: {content}",
+        content="hello world",
+        model_settings=ModelConfig(provider="openai", model="gpt-4"),
+        response="你好世界",
+        status=TaskStatus.SUCCESS,
+    )
+
+
+def test_resume_export_overrides_existing_output_without_force(tmp_path):
+    """H1/2.25: a resumed run must overwrite the prior partial export without
+    --force — the pre-spend check exempts resume and the export gate must too,
+    or the run pays to finish the remaining chunks and then dies at export."""
+    config_manager = MagicMock()
+    service = TranslationService(
+        config_manager=config_manager,
+        unified_config=MagicMock(),
+        provider="openai",
+        model="gpt-4",
+    )
+    job = _make_job(tmp_path)
+    Path(job.output_path).write_text("partial export", encoding="utf-8")
+
+    with patch("ask_llm.services.text_file_translator.TranslationExporter") as mock_exporter:
+        mock_exporter.return_value.export.return_value = job.output_path
+        job_result = service._text_translator.export_text_file(
+            job,
+            [_success_result()],
+            preserve_format=True,
+            include_original=False,
+            force=False,
+            resume=True,
+        )
+
+    assert job_result.success
+    mock_exporter.return_value.export.assert_called_once()
+
+
+def test_non_resume_export_still_refuses_existing_output(tmp_path):
+    """H1/2.25: without --resume/--force the export gate must keep refusing."""
+    config_manager = MagicMock()
+    service = TranslationService(
+        config_manager=config_manager,
+        unified_config=MagicMock(),
+        provider="openai",
+        model="gpt-4",
+    )
+    job = _make_job(tmp_path)
+    Path(job.output_path).write_text("prior output", encoding="utf-8")
+
+    job_result = service._text_translator.export_text_file(
+        job,
+        [_success_result()],
+        preserve_format=True,
+        include_original=False,
+        force=False,
+    )
+
+    assert not job_result.success
+    assert "already exists" in (job_result.error or "")
+
+
+def test_resumed_run_completes_and_exports_existing_output(tmp_path):
+    """H1/2.25 end to end: resume with an existing output file runs the
+    remaining chunks and exports — it must not die on the export gate."""
+    config_manager = MagicMock()
+    service = TranslationService(
+        config_manager=config_manager,
+        unified_config=MagicMock(),
+        provider="openai",
+        model="gpt-4",
+    )
+    job = _make_job(tmp_path)
+    Path(job.output_path).write_text("prior partial export", encoding="utf-8")
+
+    with (
+        patch("ask_llm.core.command_runner.run_global_batch_tasks") as mock_run,
+        patch("ask_llm.services.text_file_translator.TranslationExporter") as mock_exporter,
+    ):
+        mock_run.return_value = ([_success_result()], MagicMock(last_metrics=None))
+        mock_exporter.return_value.export.return_value = job.output_path
+        job_result = service._text_translator.translate_and_export(
+            job,
+            _make_options(resume=True),
+            force=False,
+            stream=False,
+            stream_api=True,
+        )
+
+    assert job_result.success, job_result.error
+    mock_exporter.return_value.export.assert_called_once()

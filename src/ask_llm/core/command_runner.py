@@ -15,6 +15,7 @@ Canonical decisions where the copies drifted:
 from __future__ import annotations
 
 import hashlib
+import threading
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -165,9 +166,16 @@ def run_with_checkpoint(
     # final save below.
     save_every = max(1, min(_INCREMENTAL_SAVE_EVERY, len(tasks) or 1))
     inc_state = {"since_save": 0}
+    # H2/2.25: on_result fires from per-lane worker threads in multi-lane runs,
+    # so merge + counter + save must be atomic or two lanes can interleave
+    # (older snapshot replacing a newer one on disk, or json.dumps iterating
+    # successful_results while another lane appends to it).
+    result_lock = threading.Lock()
 
     def _on_result(result: BatchResult) -> None:
-        if result.status == TaskStatus.SUCCESS:
+        if result.status != TaskStatus.SUCCESS:
+            return
+        with result_lock:
             checkpoint.merge([result])
             inc_state["since_save"] += 1
             if inc_state["since_save"] >= save_every:

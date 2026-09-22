@@ -244,6 +244,7 @@ class TextFileTranslator:
                 options.preserve_format,
                 options.include_original,
                 force=force,
+                resume=bool(options.resume),
                 retries=0,
             )
             job_result.results = results
@@ -276,6 +277,7 @@ class TextFileTranslator:
             options.preserve_format,
             options.include_original,
             force=force,
+            resume=bool(options.resume),
             retries=retry_count,
         )
         job_result.results = results
@@ -289,6 +291,7 @@ class TextFileTranslator:
         include_original: bool,
         *,
         force: bool,
+        resume: bool = False,
         retries: int = 0,
     ) -> TranslationJobResult:
         """Export translated chunks for a single text/markdown file."""
@@ -326,7 +329,10 @@ class TextFileTranslator:
 
         try:
             output_file = Path(job.output_path)
-            if output_file.exists() and not force:
+            # H1/2.25: a resumed run legitimately overwrites the prior (partial)
+            # export — the pre-spend check already exempts resume, and the export
+            # gate must too, or the run pays to finish chunks and then dies here.
+            if output_file.exists() and not force and not resume:
                 raise FileExistsError(
                     f"Output file already exists: {job.output_path}. Use --force to overwrite."
                 )
@@ -337,6 +343,12 @@ class TextFileTranslator:
             console.print(f"  Successful: {successful_chunks}/{len(results)}")
             if failed_count > 0:
                 console.print_warning(f"  Failed: {failed_count}/{len(results)}")
+                if resume:
+                    console.print_info(
+                        "Resumed export with failed chunks (originals kept for failed "
+                        "chunks). Re-run with --resume after fixing the provider to "
+                        "retry only the failures."
+                    )
 
             total_in = sum(r.metadata.input_tokens for r in results if r.metadata)
             total_out = sum(r.metadata.output_tokens for r in results if r.metadata)
