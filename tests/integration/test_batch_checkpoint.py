@@ -82,7 +82,7 @@ def test_batch_run_creates_checkpoint_for_failed_task(tmp_path):
     checkpoint_path = tmp_path / "batch.yml.checkpoint.json"
     assert checkpoint_path.exists()
     loaded = BatchCheckpoint.load(checkpoint_path)
-    assert loaded.completed_task_ids == []
+    assert loaded.completed_task_ids == set()
     assert len(loaded.failed_tasks) == 1
 
 
@@ -158,7 +158,7 @@ def test_batch_resume_skips_completed_tasks(tmp_path):
         _run()
     assert checkpoint_path.exists()
     loaded = BatchCheckpoint.load(checkpoint_path)
-    assert loaded.completed_task_ids == [0]
+    assert loaded.completed_task_ids == {0}
 
     # Phase B: resume -> only task 1 is executed; clean success unlinks.
     queued_results = [[_result(1, TaskStatus.SUCCESS)]]

@@ -70,6 +70,20 @@ def exponential_backoff_seconds(
     return float(source.uniform(0, raw))
 
 
+def _raise_with_partial_results(exc: BaseException, results: list[Any]) -> None:
+    """Re-raise *exc* carrying the results collected before the failure.
+
+    L1/2.25: when ``on_worker_exception`` is None the first worker exception
+    aborts the run; without this, already-paid-for results were discarded with
+    the local ``results`` list. Callers can read
+    ``getattr(exc, "partial_results", [])`` to report what completed.
+    """
+    # setattr (not attribute assignment): BaseException has no such attribute,
+    # and arbitrary exception payloads can only be attached dynamically.
+    setattr(exc, "partial_results", list(results))  # noqa: B010
+    raise exc
+
+
 class BoundedRetryRunner(Generic[TTask, TResult]):
     """Run tasks with bounded concurrency, retries and exponential backoff.
 
@@ -272,7 +286,7 @@ class BoundedRetryRunner(Generic[TTask, TResult]):
                             _submit(task, retry_count)
 
                     if exception_during_run is not None:
-                        raise exception_during_run
+                        _raise_with_partial_results(exception_during_run, results)
 
                     if not inflight:
                         if interrupted or (not pending and not retry_heap):
@@ -298,7 +312,7 @@ class BoundedRetryRunner(Generic[TTask, TResult]):
                         _process_future(future)
 
                     if exception_during_run is not None:
-                        raise exception_during_run
+                        _raise_with_partial_results(exception_during_run, results)
         finally:
             if install_handler and prev_handler is not None:
                 signal.signal(signal.SIGINT, prev_handler)

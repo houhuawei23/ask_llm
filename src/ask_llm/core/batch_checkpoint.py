@@ -67,7 +67,7 @@ class BatchCheckpoint(BaseCheckpoint[BatchTask, BatchResult]):
             command=data["command"],
             created_at=data.get("created_at", ""),
             config_digest=data.get("config_digest", ""),
-            completed_task_ids=list(data.get("completed_task_ids", [])),
+            completed_task_ids=set(data.get("completed_task_ids", [])),
             failed_tasks=[BatchTask.model_validate(t) for t in data.get("failed_tasks", [])],
             successful_results=[
                 BatchResult.model_validate(r) for r in data.get("successful_results", [])

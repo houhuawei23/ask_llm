@@ -72,11 +72,24 @@ class TestComputeCheckpointDigest:
         t2.model_settings = ModelConfig(provider="test", model="other-model")
         assert compute_checkpoint_digest(None, [t1]) != compute_checkpoint_digest(None, [t2])
 
+    def test_sampling_param_change_changes_digest(self):
+        """L2/2.25: temperature/top_p/max_tokens are part of run identity."""
+        base = _task(0)
+        warmer = _task(0)
+        warmer.model_settings.temperature = 0.9
+        capped = _task(0)
+        capped.model_settings.max_tokens = 128
+        assert compute_checkpoint_digest(None, [base]) != compute_checkpoint_digest(None, [warmer])
+        assert compute_checkpoint_digest(None, [base]) != compute_checkpoint_digest(None, [capped])
+        # Identical params must still produce identical digests.
+        same = _task(0)
+        assert compute_checkpoint_digest(None, [base]) == compute_checkpoint_digest(None, [same])
+
 
 class TestResumeValidation:
     def _make_checkpoint(self, checkpoint_path: Path, digest: str, completed: list[int]) -> None:
         cp = BatchCheckpoint.create(command="batch", config_digest=digest)
-        cp.completed_task_ids = completed
+        cp.completed_task_ids = set(completed)
         cp.successful_results = [_success(i) for i in completed]
         cp.save(checkpoint_path)
 

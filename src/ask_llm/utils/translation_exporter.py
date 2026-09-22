@@ -5,12 +5,12 @@ Payload unwrapping lives in ``ask_llm.core.response_parser`` (P4.7);
 """
 
 import json
-from pathlib import Path
 from typing import Any
 
 from loguru import logger
 
 from ask_llm.core.batch_models import BatchResult, TaskStatus
+from ask_llm.core.checkpoint import atomic_write_stream, atomic_write_text
 from ask_llm.core.response_parser import unwrap_translation_payload
 from ask_llm.core.text_splitter import TextChunk
 from ask_llm.utils.export_formats import detect_export_format
@@ -105,8 +105,9 @@ class TranslationExporter:
         separator = "\n\n" if self.preserve_format else "\n"
         content = separator.join(content_parts)
 
-        # Write to file
-        Path(output_path).write_text(content, encoding="utf-8")
+        # Write atomically (M13/2.25): a crash mid-export must not leave a
+        # truncated translation behind.
+        atomic_write_text(output_path, content)
         logger.info(f"Exported translation to: {output_path}")
         return output_path
 
@@ -159,8 +160,9 @@ class TranslationExporter:
 
         content = "\n\n".join(content_parts)
 
-        # Write to file
-        Path(output_path).write_text(content, encoding="utf-8")
+        # Write atomically (M13/2.25): a crash mid-export must not leave a
+        # truncated translation behind.
+        atomic_write_text(output_path, content)
         logger.info(f"Exported translation to: {output_path}")
         return output_path
 
@@ -219,9 +221,10 @@ class TranslationExporter:
 
             export_data["chunks"].append(chunk_data)
 
-        # Write JSON file with a streaming encoder (P4.7: no giant in-memory string)
+        # Write JSON file with a streaming encoder (P4.7: no giant in-memory
+        # string), atomically (M13/2.25).
         encoder = json.JSONEncoder(indent=2, ensure_ascii=False)
-        with open(output_path, "w", encoding="utf-8") as f:
+        with atomic_write_stream(output_path) as f:
             for part in encoder.iterencode(export_data):
                 f.write(part)
         logger.info(f"Exported translation to: {output_path}")

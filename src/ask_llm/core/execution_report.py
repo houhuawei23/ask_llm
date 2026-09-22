@@ -93,10 +93,19 @@ class ExecutionReport(BaseModel):
                 )
 
     def to_json_file(self, path: str) -> None:
-        """Serialize the report to a JSON file."""
+        """Serialize the report to a JSON file.
+
+        M13/2.25: atomic write + parent-dir creation, matching the rest of the
+        persistence layer (a crash mid-write must not leave a truncated report,
+        and `--report some/dir/report.json` must work without mkdir first).
+        """
         from pathlib import Path
 
-        Path(path).write_text(self.model_dump_json(indent=2), encoding="utf-8")
+        from ask_llm.core.checkpoint import atomic_write_text
+
+        p = Path(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_text(p, self.model_dump_json(indent=2))
 
     @classmethod
     def from_json_file(cls, path: str) -> ExecutionReport:

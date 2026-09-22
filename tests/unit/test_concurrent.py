@@ -147,6 +147,32 @@ def test_propagates_exception_without_handler():
         )
 
 
+def test_propagated_exception_carries_partial_results():
+    """L1/2.25: results completed before the worker exception survive on the
+    exception instead of being discarded with the local results list."""
+
+    def worker(task: int, retry_count: int) -> _SimpleResult:
+        if task == 2:
+            raise RuntimeError("boom")
+        return _SimpleResult(task_id=task, value=task, retry_count=retry_count)
+
+    with pytest.raises(RuntimeError, match="boom") as excinfo:
+        run_bounded_with_retries(
+            [1, 2, 3],
+            worker,
+            max_workers=1,
+            max_retries=0,
+            retry_delay=0.01,
+            retry_delay_max=0.1,
+            is_failed=lambda r: False,
+            error_message=lambda r: r.error,
+            retry_count_from_result=lambda r: r.retry_count,
+        )
+
+    partial = getattr(excinfo.value, "partial_results", [])
+    assert 1 in [r.task_id for r in partial]
+
+
 def test_runner_class_reusable():
     runner = BoundedRetryRunner(
         max_workers=2,

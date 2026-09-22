@@ -143,3 +143,13 @@ def test_attempt_history_is_included_in_report():
     assert len(report.tasks[0].attempts) == 2
     providers = {a.provider for a in report.tasks[0].attempts}
     assert providers == {"deepseek", "qwen"}
+
+
+def test_report_to_json_file_creates_missing_parent_dirs(tmp_path):
+    """M13/2.25: `--report dir/sub/report.json` must work without mkdir, and
+    the write must be atomic (no truncated report on crash)."""
+    results = [_success_result(0, "deepseek", "deepseek-chat")]
+    report = build_report_from_batch_results("paper", results)
+    path = tmp_path / "sub" / "dir" / "report.json"
+    report.to_json_file(str(path))
+    assert ExecutionReport.from_json_file(str(path)).command == "paper"

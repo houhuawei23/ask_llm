@@ -46,7 +46,7 @@ def test_batch_checkpoint_roundtrip(tmp_path):
     assert loaded.version == CHECKPOINT_VERSION
     assert loaded.command == "batch"
     assert loaded.config_digest == "abc"
-    assert loaded.completed_task_ids == [0]
+    assert loaded.completed_task_ids == {0}
     assert len(loaded.successful_results) == 1
     assert loaded.successful_results[0].response == "bonjour"
     assert len(loaded.failed_tasks) == 1
@@ -55,7 +55,7 @@ def test_batch_checkpoint_roundtrip(tmp_path):
 
 def test_is_completed():
     checkpoint = BatchCheckpoint.create(command="batch", config_digest="abc")
-    checkpoint.completed_task_ids = [1, 3]
+    checkpoint.completed_task_ids = {1, 3}
     assert checkpoint.is_completed(1)
     assert not checkpoint.is_completed(2)
 
@@ -65,8 +65,19 @@ def test_merge_skips_duplicate_task_ids():
     result1 = _make_result(task_id=0)
     result2 = _make_result(task_id=0)
     checkpoint.merge([result1, result2])
-    assert checkpoint.completed_task_ids == [0]
-    assert len(checkpoint.successful_results) == 2
+    assert checkpoint.completed_task_ids == {0}
+    # M1/2.25: idempotent merge — the duplicate result is skipped entirely.
+    assert len(checkpoint.successful_results) == 1
+
+
+def test_completed_ids_serialized_sorted(tmp_path):
+    """M1/2.25: set-backed ids round-trip as a sorted JSON list."""
+    checkpoint = BatchCheckpoint.create(command="batch", config_digest="abc")
+    checkpoint.merge([_make_result(task_id=i) for i in (7, 2, 5)])
+    checkpoint.save(tmp_path / "cp.json")
+    loaded = BatchCheckpoint.load(tmp_path / "cp.json")
+    assert sorted(loaded.completed_task_ids) == [2, 5, 7]
+    assert loaded.completed_task_ids == {2, 5, 7}
 
 
 def test_result_to_task():

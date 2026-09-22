@@ -31,7 +31,11 @@ from ask_llm.core.global_batch_runner import run_global_batch_tasks
 
 # D6: persist incremental checkpoint progress every N successful results so a
 # hard kill (SIGKILL/OOM) loses at most ~N results instead of the whole run.
+# M3/2.25: the interval grows with checkpoint size (bounded [10, 50]) so a
+# 1000-chunk run doesn't rewrite its ever-larger JSON every 10 results —
+# quadratic bytes written for shrinking loss-window value.
 _INCREMENTAL_SAVE_EVERY = 10
+_MAX_INCREMENTAL_SAVE_EVERY = 50
 
 
 def compute_checkpoint_digest(
@@ -42,9 +46,9 @@ def compute_checkpoint_digest(
 
     Hashes the config/input file *content* (never just its path — a path-only
     digest made resume validation a no-op, H9) plus each task's prompt,
-    content and model, so editing any of them between runs invalidates the
-    old checkpoint instead of silently mis-mapping prior results onto new
-    tasks.
+    content, model and sampling params (temperature/top_p/max_tokens,
+    L2/2.25), so editing any of them between runs invalidates the old
+    checkpoint instead of silently mis-mapping prior results onto new tasks.
     """
     h = hashlib.sha256()
     if config_path is not None:
@@ -59,8 +63,16 @@ def compute_checkpoint_digest(
         h.update(b"\x1e")
         h.update((t.content or "").encode("utf-8"))
         h.update(b"\x1e")
-        model = t.model_settings.model if t.model_settings is not None else ""
-        h.update((model or "").encode("utf-8"))
+        # L2/2.25: sampling params are part of the run's identity — resuming
+        # with a different temperature/top_p/max_tokens must not silently keep
+        # old results (breaks old checkpoints; the digest-mismatch message
+        # tells users to re-run fresh, which is the safe failure).
+        ms = t.model_settings
+        if ms is not None:
+            h.update((ms.model or "").encode("utf-8"))
+            h.update(f"|{ms.temperature}|{ms.top_p}|{ms.max_tokens}".encode())
+        else:
+            h.update(b"|")
     return h.hexdigest()
 
 
@@ -164,7 +176,6 @@ def run_with_checkpoint(
     # between saves then loses at most ``save_every`` results instead of the
     # whole run; the graceful Ctrl-C path (B5) already drains and reaches the
     # final save below.
-    save_every = max(1, min(_INCREMENTAL_SAVE_EVERY, len(tasks) or 1))
     inc_state = {"since_save": 0}
     # H2/2.25: on_result fires from per-lane worker threads in multi-lane runs,
     # so merge + counter + save must be atomic or two lanes can interleave
@@ -178,6 +189,12 @@ def run_with_checkpoint(
         with result_lock:
             checkpoint.merge([result])
             inc_state["since_save"] += 1
+            # M3/2.25: size-aware interval — bounded [10, 50] grows with the
+            # checkpoint so large runs don't reserialize it every 10 results.
+            n_done = len(checkpoint.successful_results)
+            save_every = max(
+                1, min(_MAX_INCREMENTAL_SAVE_EVERY, max(_INCREMENTAL_SAVE_EVERY, n_done // 10))
+            )
             if inc_state["since_save"] >= save_every:
                 checkpoint.save(checkpoint_path)
                 inc_state["since_save"] = 0

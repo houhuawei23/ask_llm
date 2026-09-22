@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### 行为变更（脚本/CI 需关注）
+
+- **checkpoint digest 纳入采样参数**（L2）：temperature/top_p/max_tokens 变更
+  后旧 checkpoint 会拒绝 resume（digest 不匹配，提示删除后重跑）——这是安全
+  失败，避免换参数后静默沿用旧结果。
+
 ### Fixed
 
 - **trans --resume 导出不再误报冲突**（H1）：resume 运行合法覆盖上一次的部分
@@ -10,6 +16,14 @@
 - **batch 多 lane 运行 checkpoint 竞态**（H2）：`on_result` 会被多个 lane 工作
   线程并发调用，merge/计数/保存之间无锁，可能丢失结果甚至序列化崩溃；现已用
   锁将 merge + save 原子化。
+- **checkpoint merge 幂等 + O(n) 查重**（M1）：`completed_task_ids` 改为 set，
+  重复 merge 不再复制 result 条目（此前只去重 id、result 无条件 append）。
+- **大任务 checkpoint 保存成本**（M3）：增量保存间隔随 checkpoint 大小增长
+  （[10, 50] 有界），千 chunk 级翻译不再每 10 条全量重写大 JSON。
+- **翻译导出与执行报告原子写**（M13）：text/markdown/JSON 导出与
+  `--report` JSON 均改为 tmp+fsync+rename 原子写；报告写入自动创建父目录。
+- **worker 异常不再丢弃已完成结果**（L1）：异常传播时已收集的部分结果挂在
+  `exc.partial_results` 上，调用方可汇报已完成部分。
 - **ask 输入路径校验错误逃逸错误处理**（H3）：`validate_input_source` 移入
   `cli_errors` 块内，不存在的输入文件现在输出干净的 CLI 错误而非裸 traceback。
 
