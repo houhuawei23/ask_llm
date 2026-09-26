@@ -7,9 +7,9 @@ from typing import Annotated
 
 import typer
 
+from ask_llm.cli.common import bootstrap_command
 from ask_llm.cli.errors import cli_errors
 from ask_llm.config.cli_session import (
-    bootstrap_command,
     gate_api_key_or_exit,
     resolve_and_prepare,
 )

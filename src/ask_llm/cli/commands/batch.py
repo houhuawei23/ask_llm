@@ -9,8 +9,9 @@ from typing import Annotated
 import typer
 from loguru import logger
 
+from ask_llm.cli.common import load_pricing_with_hint
 from ask_llm.cli.errors import cli_errors
-from ask_llm.config.cli_session import load_cli_session, load_pricing_with_hint
+from ask_llm.config.cli_session import load_cli_session
 from ask_llm.services.batch_service import BatchService, run_batch_from_config
 from ask_llm.utils.console import console
 from ask_llm.utils.export_formats import detect_export_format

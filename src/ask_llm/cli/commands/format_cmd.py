@@ -7,11 +7,11 @@ from typing import Annotated
 
 import typer
 
+from ask_llm.cli.common import load_pricing_with_hint
 from ask_llm.cli.errors import cli_errors
 from ask_llm.config.cli_session import (
     gate_api_key_or_exit,
     load_cli_session,
-    load_pricing_with_hint,
     resolve_and_prepare,
 )
 from ask_llm.core.processor import RequestProcessor
