@@ -25,7 +25,7 @@ ask_llm/
 │   │   ├── common.py         # Shared CLI helpers
 │   │   └── errors.py         # CLI error mapping (cli_errors context manager, raise_unexpected_cli_error)
 │   ├── core/                 # Core business logic
-│   │   ├── models.py                  # Pydantic data models (ProviderConfig/SecretStr, AppConfig, RequestMetadata)
+│   │   ├── models.py                  # Pydantic data models (ProviderConfig/SecretStr, RequestMetadata)
 │   │   ├── processor.py               # RequestProcessor (prompt format + LLM call)
 │   │   ├── chat.py                    # Interactive chat session (from_initial_context bootstrap)
 │   │   ├── batch_models.py            # BatchTask, BatchResult, AttemptRecord, BatchStatistics, TaskStatus
@@ -34,21 +34,18 @@ ask_llm/
 │   │   ├── stream_collector.py        # Streaming + token collection (pure)
 │   │   ├── progress_presenter.py      # Per-worker Rich progress bars
 │   │   ├── provider_manager.py        # Build provider adapter cache for a batch
-│   │   ├── global_batch_runner.py     # run_global_batch_tasks entry point
 │   │   ├── command_runner.py          # run_with_checkpoint (shared checkpoint lifecycle for batch/trans)
 │   │   ├── concurrent.py              # BoundedRetryRunner (single-queue scheduler + retry heap + SIGINT)
-│   │   ├── retry_policy.py            # RetryPolicy / DEFAULT_RETRY_POLICY (transient-error classification)
 │   │   ├── checkpoint.py              # Generic atomic checkpoint base (tmp + os.replace)
 │   │   ├── batch_checkpoint.py        # Concrete checkpoint for batch/translation tasks
-│   │   ├── telemetry.py               # LogContext, bind_context, classify_error, should_fallback_for_error
+│   │   ├── telemetry.py               # LogContext, bind_context (error classification lives in error_keywords)
 │   │   ├── execution_report.py        # Structured execution reports (AttemptRecord projection)
-│   │   ├── error_keywords.py          # Single (keyword -> category, transient) rule table
+│   │   ├── error_keywords.py          # Single authority: (keyword -> category, transient, fallback) rule table
 │   │   ├── response_parser.py         # unwrap_translation_payload (JSON / LaTeX-escape repair)
 │   │   ├── translator.py              # Translation prompt assembly
-│   │   ├── text_splitter.py           # TextChunk + base splitter (thin after P3.2)
+│   │   ├── text_splitter.py           # TextChunk + detect_file_type (single split algorithm: BinarySplitter)
 │   │   ├── markdown_structure.py      # Single-pass parser: fences, frontmatter, heading spans
 │   │   ├── binary_splitter.py         # Budget-pluggable splitter (TokenBudget: safety factor + prompt_overhead)
-│   │   ├── markdown_token_splitter.py # Thin compat wrapper over BinarySplitter
 │   │   ├── chunked_llm_job.py         # Shared orchestration base for Heading/Body formatters
 │   │   ├── md_heading_formatter.py    # Heading format pipeline
 │   │   ├── md_body_formatter.py       # Body format pipeline (frontmatter carve + position-aware reassembly)
