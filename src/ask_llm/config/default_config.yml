@@ -27,8 +27,8 @@ translation:
   max_concurrent_api_calls: 12   # Alias for threads
   retries: 3
   balance_translation_chunks: true   # split/merge by tiktoken so parallel requests are similar cost
-  max_chunk_tokens: 6000            # target max body tokens per chunk after rebalance
-  max_output_tokens: 8192           # completion cap per chunk (avoid truncation vs llm_engine default 2000)
+  max_chunk_tokens: 10000            # target max body tokens per chunk after rebalance
+  max_output_tokens: 20000           # completion cap per chunk (avoid truncation vs llm_engine default 2000)
   preserve_format: true
   include_original: false
   temperature: null             # null uses provider default
