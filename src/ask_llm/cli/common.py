@@ -7,11 +7,17 @@ service layer.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 import typer
 
-from ask_llm.config.cli_session import LoadResult, load_cli_session
+from ask_llm.config.cli_session import (
+    LoadResult,
+    gate_api_key_or_exit,
+    load_cli_session,
+    resolve_and_prepare,
+)
 from ask_llm.config.manager import ConfigManager
 from ask_llm.utils.api_key_gate import (
     UnresolvedAPIKeyError,  # noqa: F401  (re-exported for callers)
@@ -109,3 +115,47 @@ def bootstrap_command(
     load_result, config_manager = load_cli_session(config_path)
     pricing_map, pricing_source = load_pricing_with_hint(pricing_path)
     return load_result, config_manager, pricing_map, pricing_source
+
+
+def paid_command_prelude(
+    config_path: str | Path | None,
+    *,
+    provider: str | None,
+    model: str | None,
+    temperature: float | Callable[[LoadResult], float],
+    pricing_path: str | Path | None = None,
+    skip_api_key_check: bool = False,
+) -> tuple[LoadResult, ConfigManager, str, str, dict, Path | None]:
+    """One preamble for every command that can spend API tokens.
+
+    Composes the standard paid-command sequence: load config + pricing →
+    resolve provider/model → gate the API key. Commands only add their
+    command-specific parsing after this returns; none of the load/resolve/
+    gate logic may be duplicated per command.
+
+    Args:
+        config_path: Optional explicit default_config.yml path.
+        provider: CLI --provider override (None = config default).
+        model: CLI --model override (None = config default).
+        temperature: Effective temperature, either a plain float (CLI flag)
+            or a callable evaluated on the loaded config for the command's
+            own section default (e.g. ``lambda lr: lr.unified_config.paper.temperature``).
+        pricing_path: Optional explicit providers.yml pricing path.
+        skip_api_key_check: Forwarded to the gate (``--dry-run`` passes True).
+
+    Returns:
+        ``(load_result, config_manager, provider, model, pricing_map, pricing_source)``.
+    """
+    load_result, config_manager, pricing_map, pricing_source = bootstrap_command(
+        config_path,
+        pricing_path=pricing_path,
+    )
+    effective_temperature = temperature(load_result) if callable(temperature) else temperature
+    final_provider, final_model = resolve_and_prepare(
+        config_manager,
+        cli_provider=provider,
+        cli_model=model,
+        temperature=effective_temperature,
+    )
+    gate_api_key_or_exit(config_manager, final_provider, skip_api_key_check=skip_api_key_check)
+    return load_result, config_manager, final_provider, final_model, pricing_map, pricing_source

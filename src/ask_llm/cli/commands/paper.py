@@ -7,12 +7,8 @@ from typing import Annotated
 
 import typer
 
-from ask_llm.cli.common import bootstrap_command
+from ask_llm.cli.common import paid_command_prelude
 from ask_llm.cli.errors import cli_errors
-from ask_llm.config.cli_session import (
-    gate_api_key_or_exit,
-    resolve_and_prepare,
-)
 from ask_llm.services.paper_service import PaperExplainOptions, PaperService
 from ask_llm.utils.console import console
 
@@ -166,25 +162,16 @@ def paper(
         (
             load_result,
             config_manager,
+            final_provider,
+            final_model,
             pricing_map,
             pricing_source,
-        ) = bootstrap_command(
+        ) = paid_command_prelude(
             config_path,
+            provider=provider,
+            model=model,
+            temperature=lambda lr: lr.unified_config.paper.temperature,
             pricing_path=providers_pricing,
-        )
-
-        final_provider, final_model = resolve_and_prepare(
-            config_manager,
-            cli_provider=provider,
-            cli_model=model,
-            temperature=temperature,
-        )
-        gate_api_key_or_exit(
-            config_manager,
-            final_provider,
-            # M2: --dry-run never touches the network, so it must not force an
-            # interactive API-key prompt (cli_session documents gate-after-
-            # pre-network-path; ask does this, paper didn't).
             skip_api_key_check=skip_api_key_check or dry_run,
         )
         paper_cfg = load_result.unified_config.paper
