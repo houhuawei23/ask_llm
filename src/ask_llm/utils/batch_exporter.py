@@ -10,6 +10,7 @@ import yaml
 from loguru import logger
 
 from ask_llm.core.batch_models import BatchResult, BatchStatistics, TaskStatus
+from ask_llm.core.checkpoint import atomic_write_stream
 from ask_llm.utils.file_handler import FileHandler
 
 
@@ -157,9 +158,9 @@ class BatchResultExporter:
         """Export results as JSON using a streaming encoder.
 
         For large result sets this avoids materializing the entire JSON string in
-        memory before writing it to disk. Streams into a tmp file and swaps at
-        the end, matching FileHandler's atomic-write + parent-mkdir semantics
-        used by the yaml/csv/markdown exports (H10).
+        memory before writing it to disk. Streams through the shared
+        ``atomic_write_stream`` (unique tmp + fsync + rename), matching the
+        parent-mkdir semantics of the other exports (H10).
         """
         output_file = Path(output_path)
         if output_file.exists() and not force:
@@ -167,16 +168,10 @@ class BatchResultExporter:
                 f"Output file already exists: {output_path}. Use --force to overwrite."
             )
         output_file.parent.mkdir(parents=True, exist_ok=True)
-        tmp_file = output_file.with_suffix(output_file.suffix + ".tmp")
         encoder = json.JSONEncoder(indent=2, ensure_ascii=False, default=str)
-        try:
-            with open(tmp_file, "w", encoding="utf-8") as f:
-                for chunk in encoder.iterencode(self._prepare_data()):
-                    f.write(chunk)
-            tmp_file.replace(output_file)
-        except Exception:
-            tmp_file.unlink(missing_ok=True)
-            raise
+        with atomic_write_stream(output_file) as f:
+            for chunk in encoder.iterencode(self._prepare_data()):
+                f.write(chunk)
 
     def _export_yaml(self) -> str:
         """Export results as YAML."""

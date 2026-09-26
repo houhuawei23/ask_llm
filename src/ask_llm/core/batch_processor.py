@@ -55,13 +55,12 @@ def estimate_output_tokens(task_kind: str, input_tokens: int) -> int:
     if input_tokens <= 0:
         return DEFAULT_MIN_OUTPUT_TOKENS
 
-    # Try to match task_kind to TaskKind enum
     try:
         kind = TaskKind(task_kind)
-        multiplier = OUTPUT_TOKEN_MULTIPLIERS.get(kind, OUTPUT_TOKEN_MULTIPLIERS[TaskKind.BATCH])
     except ValueError:
         # Unknown task kind, use default batch multiplier
-        multiplier = OUTPUT_TOKEN_MULTIPLIERS[TaskKind.BATCH]
+        kind = TaskKind.BATCH
+    multiplier = OUTPUT_TOKEN_MULTIPLIERS.get(kind, OUTPUT_TOKEN_MULTIPLIERS[TaskKind.BATCH])
 
     return int(input_tokens * multiplier)
 

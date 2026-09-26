@@ -8,7 +8,7 @@ from loguru import logger
 from nbformat import NotebookNode
 
 from ask_llm.core.batch_models import BatchResult, BatchTask, ModelConfig, TaskStatus
-from ask_llm.core.batch_processor import GlobalBatchProcessor, rate_limit_config_from
+from ask_llm.core.global_batch_runner import run_global_batch_tasks
 from ask_llm.core.markdown_token_splitter import MarkdownTokenSplitter
 from ask_llm.core.text_splitter import TextChunk
 from ask_llm.core.translator import Translator
@@ -40,6 +40,7 @@ def plan_notebook_translation(
     prompt_template: str,
     max_chunk_tokens: int = 2400,
     balance_chunks: bool = True,
+    notebook: NotebookNode | None = None,
 ) -> list[tuple[int, str]]:
     """Build the (cell_index, chunk_content) translation plan for a notebook.
 
@@ -48,15 +49,19 @@ def plan_notebook_translation(
     extraction, splitter, prompt-overhead reservation, rebalance) instead of
     silently skipping notebooks. ``prompt_template`` is measured here for
     chunk sizing (D2) exactly as the paid run does.
-    """
-    input_file = Path(input_path)
-    if not input_file.exists():
-        raise FileNotFoundError(f"Input notebook not found: {input_path}")
-    if input_file.suffix != ".ipynb":
-        raise ValueError(f"Input file must be a Jupyter notebook (.ipynb): {input_path}")
 
-    with open(input_path, encoding="utf-8") as f:
-        notebook = nbformat.read(f, as_version=4)
+    ``notebook`` (P0): pass an already-loaded notebook to avoid a second disk
+    read racing with the first (and to keep the plan consistent with the
+    notebook that will actually be written).
+    """
+    if notebook is None:
+        input_file = Path(input_path)
+        if not input_file.exists():
+            raise FileNotFoundError(f"Input notebook not found: {input_path}")
+        if input_file.suffix != ".ipynb":
+            raise ValueError(f"Input file must be a Jupyter notebook (.ipynb): {input_path}")
+        with open(input_path, encoding="utf-8") as f:
+            notebook = nbformat.read(f, as_version=4)
 
     tasks_data: list[tuple[int, str]] = []
     prompt_overhead = TokenCounter.count_tokens(prompt_template, model)
@@ -158,6 +163,7 @@ class NotebookTranslator:
             prompt_template=prompt_template,
             max_chunk_tokens=max_chunk_tokens,
             balance_chunks=balance_chunks,
+            notebook=notebook,
         )
 
         if not tasks_data:
@@ -182,16 +188,17 @@ class NotebookTranslator:
                 )
             )
 
-        # Process with GlobalBatchProcessor
-        rate_limit_config = rate_limit_config_from(config_manager)
-
-        processor = GlobalBatchProcessor(
+        # Process through the unified entry point: it performs the API-key
+        # fail-fast gate, wires the global rate limiter, and returns the
+        # processor so auth-failure state stays inspectable.
+        results, processor = run_global_batch_tasks(
+            tasks,
+            config_manager,
             max_workers=max_workers,
             max_retries=max_retries,
+            show_progress=show_progress,
             stream_api=stream_api,
-            rate_limit_config=rate_limit_config,
         )
-        results = processor.process_global_tasks(tasks, config_manager, show_progress=show_progress)
         self.last_results = list(results)
 
         successful = sum(1 for r in results if r.status == TaskStatus.SUCCESS)
@@ -214,18 +221,14 @@ class NotebookTranslator:
                 cell_translations[cell_idx] = []
             cell_translations[cell_idx].append(translated)
 
-        # Merge chunks per cell and update notebook
-        translated_cells = list(notebook.cells)
+        # Merge chunks per cell and update notebook in place: mutating the
+        # existing cell preserves attachments (embedded images) and the cell
+        # ``id`` required by nbformat >= 4.5 — rebuilding the node from a
+        # 3-key dict silently dropped both.
         for cell_idx, translated_chunks in cell_translations.items():
             merged_text = "\n\n".join(translated_chunks)
-            cell = notebook.cells[cell_idx]
-            translated_cells[cell_idx] = NotebookNode(
-                {
-                    "cell_type": cell.cell_type,
-                    "metadata": cell.metadata.copy(),
-                    "source": merged_text,
-                }
-            )
+            notebook.cells[cell_idx].source = merged_text
+        translated_cells = notebook.cells
 
         # Create output notebook
         translated_notebook = NotebookNode(

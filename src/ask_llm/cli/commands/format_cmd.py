@@ -253,9 +253,10 @@ def format_cmd(
             cli_model=model,
             temperature=temperature,
         )
-        gate_api_key_or_exit(config_manager, _final_provider)
+        # E3/2.25: zero-network estimate must not require a key (parity with
+        # paper/ask dry-run), so the gate is skipped for --dry-run.
+        gate_api_key_or_exit(config_manager, _final_provider, skip_api_key_check=dry_run)
 
-        # E3/2.25: zero-network estimate — same splitters as the paid run.
         if dry_run:
             from ask_llm.services.dry_run import estimate_format_run
 

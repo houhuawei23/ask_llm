@@ -12,7 +12,7 @@ from loguru import logger
 from tqdm import tqdm
 
 from ask_llm.config.context import get_config_or_none
-from ask_llm.core.checkpoint import atomic_write_text
+from ask_llm.core.checkpoint import atomic_write_stream, atomic_write_text
 
 # Built-in defaults matching default_config.yml so FileHandler can be used
 # without an active CLI config (e.g. library / embedded use).
@@ -173,18 +173,18 @@ class FileHandler:
 
         Progress-free I/O core (P4.10). Slices by characters (UTF-8 sequences
         are never split mid-character) while reporting byte counts (B10).
+        Streams through the shared ``atomic_write_stream`` (unique tmp + fsync
+        + rename) so an interrupted write never truncates the target (H10) and
+        concurrent writers never share one ``.tmp`` name.
         """
         file_path = Path(path)
-        # Stream into a tmp file and swap at the end so an interrupted write
-        # never truncates the target (H10).
-        tmp_path = file_path.with_suffix(file_path.suffix + ".tmp")
         try:
             file_path.parent.mkdir(parents=True, exist_ok=True)
             total_bytes = len(content.encode("utf-8"))
             char_written = 0
             byte_written = 0
             chunk_size = cls._get_chunk_size()
-            with open(tmp_path, "w", encoding="utf-8") as f:
+            with atomic_write_stream(file_path) as f:
                 while byte_written < total_bytes:
                     chunk = content[char_written : char_written + chunk_size]
                     if not chunk:
@@ -195,9 +195,7 @@ class FileHandler:
                     byte_written += len(chunk_bytes)
                     if on_chunk is not None:
                         on_chunk(len(chunk_bytes))
-            tmp_path.replace(file_path)
-        except Exception as e:
-            tmp_path.unlink(missing_ok=True)
+        except OSError as e:
             raise OSError(f"Failed to write file {path}: {e}") from e
 
     @classmethod

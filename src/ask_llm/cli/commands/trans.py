@@ -283,7 +283,9 @@ def trans(
             gate_api_key_or_exit(
                 config_manager,
                 final_provider,
-                skip_api_key_check=skip_api_key_check,
+                # Zero-network preview must not require a key (parity with
+                # paper/ask dry-run).
+                skip_api_key_check=skip_api_key_check or dry_run,
             )
 
             if dry_run:

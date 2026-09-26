@@ -76,6 +76,7 @@ def format_one(
         return format_one_markdown_file(
             file_path,
             processor=processor,
+            model=model,
             prompt_file_resolved=prompt_file_resolved,
             heading_batch_size=heading_batch_size,
             heading_concurrency=heading_concurrency,

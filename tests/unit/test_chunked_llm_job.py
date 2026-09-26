@@ -7,12 +7,14 @@ checkpoint writing runs against ``tmp_path``. The processor is the only mock
 
 from __future__ import annotations
 
+import ask_llm.core.chunked_llm_job
 from dataclasses import dataclass
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from ask_llm.core.chunked_llm_job import ChunkedLLMJob
+from ask_llm.core.concurrent import RunMetrics
 from ask_llm.core.format_checkpoint import (
     CHECKPOINT_VERSION,
     FailedChunkInfo,
@@ -61,6 +63,10 @@ class EchoJob(ChunkedLLMJob):
             )
         return JobResult(unit.unit_id, f"done:{unit.payload}", retry_count=retry_count)
 
+    @staticmethod
+    def make_interrupted_stub(unit: Unit) -> JobResult:
+        return JobResult(unit.unit_id, "", failed=True, error="interrupted")
+
 
 def make_units(n):
     return [Unit(i, f"payload-{i}") for i in range(n)]
@@ -70,7 +76,7 @@ class TestRunUnits:
     def test_results_sorted_by_order_key(self):
         job = EchoJob(concurrency=4)
 
-        results = job._run_units(
+        results, interrupted = job._run_units(
             make_units(6),
             job.worker,
             is_failed=lambda r: r.failed,
@@ -79,6 +85,7 @@ class TestRunUnits:
             order_key=lambda r: -r.unit_id,  # deliberately not the natural order
         )
 
+        assert interrupted is False
         assert [r.unit_id for r in results] == [5, 4, 3, 2, 1, 0]
         assert all(not r.failed for r in results)
         assert {r.value for r in results} == {f"done:payload-{i}" for i in range(6)}
@@ -91,7 +98,7 @@ class TestRunUnits:
             attempts.append((unit.unit_id, retry_count))
             return job.worker(unit, retry_count)
 
-        results = job._run_units(
+        results, _interrupted = job._run_units(
             make_units(3),
             counting_worker,
             is_failed=lambda r: r.failed,
@@ -116,7 +123,7 @@ class TestRunUnits:
             attempts.append((unit.unit_id, retry_count))
             return JobResult(unit.unit_id, "", failed=True, error="invalid request: bad model")
 
-        results = job._run_units(
+        results, _interrupted = job._run_units(
             make_units(2),
             worker,
             is_failed=lambda r: r.failed,
@@ -131,8 +138,13 @@ class TestRunUnits:
 
     def test_routes_concurrency_and_retry_settings_to_runner(self):
         job = EchoJob(concurrency=8, retries=2)
-        with patch("ask_llm.core.chunked_llm_job.run_bounded_with_retries") as mock_run:
-            mock_run.return_value = []
+        with patch(
+            "ask_llm.core.chunked_llm_job.BoundedRetryRunner"
+        ) as mock_runner_cls, patch.object(
+            ask_llm.core.chunked_llm_job, "logger"
+        ):
+            mock_runner = mock_runner_cls.return_value
+            mock_runner.run_with_metrics.return_value = ([], RunMetrics())
 
             job._run_units(
                 make_units(3),
@@ -142,12 +154,14 @@ class TestRunUnits:
                 retry_count_from_result=lambda r: r.retry_count,
                 order_key=lambda r: r.unit_id,
             )
-            kwargs = mock_run.call_args.kwargs
-            assert kwargs["max_workers"] == 3  # min(concurrency, len(units))
-            assert kwargs["max_retries"] == 2
-            assert kwargs["retry_delay"] == 0.0
-            assert kwargs["retry_delay_max"] == 0.0
-            assert mock_run.call_args.args[1] == job.worker  # bound-method equality
+            ctor_kwargs = mock_runner_cls.call_args.kwargs
+            assert ctor_kwargs["max_workers"] == 3  # min(concurrency, len(units))
+            assert ctor_kwargs["max_retries"] == 2
+            assert ctor_kwargs["retry_delay"] == 0.0
+            assert ctor_kwargs["retry_delay_max"] == 0.0
+            run_args = mock_runner.run_with_metrics.call_args.args
+            run_kwargs = mock_runner.run_with_metrics.call_args.kwargs
+            assert run_args[1] == job.worker  # bound-method equality
 
             # Empty unit list still yields a valid (single) worker pool.
             job._run_units(
@@ -158,7 +172,33 @@ class TestRunUnits:
                 retry_count_from_result=lambda r: r.retry_count,
                 order_key=lambda r: r.unit_id,
             )
-            assert mock_run.call_args.kwargs["max_workers"] == 1
+            assert mock_runner_cls.call_args.kwargs["max_workers"] == 1
+
+    def test_interrupt_flag_is_propagated(self):
+        """P0: the runner's interrupted flag reaches the caller."""
+
+        class InterruptingRunner:
+            def __init__(self, **_kwargs):
+                pass
+
+            def run_with_metrics(self, _tasks, _worker, **kwargs):
+                make_interrupted = kwargs["make_interrupted_result"]
+                # Simulate one abandoned unit converted by the callback.
+                return [make_interrupted(make_units(1)[0])], RunMetrics(interrupted=True, abandoned=1)
+
+        job = EchoJob(concurrency=2)
+        with patch("ask_llm.core.chunked_llm_job.BoundedRetryRunner", InterruptingRunner):
+            results, interrupted = job._run_units(
+                make_units(1),
+                job.worker,
+                is_failed=lambda r: r.failed,
+                error_message=lambda r: r.error,
+                retry_count_from_result=lambda r: r.retry_count,
+                order_key=lambda r: r.unit_id,
+                make_interrupted_result=EchoJob.make_interrupted_stub,
+            )
+        assert interrupted is True
+        assert len(results) == 1
 
 
 class TestSaveCheckpoint:

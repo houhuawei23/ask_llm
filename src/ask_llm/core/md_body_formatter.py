@@ -201,13 +201,14 @@ class BodyFormatter(ChunkedLLMJob):
                 f"max_chunk_tokens={self.max_chunk_tokens})"
             )
 
-        sorted_results: list[_ChunkResult] = self._run_units(
+        sorted_results, _interrupted = self._run_units(
             chunks,
             self._process_chunk_worker,
             is_failed=lambda r: not r.success,
             error_message=lambda r: r.failed_info.error or "",
             retry_count_from_result=lambda r: r.retry_count,
             order_key=lambda r: r.chunk_id,
+            make_interrupted_result=self._make_interrupted_result,
         )
 
         # Collect results in order
@@ -252,13 +253,16 @@ class BodyFormatter(ChunkedLLMJob):
         # Reattach the untouched frontmatter (D3).
         formatted_text = frontmatter + formatted_body
 
-        # Save checkpoint if any chunks failed
+        # Save checkpoint if any chunks failed. ``chunk_id`` must come from the
+        # result itself (not enumerate): on interrupt the result list can be
+        # dense while chunk ids are not, and misnumbered ids would corrupt the
+        # resume merge.
         successful = [
             SuccessfulChunkInfo(
-                chunk_id=i,
+                chunk_id=sr.chunk_id,
                 formatted_content=sr.formatted,
             )
-            for i, sr in enumerate(sorted_results)
+            for sr in sorted_results
             if sr.success
         ]
         checkpoint_path = self._save_checkpoint(
@@ -310,6 +314,22 @@ class BodyFormatter(ChunkedLLMJob):
                     retry_count=retry_count,
                 ),
             )
+
+    def _make_interrupted_result(self, chunk: TextChunk) -> _ChunkResult:
+        """Build a failed result for a chunk abandoned by an interrupt."""
+        template = self.prompt_template
+        return _ChunkResult(
+            chunk_id=chunk.chunk_id,
+            success=False,
+            original=chunk.content,
+            failed_info=FailedChunkInfo(
+                chunk_id=chunk.chunk_id,
+                content=chunk.content,
+                prompt_template=template or "",
+                error="interrupted by user (Ctrl-C); chunk was not processed",
+                retry_count=0,
+            ),
+        )
 
     def _process_chunk(self, chunk: TextChunk, template: str) -> tuple[int, str, RequestMetadata]:
         """Process a single chunk via LLM API (no retries).
@@ -453,7 +473,7 @@ class BodyFormatter(ChunkedLLMJob):
         failed_chunks_inputs = [
             TextChunk(content=fc.content, chunk_id=fc.chunk_id) for fc in checkpoint.failed_chunks
         ]
-        retry_results = formatter._retry_failed_units(
+        retry_results, _ = formatter._retry_failed_units(
             checkpoint,
             failed_chunks_inputs,
             formatter._process_chunk_worker,
@@ -461,6 +481,7 @@ class BodyFormatter(ChunkedLLMJob):
             error_message=lambda r: r.failed_info.error or "",
             retry_count_from_result=lambda r: r.retry_count,
             order_key=lambda r: r.chunk_id,
+            make_interrupted_result=formatter._make_interrupted_result,
         )
         failed_by_id = {f.chunk_id: f for f in checkpoint.failed_chunks}
         for res in retry_results:

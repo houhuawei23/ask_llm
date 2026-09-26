@@ -103,9 +103,18 @@ class ConfigManager:
         name = provider_name or self._current_provider
         base = self._base_config.get_provider_config(name)
 
-        # Create a copy with this provider's overrides only
+        # No overrides (hot path): hand out the base config as-is — a
+        # model_dump → model_validate round-trip would re-run field validators
+        # and re-log an "empty API key" warning on every call for key-less
+        # providers (e.g. ollama).
+        overrides = self._overrides.get(name)
+        if not overrides:
+            return base
+
+        # With overrides, rebuild through validation so plain strings (e.g. an
+        # api_key override) are coerced to the declared field types (SecretStr).
         config_dict = base.model_dump()
-        config_dict.update(self._overrides.get(name, {}))
+        config_dict.update(overrides)
 
         return ProviderConfig.model_validate(config_dict)
 

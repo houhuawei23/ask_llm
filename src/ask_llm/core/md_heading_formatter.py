@@ -181,6 +181,7 @@ class HeadingFormatter(ChunkedLLMJob):
         retries: int | None = None,
         retry_delay: float | None = None,
         retry_delay_max: float | None = None,
+        model: str = "",
     ):
         """
         Initialize heading formatter.
@@ -195,6 +196,8 @@ class HeadingFormatter(ChunkedLLMJob):
             retries: Max retry attempts per batch (default from config)
             retry_delay: Initial retry delay in seconds (default from config)
             retry_delay_max: Max retry delay cap in seconds (default from config)
+            model: Model name recorded in checkpoints. Must match the model the
+                CLI passes on ``--resume`` so the config digest verifies.
         """
         lr = get_config_or_none()
         fh_config = lr.unified_config.format_heading if lr is not None else _DEFAULT_FORMAT_HEADING
@@ -208,6 +211,7 @@ class HeadingFormatter(ChunkedLLMJob):
             retry_delay_max=self._pick(retry_delay_max, fh_config.retry_delay_max),
         )
         self.batch_size = self._pick(batch_size, fh_config.batch_size)
+        self.model = model
         self._context_heading_count = fh_config.context_heading_count
 
     def _process_batch(
@@ -290,6 +294,26 @@ class HeadingFormatter(ChunkedLLMJob):
                 ),
             )
 
+    def _make_interrupted_result(
+        self, batch_item: tuple[int, list[HeadingMatch], list[str] | None]
+    ) -> "HeadingFormatter._BatchResult":
+        """Build a failed result for a batch abandoned by an interrupt."""
+        batch_idx, batch, context_headings = batch_item
+        template = self.prompt_template or ""
+        return HeadingFormatter._BatchResult(
+            batch_idx=batch_idx,
+            success=False,
+            original_headings=[h.raw_text for h in batch],
+            failed_info=FailedChunkInfo(
+                chunk_id=batch_idx,
+                content="\n".join(h.raw_text for h in batch),
+                prompt_template=template,
+                error="interrupted by user (Ctrl-C); batch was not processed",
+                retry_count=0,
+                context_headings=list(context_headings) if context_headings else [],
+            ),
+        )
+
     def format_headings(
         self,
         headings: list[HeadingMatch],
@@ -349,13 +373,14 @@ class HeadingFormatter(ChunkedLLMJob):
                 f"(concurrency: {max_workers})"
             )
 
-        batch_results_list = self._run_units(
+        batch_results_list, _interrupted = self._run_units(
             batch_items,
             self._process_batch_worker,
             is_failed=lambda r: not r.success,
             error_message=lambda r: r.failed_info.error or "",
             retry_count_from_result=lambda r: r.retry_count,
             order_key=lambda r: r.batch_idx,
+            make_interrupted_result=self._make_interrupted_result,
         )
         batch_results: dict[int, HeadingFormatter._BatchResult] = {
             r.batch_idx: r for r in batch_results_list
@@ -403,7 +428,10 @@ class HeadingFormatter(ChunkedLLMJob):
         checkpoint_path = self._save_checkpoint(
             source_file=source_file,
             format_type="title",
-            model="",
+            # Record the real model: the resume path recomputes the digest with
+            # the current model, so saving "" made every title checkpoint
+            # unresumable through the CLI.
+            model=self.model,
             prompt_template=template,
             max_chunk_tokens=None,
             failed_chunks=failed_batches,
@@ -478,7 +506,7 @@ class HeadingFormatter(ChunkedLLMJob):
                     (fc.chunk_id, cls._lines_to_matches(lines), fc.context_headings or None)
                 )
 
-        retry_results = formatter._retry_failed_units(
+        retry_results, _ = formatter._retry_failed_units(
             checkpoint,
             units,
             formatter._process_batch_worker,
@@ -486,6 +514,7 @@ class HeadingFormatter(ChunkedLLMJob):
             error_message=lambda r: r.failed_info.error or "",
             retry_count_from_result=lambda r: r.retry_count,
             order_key=lambda r: r.batch_idx,
+            make_interrupted_result=formatter._make_interrupted_result,
         )
         for res in retry_results:
             if res.success:

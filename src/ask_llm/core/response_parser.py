@@ -108,6 +108,13 @@ def _try_parse_json_with_latex_escapes(raw: str, brace: int) -> dict | None:
     return None
 
 
+# Keys a JSON translation envelope may use (see unwrap_translation_payload).
+# The first two are unambiguous envelope markers; the rest are weak signals
+# (arbitrary JSON documents frequently contain "text"/"content"/"result" keys).
+_ENVELOPE_STRONG_KEYS = ("translation", "translated_text")
+_PAYLOAD_KEYS = (*_ENVELOPE_STRONG_KEYS, "content", "text", "result")
+
+
 def unwrap_translation_payload(text: str) -> str:
     """
     Unwrap common JSON-wrapped translation payloads returned by some prompts/models.
@@ -176,8 +183,22 @@ def unwrap_translation_payload(text: str) -> str:
         obj = _try_parse_json_with_latex_escapes(raw, brace)
 
     if isinstance(obj, dict):
-        for key in ("translation", "translated_text", "content", "text", "result"):
-            val = obj.get(key)
-            if isinstance(val, str) and val.strip():
-                return val.strip()
+        # P0: only unwrap when the object actually *is* a translation
+        # envelope. A translated JSON *document* (e.g. the user asked to
+        # translate a config file) routinely contains keys like
+        # "text"/"content" among its own fields — compressing the whole
+        # document to one key's value silently destroyed the rest.
+        # Envelope test: an unambiguous key ("translation" / "translated_text")
+        # is present, or every key is a known wrapper key.
+        is_envelope = any(k in _ENVELOPE_STRONG_KEYS for k in obj) or (
+            bool(obj) and all(k in _PAYLOAD_KEYS for k in obj)
+        )
+        if is_envelope:
+            best = ""
+            for key in _PAYLOAD_KEYS:
+                val = obj.get(key)
+                if isinstance(val, str) and len(val.strip()) > len(best):
+                    best = val.strip()
+            if best:
+                return best
     return original

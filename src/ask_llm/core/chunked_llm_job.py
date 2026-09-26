@@ -19,7 +19,7 @@ from typing import Any, TypeVar
 
 from loguru import logger
 
-from ask_llm.core.concurrent import run_bounded_with_retries
+from ask_llm.core.concurrent import BoundedRetryRunner
 from ask_llm.core.format_checkpoint import (
     CHECKPOINT_VERSION,
     FailedChunkInfo,
@@ -94,21 +94,39 @@ class ChunkedLLMJob:
         error_message: Callable[[WorkerResultT], str],
         retry_count_from_result: Callable[[WorkerResultT], int],
         order_key: Callable[[WorkerResultT], Any],
-    ) -> list[WorkerResultT]:
-        """Run work units through the shared bounded runner (ordered results)."""
+        make_interrupted_result: Callable[[UnitT], WorkerResultT] | None = None,
+    ) -> tuple[list[WorkerResultT], bool]:
+        """Run work units through the shared bounded runner (ordered results).
+
+        Returns:
+            Tuple of (ordered results, interrupted flag). When the run is
+            interrupted (Ctrl-C), ``make_interrupted_result`` converts each
+            abandoned unit into a failed result so callers always see one
+            result per unit — paid content is never silently dropped and the
+            checkpoint covers the missing units.
+        """
         max_workers = min(self.concurrency, len(units)) if units else 1
-        return run_bounded_with_retries(
-            units,
-            worker,
+        runner: BoundedRetryRunner[UnitT, WorkerResultT] = BoundedRetryRunner(
             max_workers=max_workers,
             max_retries=self.retries,
             retry_delay=self.retry_delay,
             retry_delay_max=self.retry_delay_max,
+        )
+        results, metrics = runner.run_with_metrics(
+            units,
+            worker,
             is_failed=is_failed,
             error_message=error_message,
             retry_count_from_result=retry_count_from_result,
             order_key=order_key,
+            make_interrupted_result=make_interrupted_result,
         )
+        if metrics.interrupted:
+            logger.warning(
+                f"[{type(self).__name__}] interrupted by user; "
+                f"{metrics.abandoned} unit(s) abandoned and recorded as failed"
+            )
+        return results, metrics.interrupted
 
     def _save_checkpoint(
         self,
@@ -176,7 +194,8 @@ class ChunkedLLMJob:
         error_message: Callable[[WorkerResultT], str],
         retry_count_from_result: Callable[[WorkerResultT], int],
         order_key: Callable[[WorkerResultT], Any],
-    ) -> list[WorkerResultT]:
+        make_interrupted_result: Callable[[UnitT], WorkerResultT] | None = None,
+    ) -> tuple[list[WorkerResultT], bool]:
         """Re-run checkpoint-failed work units through the shared runner."""
         logger.info(
             f"[{type(self).__name__}] Resuming from checkpoint: "
@@ -190,4 +209,5 @@ class ChunkedLLMJob:
             error_message=error_message,
             retry_count_from_result=retry_count_from_result,
             order_key=order_key,
+            make_interrupted_result=make_interrupted_result,
         )

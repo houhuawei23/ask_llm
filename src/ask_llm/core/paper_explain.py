@@ -147,6 +147,25 @@ def _parse_markdown_heading_blocks(text: str) -> list[tuple[str, str]]:
     return [(h, b) for h, b in _split_by_h2(text, keep_leading=False) if b and h]
 
 
+def _leading_preamble(text: str) -> str:
+    """Return the lines before the first unprotected ``##`` (P0).
+
+    Single-file papers commonly carry title/authors/abstract above the first
+    section heading. Sections-mode previously dropped those lines entirely;
+    the bundle now folds them into ``meta_text`` so the meta job covers them.
+    """
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    structure = MarkdownStructure.parse(normalized)
+    lines: list[str] = []
+    offset = 0
+    for line in normalized.splitlines():
+        if (not structure.is_protected(offset)) and _H2_SECTION_LINE_RE.match(line):
+            break
+        lines.append(line)
+        offset += len(line) + 1
+    return "\n".join(lines).strip()
+
+
 def split_markdown_ordered(
     text: str, pipeline: PaperExplainPipelineConfig | None = None
 ) -> tuple[dict[str, str], list[str], dict[str, str]]:
@@ -365,9 +384,17 @@ def build_bundle_from_file(
     extra_keys = [k for k in section_order if k.startswith("extra:")]
     if extra_keys:
         logger.info(f"Non-standard headings → generic prompt: {extra_keys[:12]}")
+    meta_text = (
+        f"Single-file input: {md_path.name}\n\n(title inferred from first heading or filename)"
+    )
+    preamble = _leading_preamble(text)
+    if preamble:
+        # P0: keep the pre-first-## content (title/authors/abstract) reachable
+        # from sections mode instead of silently dropping it.
+        meta_text = f"{meta_text}\n\n## 论文前置部分（首个小节之前）\n\n{preamble}"
     return PaperBundle(
         paper_title=title,
-        meta_text=f"Single-file input: {md_path.name}\n\n(title inferred from first heading or filename)",
+        meta_text=meta_text,
         sections=sections,
         full_text=text,
         source_description=str(md_path),

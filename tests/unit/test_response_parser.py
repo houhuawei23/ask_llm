@@ -26,6 +26,19 @@ class TestUnwrapPayloadOpensWithObject:
 
 
 class TestM4TranslationsContainingBracesSurvive:
+    def test_translated_json_document_is_not_compressed(self):
+        """P0 regression: translating a JSON *file* returns a JSON object whose
+        own fields may include weak keys like "text"/"content". Unwrapping must
+        not compress the document to a single key's value."""
+        document = '{"name": "server", "text": "服务器", "port": 8080}'
+        assert unwrap_translation_payload(document) == document
+
+    def test_strong_envelope_key_still_unwraps_with_junk_keys(self):
+        """Models sometimes append junk metadata next to the translation; the
+        unambiguous "translation" key still marks the object as an envelope."""
+        raw = '{"translation": "你好", "note": "done"}'
+        assert unwrap_translation_payload(raw) == "你好"
+
     def test_translation_with_embedded_json_example_survives(self):
         """A translation whose body merely CONTAINS a JSON-looking object must
         pass through verbatim — the old first-brace extraction rewrote it to

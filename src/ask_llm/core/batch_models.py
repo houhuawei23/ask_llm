@@ -43,7 +43,9 @@ class BatchTask(BaseModel):
         default_factory=list,
         description="Ordered list of fallback provider/model configs to try on failure",
     )
-    task_kind: Literal["translation_chunk", "paper_explain"] = "translation_chunk"
+    # Value set MUST stay aligned with TaskKind in constants.py so
+    # estimate_output_tokens can look up multipliers without error fallbacks.
+    task_kind: Literal["translation", "paper_explain"] = "translation"
     return_reasoning: bool = False
 
 

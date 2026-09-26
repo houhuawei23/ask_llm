@@ -161,8 +161,12 @@ class ProviderAdapterCache:
             TypeError: If ``config`` is not a ``ProviderConfig``.
         """
         pc = _to_provider_config(config)
-        key = _cache_key(pc, default_model=default_model or "", generation=_generation)
         with _lock:
+            # Read the generation under the lock (P0 TOCTOU): reading it before
+            # acquiring let a concurrent clear() slip in, and the stale-key
+            # adapter built afterwards was inserted into the *new* generation's
+            # cache where it can never be hit again.
+            key = _cache_key(pc, default_model=default_model or "", generation=_generation)
             adapter = _adapters.get(key)
             if adapter is not None:
                 _adapters.move_to_end(key)

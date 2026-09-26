@@ -67,6 +67,12 @@ class _SyncTokenBucket:
                     self._tokens -= 1.0
                     return True
 
+                if self._rate <= 0:
+                    # Defensive: rpm=0 (only reachable via direct construction,
+                    # config validation enforces ge=1) denies everything
+                    # instead of ZeroDivisionError inside a worker thread.
+                    return False
+
                 if deadline is not None:
                     remaining = deadline - now
                     if remaining <= 0:
