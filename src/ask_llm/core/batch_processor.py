@@ -64,10 +64,9 @@ def estimate_output_tokens(task_kind: str, input_tokens: int) -> int:
     return int(input_tokens * multiplier)
 
 
-def rate_limit_config_from(config_manager: ConfigManager) -> RateLimitConfig | None:
+def rate_limit_config_from(config_manager: ConfigManager) -> RateLimitConfig:
     """Extract the rate-limit section from the config manager's unified config."""
-    unified = config_manager.unified_config
-    return unified.rate_limits if unified else None
+    return config_manager.unified_config.rate_limits
 
 
 class GlobalBatchProcessor:

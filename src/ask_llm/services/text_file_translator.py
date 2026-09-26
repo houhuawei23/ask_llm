@@ -18,10 +18,10 @@ from pathlib import Path
 from loguru import logger
 
 from ask_llm.config.manager import ConfigManager
+from ask_llm.config.unified_config import UnifiedConfig
 from ask_llm.core.batch_models import BatchResult, BatchTask, TaskStatus
 from ask_llm.core.binary_splitter import create_markdown_splitter
 from ask_llm.core.command_runner import compute_checkpoint_digest, run_with_checkpoint
-from ask_llm.core.models import AppConfig
 from ask_llm.core.text_splitter import TextChunk, detect_file_type
 from ask_llm.core.translator import Translator
 from ask_llm.services.translation_options import (
@@ -63,14 +63,14 @@ class TextFileTranslator:
         model: str,
         pricing_map: PricingMap | None = None,
         pricing_source: Path | None = None,
-        app_config: AppConfig | None = None,
+        unified_config: UnifiedConfig | None = None,
     ) -> None:
         self.config_manager = config_manager
         self.provider = provider
         self.model = model
         self.pricing_map = pricing_map or {}
         self.pricing_source = pricing_source
-        self.app_config = app_config
+        self.unified_config = unified_config
 
     def prepare(
         self,
@@ -154,7 +154,7 @@ class TextFileTranslator:
             self.model,
             temperature=options.temperature,
             max_tokens=options.max_output_tokens,
-            app_config=self.app_config,
+            unified_config=self.unified_config,
             use_fallback=options.use_fallback,
         )
 

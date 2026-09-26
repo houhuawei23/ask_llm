@@ -4,10 +4,9 @@ __version__ = "2.25.0"
 __author__ = "Ask LLM Developer"
 __description__ = "A flexible command-line tool for calling multiple LLM APIs"
 
-from ask_llm.core.models import AppConfig, ChatHistory, ChatMessage, ProviderConfig
+from ask_llm.core.models import ChatHistory, ChatMessage, ProviderConfig
 
 __all__ = [
-    "AppConfig",
     "ChatHistory",
     "ChatMessage",
     "ProviderConfig",

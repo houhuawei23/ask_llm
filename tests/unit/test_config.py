@@ -8,7 +8,8 @@ import yaml
 
 from ask_llm.config.loader import ConfigLoader
 from ask_llm.config.manager import ConfigManager
-from ask_llm.core.models import AppConfig, ProviderConfig
+from ask_llm.config.unified_config import UnifiedConfig
+from ask_llm.core.models import ProviderConfig
 
 
 class TestConfigLoader:
@@ -17,7 +18,7 @@ class TestConfigLoader:
     def test_load_valid_config(self, sample_config_file, sample_config_dict):
         """Test loading valid config file."""
         load_result = ConfigLoader.load(sample_config_file)
-        config = load_result.app_config
+        config = load_result.unified_config
 
         assert config.default_provider == "test_provider"
         assert "test_provider" in config.providers
@@ -145,7 +146,7 @@ class TestKimiProviderConfig:
 
         pkg_path = ConfigLoader._get_package_config_path()
         load_result = ConfigLoader.load(pkg_path)
-        config = load_result.app_config
+        config = load_result.unified_config
 
         # Check kimi (Kimi Code) provider exists
         assert "kimi-code" in config.providers, "kimi-code provider should be in default config"
@@ -163,7 +164,7 @@ class TestKimiProviderConfig:
 
         pkg_path = ConfigLoader._get_package_config_path()
         load_result = ConfigLoader.load(pkg_path)
-        config = load_result.app_config
+        config = load_result.unified_config
 
         kimi_config = config.providers["kimi-code"]
 
@@ -178,7 +179,7 @@ class TestKimiProviderConfig:
 
         pkg_path = ConfigLoader._get_package_config_path()
         load_result = ConfigLoader.load(pkg_path)
-        config = load_result.app_config
+        config = load_result.unified_config
 
         kimi_config = config.providers["kimi-code"]
         expected_models = [
@@ -194,29 +195,26 @@ class TestKimiProviderConfig:
 class TestConfigManager:
     """Test ConfigManager."""
 
-    def test_init(self, app_config):
+    def test_init(self, unified_config):
         """Test initialization."""
-        manager = ConfigManager(app_config)
+        manager = ConfigManager(unified_config)
 
-        assert manager.config == app_config
+        assert manager.unified_config is unified_config
         assert manager.current_provider_name == "test"
 
-    def test_unified_config_wiring(self, app_config):
-        """B12 regression: ConfigManager exposes the unified config it was given."""
-        from ask_llm.config.unified_config import UnifiedConfig
-
-        manager = ConfigManager(app_config)
-        assert manager.unified_config is None
-
-        unified = UnifiedConfig()
-        manager = ConfigManager(app_config, unified)
-        assert manager.unified_config is unified
+    def test_unified_config_wiring(self, unified_config):
+        """B12 regression (rewritten): ConfigManager exposes the single config
+        object it was given — providers and rate-limit sections come from the
+        same instance."""
+        manager = ConfigManager(unified_config)
+        assert manager.unified_config is unified_config
         assert manager.unified_config.rate_limits is not None
+        assert manager.unified_config.providers is unified_config.providers
 
-    def test_set_provider(self, app_config):
+    def test_set_provider(self, unified_config):
         """Test setting provider."""
         # Create config with multiple providers
-        config = AppConfig(
+        config = UnifiedConfig(
             default_provider="provider1",
             default_model="model1",
             providers={
@@ -240,42 +238,42 @@ class TestConfigManager:
 
         assert manager.current_provider_name == "provider2"
 
-    def test_set_invalid_provider(self, app_config):
+    def test_set_invalid_provider(self, unified_config):
         """Test setting invalid provider raises error."""
-        manager = ConfigManager(app_config)
+        manager = ConfigManager(unified_config)
 
         with pytest.raises(ValueError):
             manager.set_provider("nonexistent")
 
-    def test_get_provider_config(self, app_config):
+    def test_get_provider_config(self, unified_config):
         """Test getting provider config."""
-        manager = ConfigManager(app_config)
+        manager = ConfigManager(unified_config)
         config = manager.get_provider_config()
 
         assert isinstance(config, ProviderConfig)
         assert config.api_provider == "test"
 
-    def test_apply_overrides(self, app_config):
+    def test_apply_overrides(self, unified_config):
         """Test applying CLI overrides."""
-        manager = ConfigManager(app_config)
+        manager = ConfigManager(unified_config)
         manager.apply_overrides(model="new-model", temperature=0.9)
 
         assert manager.get_model_override() == "new-model"
         config = manager.get_provider_config()
         assert config.api_temperature == 0.9
 
-    def test_clear_overrides(self, app_config):
+    def test_clear_overrides(self, unified_config):
         """Test clearing overrides."""
-        manager = ConfigManager(app_config)
+        manager = ConfigManager(unified_config)
         manager.apply_overrides(model="new-model")
         manager.clear_overrides()
 
         assert manager.get_model_override() is None
         assert manager.get_default_model() == "test-model"  # back to original
 
-    def test_override_sources_tracking(self, app_config):
+    def test_override_sources_tracking(self, unified_config):
         """Test that override provenance is recorded for transparency."""
-        manager = ConfigManager(app_config)
+        manager = ConfigManager(unified_config)
         manager.apply_overrides(model="new-model", temperature=0.9, api_key="secret")
 
         sources = manager.get_override_sources()
@@ -285,17 +283,17 @@ class TestConfigManager:
         assert "secret" not in sources["api_key"]
         assert sources["api_key"].startswith("CLI: ***")
 
-    def test_override_sources_custom_label(self, app_config):
+    def test_override_sources_custom_label(self, unified_config):
         """Test custom source label is recorded."""
-        manager = ConfigManager(app_config)
+        manager = ConfigManager(unified_config)
         manager.apply_overrides(model="env-model", source="ENV")
 
         sources = manager.get_override_sources()
         assert sources["model"] == "ENV: env-model"
 
-    def test_set_provider_records_source(self, app_config):
+    def test_set_provider_records_source(self, unified_config):
         """Test that provider switch records its source."""
-        config = AppConfig(
+        config = UnifiedConfig(
             default_provider="provider1",
             default_model="model1",
             providers={
@@ -313,24 +311,24 @@ class TestConfigManager:
         sources = manager.get_override_sources()
         assert sources["provider"].startswith("CLI: provider1")
 
-    def test_clear_overrides_clears_sources(self, app_config):
+    def test_clear_overrides_clears_sources(self, unified_config):
         """Test that clearing overrides also clears sources."""
-        manager = ConfigManager(app_config)
+        manager = ConfigManager(unified_config)
         manager.apply_overrides(model="new-model")
         manager.clear_overrides()
 
         assert manager.get_override_sources() == {}
 
-    def test_get_available_providers(self, app_config):
+    def test_get_available_providers(self, unified_config):
         """Test getting available providers."""
-        manager = ConfigManager(app_config)
+        manager = ConfigManager(unified_config)
         providers = manager.get_available_providers()
 
         assert providers == ["test"]
 
-    def test_get_available_models(self, app_config):
+    def test_get_available_models(self, unified_config):
         """Test getting available models."""
-        manager = ConfigManager(app_config)
+        manager = ConfigManager(unified_config)
         models = manager.get_available_models()
 
         assert "test-model" in models

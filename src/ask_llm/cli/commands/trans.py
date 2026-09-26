@@ -364,7 +364,6 @@ def trans(
                 model=final_model,
                 pricing_map=pricing_map,
                 pricing_source=pricing_source,
-                app_config=load_result.app_config,
             )
 
             session_result = service.translate_files(

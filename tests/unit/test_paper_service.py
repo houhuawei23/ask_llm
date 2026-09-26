@@ -7,7 +7,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from ask_llm.core.batch_models import BatchResult, BatchTask, ModelConfig, TaskStatus
-from ask_llm.core.models import AppConfig, ProviderConfig, RequestMetadata
+from ask_llm.config.unified_config import UnifiedConfig
+from ask_llm.core.models import ProviderConfig, RequestMetadata
 from ask_llm.core.paper_explain_pipeline import PaperExplainPipelineConfig
 from ask_llm.services.paper_service import PaperExplainOptions, PaperService
 

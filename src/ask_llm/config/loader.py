@@ -23,21 +23,18 @@ from ask_llm.config.env import _apply_env_overrides, resolve_env_vars
 from ask_llm.config.merge import _deep_merge, record_leaves
 from ask_llm.config.providers_catalog import _load_providers_yml
 from ask_llm.config.unified_config import UnifiedConfig
-from ask_llm.core.models import AppConfig
 from ask_llm.utils.engine_facade import load_engine_providers_config
 
 
 class LoadResult:
-    """Result of loading default_config.yml, containing both provider and unified config."""
+    """Result of loading default_config.yml (the unified config) + metadata."""
 
     def __init__(
         self,
-        app_config: AppConfig,
         unified_config: UnifiedConfig,
         config_path: Path,
         provenance: dict[str, str] | None = None,
     ):
-        self.app_config = app_config
         self.unified_config = unified_config
         self.config_path = config_path
         # Per-leaf dotted key -> source label (file path or "env:<VAR>") naming
@@ -103,7 +100,7 @@ class ConfigLoader:
             config_path: Path to configuration file. If None, searches default paths.
 
         Returns:
-            LoadResult with app_config and unified_config
+            LoadResult with the unified config and metadata
 
         Raises:
             FileNotFoundError: If config file not found
@@ -185,11 +182,14 @@ class ConfigLoader:
                 "and providers.base_url in your config"
             ) from e
 
-        app_config = cls._app_config_from_unified(unified_config)
+        if not unified_config.providers:
+            raise ValueError(
+                "No providers configured. Add at least one provider to "
+                "providers.yml or default_config.yml, or run 'ask-llm config init'."
+            )
 
         logger.info(f"Configuration loaded successfully from: {user_path}")
         return LoadResult(
-            app_config=app_config,
             unified_config=unified_config,
             config_path=user_path,
             provenance=provenance,
@@ -349,20 +349,3 @@ class ConfigLoader:
                 f"Config section(s) {', '.join(present_deprecated)} are no longer used "
                 "and will be removed in a future release; ignoring them."
             )
-
-    @classmethod
-    def _app_config_from_unified(cls, unified_config: UnifiedConfig) -> AppConfig:
-        """Derive the provider-facing AppConfig view from a validated UnifiedConfig."""
-        providers = unified_config.providers
-        if not providers:
-            raise ValueError("At least one provider must be configured")
-        default_provider = unified_config.default_provider
-        if not default_provider:
-            default_provider = next(iter(providers.keys()))
-            logger.warning(f"No default_provider specified, using: {default_provider}")
-
-        return AppConfig(
-            default_provider=default_provider,
-            default_model=unified_config.default_model,
-            providers=providers,
-        )

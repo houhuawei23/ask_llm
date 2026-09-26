@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from ask_llm.config.unified_config import UnifiedConfig
 from ask_llm.core.batch_models import BatchResult, BatchTask, ModelConfig, TaskStatus
 from ask_llm.core.batch_models import BatchStatistics
 from ask_llm.services.batch_service import BatchExportResult, BatchRunResult, BatchService
@@ -208,9 +209,9 @@ def test_export_split_rejects_file_output(tmp_path):
 
 
 def _make_app_config_with_fallback():
-    from ask_llm.core.models import AppConfig, FallbackConfig, ProviderConfig
+    from ask_llm.core.models import FallbackConfig, ProviderConfig
 
-    return AppConfig(
+    return UnifiedConfig(
         default_provider="openai",
         providers={
             "openai": ProviderConfig(
@@ -249,12 +250,12 @@ def test_run_batch_from_config_applies_fallback_chain(tmp_path):
     from ask_llm.services.batch_service import run_batch_from_config
 
     config_path = _make_batch_config_file(tmp_path)
-    app_config = _make_app_config_with_fallback()
+    unified_config = _make_app_config_with_fallback()
     config_manager = MagicMock()
-    config_manager.config = app_config
+    config_manager.unified_config = unified_config
     config_manager.current_provider_name = "openai"
     config_manager.get_default_model.return_value = "gpt-4"
-    config_manager.get_provider_config.return_value = app_config.providers["openai"]
+    config_manager.get_provider_config.return_value = unified_config.providers["openai"]
 
     processor = MagicMock()
 
@@ -268,7 +269,7 @@ def test_run_batch_from_config_applies_fallback_chain(tmp_path):
         mock_run.return_value = ([], MagicMock())
         run_batch_from_config(
             str(config_path),
-            app_config,
+            unified_config,
             config_manager,
             MagicMock(mode="prompt-contents", threads=1, retries=0),
             threads=1,
@@ -290,12 +291,12 @@ def test_run_batch_from_config_skips_fallback_when_disabled(tmp_path):
     from ask_llm.services.batch_service import run_batch_from_config
 
     config_path = _make_batch_config_file(tmp_path)
-    app_config = _make_app_config_with_fallback()
+    unified_config = _make_app_config_with_fallback()
     config_manager = MagicMock()
-    config_manager.config = app_config
+    config_manager.unified_config = unified_config
     config_manager.current_provider_name = "openai"
     config_manager.get_default_model.return_value = "gpt-4"
-    config_manager.get_provider_config.return_value = app_config.providers["openai"]
+    config_manager.get_provider_config.return_value = unified_config.providers["openai"]
 
     processor = MagicMock()
 
@@ -309,7 +310,7 @@ def test_run_batch_from_config_skips_fallback_when_disabled(tmp_path):
         mock_run.return_value = ([], MagicMock())
         run_batch_from_config(
             str(config_path),
-            app_config,
+            unified_config,
             config_manager,
             MagicMock(mode="prompt-contents", threads=1, retries=0),
             threads=1,
@@ -330,11 +331,11 @@ class TestValidationAndSplit:
 
     def test_validate_models_does_not_mutate_shared_config(self, capsys):
         from ask_llm.config.manager import ConfigManager
-        from ask_llm.core.models import AppConfig, FallbackConfig, ProviderConfig
+        from ask_llm.core.models import FallbackConfig, ProviderConfig
         from ask_llm.services.batch_service import _validate_models
         from ask_llm.utils.provider_cache import ProviderAdapterCache
 
-        app_config = AppConfig(
+        unified_config = UnifiedConfig(
             default_provider="openai",
             providers={
                 "openai": ProviderConfig(
@@ -345,7 +346,7 @@ class TestValidationAndSplit:
                 ),
             },
         )
-        manager = ConfigManager(app_config)
+        manager = ConfigManager(unified_config)
         before = manager.get_provider_config("openai")
         models = [
             ModelConfig(provider="openai", model="gpt-4", temperature=0.2, max_tokens=512),
@@ -357,12 +358,12 @@ class TestValidationAndSplit:
                 return True, "", 0.01
 
         with patch.object(ProviderAdapterCache, "get", return_value=_FakeAdapter()):
-            result = _validate_models(models, app_config, manager)
+            result = _validate_models(models, unified_config, manager)
 
         assert len(result.validated) == 2
         # The shared manager must be untouched: no current-provider switch, no
         # leftover sampling overrides, no polluted model override.
-        assert manager.current_provider_name == app_config.default_provider
+        assert manager.current_provider_name == unified_config.default_provider
         assert manager.get_model_override() is None
         assert manager.get_override_sources() == {}
         # Provider view identical to pre-validation (defaults, no overrides).
@@ -423,9 +424,10 @@ class TestAudit56Validation:
 
     def _app_config(self):
         from ask_llm.config.manager import ConfigManager
-        from ask_llm.core.models import AppConfig, ProviderConfig
+        from ask_llm.config.unified_config import UnifiedConfig
+        from ask_llm.core.models import ProviderConfig
 
-        app_config = AppConfig(
+        unified_config = UnifiedConfig(
             default_provider="openai",
             providers={
                 "openai": ProviderConfig(
@@ -442,7 +444,7 @@ class TestAudit56Validation:
                 ),
             },
         )
-        return ConfigManager(app_config), app_config
+        return ConfigManager(unified_config), unified_config
 
     def test_validate_models_preserves_input_order_despite_probe_order(self):
         import random
@@ -451,7 +453,7 @@ class TestAudit56Validation:
         from ask_llm.services.batch_service import _validate_models
         from ask_llm.utils.provider_cache import ProviderAdapterCache
 
-        manager, app_config = self._app_config()
+        manager, unified_config = self._app_config()
         models = [
             ModelConfig(provider="openai", model="gpt-4"),
             ModelConfig(provider="openai", model="gpt-4o"),
@@ -468,7 +470,7 @@ class TestAudit56Validation:
                 return True, "", 0.01
 
         with patch.object(ProviderAdapterCache, "get", return_value=_FakeAdapter()):
-            result = _validate_models(models, app_config, manager)
+            result = _validate_models(models, unified_config, manager)
 
         # First two models share the valid provider; the third hits "Provider
         # not found"? No — broken IS configured; all three validate.
@@ -482,7 +484,7 @@ class TestAudit56Validation:
         from ask_llm.services.batch_service import _validate_models
         from ask_llm.utils.provider_cache import ProviderAdapterCache
 
-        manager, app_config = self._app_config()
+        manager, unified_config = self._app_config()
         models = [ModelConfig(provider="broken", model="bm")]
 
         class _DeadAdapter:
@@ -490,7 +492,7 @@ class TestAudit56Validation:
                 return False, "connection refused", 5.0
 
         with patch.object(ProviderAdapterCache, "get", return_value=_DeadAdapter()):
-            result = _validate_models(models, app_config, manager)
+            result = _validate_models(models, unified_config, manager)
 
         assert result.validated == []
         assert result.skipped == ["broken/bm"]

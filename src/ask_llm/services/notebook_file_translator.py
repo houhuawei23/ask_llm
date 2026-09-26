@@ -11,7 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from ask_llm.config.manager import ConfigManager
-from ask_llm.core.models import AppConfig
+from ask_llm.config.unified_config import UnifiedConfig
 from ask_llm.core.translator import Translator
 from ask_llm.services.translation_options import (
     TranslationJobResult,
@@ -38,14 +38,14 @@ class NotebookFileTranslator:
         model: str,
         pricing_map: PricingMap | None = None,
         pricing_source: Path | None = None,
-        app_config: AppConfig | None = None,
+        unified_config: UnifiedConfig | None = None,
     ) -> None:
         self.config_manager = config_manager
         self.provider = provider
         self.model = model
         self.pricing_map = pricing_map or {}
         self.pricing_source = pricing_source
-        self.app_config = app_config
+        self.unified_config = unified_config
 
     def translate(
         self,
@@ -89,7 +89,7 @@ class NotebookFileTranslator:
             self.model,
             temperature=options.temperature,
             max_tokens=options.max_output_tokens,
-            app_config=self.app_config,
+            unified_config=self.unified_config,
             use_fallback=options.use_fallback,
         )
 

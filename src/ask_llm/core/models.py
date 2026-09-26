@@ -158,30 +158,6 @@ class ProviderConfig(BaseModel):
         return v.rstrip("/")
 
 
-class AppConfig(BaseModel):
-    """Application configuration."""
-
-    default_provider: str = Field(..., description="Default provider name")
-    default_model: str | None = Field(default=None, description="Default model name")
-    providers: dict[str, ProviderConfig] = Field(..., description="Provider configurations")
-
-    @field_validator("providers")
-    @classmethod
-    def validate_providers(cls, v: dict[str, ProviderConfig]) -> dict[str, ProviderConfig]:
-        """Validate providers dictionary is not empty."""
-        if not v:
-            raise ValueError("At least one provider must be configured")
-        return v
-
-    def get_provider_config(self, name: str | None = None) -> ProviderConfig:
-        """Get configuration for a provider."""
-        provider_name = name or self.default_provider
-        if provider_name not in self.providers:
-            available = ", ".join(self.providers.keys())
-            raise ValueError(f"Provider '{provider_name}' not found. Available: {available}")
-        return self.providers[provider_name]
-
-
 class RequestMetadata(BaseModel):
     """Metadata for an API request."""
 

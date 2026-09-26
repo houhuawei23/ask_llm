@@ -7,14 +7,16 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from ask_llm.config.unified_config import UnifiedConfig
+
 from ask_llm.core.batch_models import BatchTask, ModelConfig
-from ask_llm.core.models import AppConfig, FallbackConfig, ProviderConfig
+from ask_llm.core.models import FallbackConfig, ProviderConfig
 from ask_llm.core.text_splitter import TextChunk
 from ask_llm.services.translation_service import TranslationOptions, TranslationService
 
 
-def _make_app_config_with_fallback() -> AppConfig:
-    return AppConfig(
+def _make_app_config_with_fallback() -> UnifiedConfig:
+    return UnifiedConfig(
         default_provider="openai",
         providers={
             "openai": ProviderConfig(
@@ -54,16 +56,26 @@ def _make_options(use_fallback: bool = True) -> TranslationOptions:
     )
 
 
-def _make_service(app_config: AppConfig | None = None) -> TranslationService:
+def _make_service(unified_config: UnifiedConfig | None = None) -> TranslationService:
     config_manager = MagicMock()
-    unified_config = MagicMock()
-    unified_config.file.translated_suffix = ".translated"
+    if unified_config is None:
+        passed_config = MagicMock()
+        passed_config.file.translated_suffix = ".translated"
+    else:
+        # Caller-provided config (e.g. with fallbacks configured): keep its
+        # provider table but ensure the file section exists for the service.
+        passed_config = unified_config
+        if (
+            not hasattr(passed_config, "file")
+            or getattr(getattr(passed_config, "file", None), "translated_suffix", None) is None
+        ):
+            passed_config.file.translated_suffix = ".translated"
+    unified_config = passed_config
     return TranslationService(
         config_manager=config_manager,
         unified_config=unified_config,
         provider="openai",
         model="gpt-4",
-        app_config=app_config,
     )
 
 
@@ -220,7 +232,7 @@ class TestPartialChunkFailure:
             MagicMock(),
             provider="openai",
             model="gpt-4",
-            app_config=_make_app_config_with_fallback(),
+            unified_config=_make_app_config_with_fallback(),
         )
 
     def _job(self, tmp_path: Path):

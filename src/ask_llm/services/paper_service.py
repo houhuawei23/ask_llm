@@ -23,7 +23,6 @@ from ask_llm.core.batch_models import (
 from ask_llm.core.command_runner import run_global_batch_tasks
 from ask_llm.core.constants import OUTPUT_TOKEN_MULTIPLIERS, TaskKind
 from ask_llm.core.execution_report import build_report_from_batch_results
-from ask_llm.core.models import AppConfig
 from ask_llm.core.paper_explain import (
     PaperBundle,
     build_bundle_from_directory,
@@ -105,18 +104,16 @@ class PaperService:
         model: str,
         pricing_map: PricingMap,
         pricing_source: Path | None = None,
-        app_config: AppConfig | None = None,
     ) -> None:
         """Initialize the paper-explain service.
 
         Args:
             config_manager: Active config manager (provider/model already resolved).
-            unified_config: Loaded unified configuration.
+            unified_config: Unified configuration; required for the fallback chain.
             provider: Resolved provider name.
             model: Resolved model name.
             pricing_map: Pricing data for cost estimates.
             pricing_source: Optional path/label of the pricing source.
-            app_config: Loaded application config; required for provider fallback chain.
         """
         self.config_manager = config_manager
         self.unified_config = unified_config
@@ -124,7 +121,6 @@ class PaperService:
         self.model = model
         self.pricing_map = pricing_map
         self.pricing_source = pricing_source
-        self.app_config = app_config
         self._last_results: list[BatchResult] | None = None
 
     def explain_paper(
@@ -228,7 +224,7 @@ class PaperService:
                 job_model,
                 temperature=options.temperature,
                 max_tokens=eff_max,
-                app_config=self.app_config,
+                unified_config=self.unified_config,
                 use_fallback=options.use_fallback,
             )
             idx_to_meta[orig_idx] = (key, template, appendix_h2)

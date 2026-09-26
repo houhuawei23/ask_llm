@@ -8,12 +8,13 @@ the interactive gate leaked into every fallback or batch provider.
 import pytest
 
 from ask_llm.config.manager import ConfigManager
-from ask_llm.core.models import AppConfig, ProviderConfig
+from ask_llm.config.unified_config import UnifiedConfig
+from ask_llm.core.models import ProviderConfig
 
 
 @pytest.fixture
-def two_providers() -> AppConfig:
-    return AppConfig(
+def two_providers() -> UnifiedConfig:
+    return UnifiedConfig(
         default_provider="alpha",
         default_model="alpha-model",
         providers={

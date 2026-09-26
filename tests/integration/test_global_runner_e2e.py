@@ -22,7 +22,8 @@ from ask_llm.config.manager import ConfigManager
 from ask_llm.core.batch_models import BatchResult, BatchTask, ModelConfig, TaskStatus
 from ask_llm.core.command_runner import compute_checkpoint_digest, run_with_checkpoint
 from ask_llm.core.command_runner import run_global_batch_tasks
-from ask_llm.core.models import AppConfig, ProviderConfig
+from ask_llm.config.unified_config import UnifiedConfig
+from ask_llm.core.models import ProviderConfig
 from ask_llm.utils.provider_cache import ProviderAdapterCache
 
 
@@ -61,7 +62,7 @@ class _FakeAdapter:
 
 
 def _make_config_manager() -> ConfigManager:
-    app_config = AppConfig(
+    unified_config = UnifiedConfig(
         default_provider="test",
         default_model="test-model",
         providers={
@@ -73,7 +74,7 @@ def _make_config_manager() -> ConfigManager:
             )
         },
     )
-    return ConfigManager(app_config)
+    return ConfigManager(unified_config)
 
 
 def _task(i: int) -> BatchTask:

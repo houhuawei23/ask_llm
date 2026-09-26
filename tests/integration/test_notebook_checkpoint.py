@@ -13,7 +13,8 @@ import nbformat
 import pytest
 
 from ask_llm.config.manager import ConfigManager
-from ask_llm.core.models import AppConfig, ProviderConfig
+from ask_llm.config.unified_config import UnifiedConfig
+from ask_llm.core.models import ProviderConfig
 from ask_llm.core.translator import Translator
 from ask_llm.utils.notebook_translator import NotebookTranslator
 from ask_llm.utils.provider_cache import ProviderAdapterCache
@@ -61,7 +62,7 @@ def fake_adapter(monkeypatch):
 
 
 def _config_manager() -> ConfigManager:
-    app_config = AppConfig(
+    unified_config = UnifiedConfig(
         default_provider="test",
         default_model="test-model",
         providers={
@@ -73,7 +74,7 @@ def _config_manager() -> ConfigManager:
             )
         },
     )
-    return ConfigManager(app_config)
+    return ConfigManager(unified_config)
 
 
 def _notebook(tmp_path, name="nb.ipynb"):

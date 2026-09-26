@@ -113,7 +113,7 @@ print("Test 1: Configuration Loading")
 print("=" * 50)
 
 from ask_llm.config.loader import ConfigLoader
-from ask_llm.core.models import ProviderConfig, AppConfig
+from ask_llm.core.models import ProviderConfig
 
 # Create a test config (default_config.yml format)
 config_data = {
@@ -145,8 +145,8 @@ try:
 
     load_result = ConfigLoader.load(config_path)
     set_config(load_result)
-    print(f"✓ Loaded config: {load_result.app_config.default_provider}")
-    print(f"✓ Providers: {list(load_result.app_config.providers.keys())}")
+    print(f"✓ Loaded config: {load_result.unified_config.default_provider}")
+    print(f"✓ Providers: {list(load_result.unified_config.providers.keys())}")
 finally:
     Path(config_path).unlink()
 

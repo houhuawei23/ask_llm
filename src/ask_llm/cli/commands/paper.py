@@ -218,7 +218,6 @@ def paper(
             model=final_model,
             pricing_map=pricing_map,
             pricing_source=pricing_source,
-            app_config=load_result.app_config,
         )
 
         try:

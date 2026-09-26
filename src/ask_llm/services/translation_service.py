@@ -22,7 +22,6 @@ from ask_llm.config.manager import ConfigManager
 from ask_llm.config.unified_config import UnifiedConfig
 from ask_llm.core.batch_models import BatchResult
 from ask_llm.core.execution_report import ExecutionReport, build_report_from_batch_results
-from ask_llm.core.models import AppConfig
 from ask_llm.core.text_splitter import detect_file_type
 from ask_llm.core.translator import Translator
 from ask_llm.services.notebook_file_translator import NotebookFileTranslator
@@ -60,18 +59,17 @@ class TranslationService:
         model: str,
         pricing_map: PricingMap | None = None,
         pricing_source: Path | None = None,
-        app_config: AppConfig | None = None,
     ) -> None:
         """Initialize the translation service.
 
         Args:
             config_manager: Active config manager (provider/model already resolved).
-            unified_config: Loaded unified configuration.
+            unified_config: Unified configuration.
             provider: Resolved provider name.
             model: Resolved model name.
             pricing_map: Optional pricing data for cost estimates.
             pricing_source: Optional path/label of the pricing source.
-            app_config: Loaded application config; required for provider fallback chain.
+            unified_config: Unified configuration; required for the fallback chain.
         """
         self.config_manager = config_manager
         self.unified_config = unified_config
@@ -79,7 +77,7 @@ class TranslationService:
         self.model = model
         self.pricing_map = pricing_map or {}
         self.pricing_source = pricing_source
-        self.app_config = app_config
+        self.unified_config = unified_config
         # Per-chunk results for the session report. Written ONLY on the main
         # thread (via _accumulate) — P4.5 removed cross-thread mutation.
         self._batch_results: list[BatchResult] = []
@@ -89,7 +87,7 @@ class TranslationService:
             model=model,
             pricing_map=pricing_map,
             pricing_source=pricing_source,
-            app_config=app_config,
+            unified_config=unified_config,
         )
         self._notebook_file_translator = NotebookFileTranslator(
             config_manager,
@@ -97,7 +95,7 @@ class TranslationService:
             model=model,
             pricing_map=pricing_map,
             pricing_source=pricing_source,
-            app_config=app_config,
+            unified_config=unified_config,
         )
 
     def translate_files(

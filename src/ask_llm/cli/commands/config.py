@@ -59,16 +59,10 @@ def _config_get_set(
         # Walk both the provider config and the unified config.
         # M17/2.25: a sentinel distinguishes "no such attribute/key" from a
         # legitimately-None value, so typos error while nullable keys print.
+        # All sections (translation.*, format_body.*, providers.*) live on the
+        # unified config — there is no second root anymore.
         _missing_sentinel = object()
-        # Unified sections (translation.*, format_body.*, …) live on
-        # unified_config, providers on app_config — start the walk at the
-        # right root so non-provider keys are reachable too.
-        first_segment = key_path.split(".", 1)[0]
-        root = (
-            load_result.unified_config
-            if hasattr(load_result.unified_config, first_segment)
-            else load_result.app_config
-        )
+        root = load_result.unified_config
         target: object = root
         for part in key_path.split("."):
             if isinstance(target, dict):
@@ -177,7 +171,7 @@ def config(
         # Load existing config
         load_result = ConfigLoader.load(config_path)
         set_config(load_result)
-        config = load_result.app_config
+        config = load_result.unified_config
 
         if debug_config:
             console.print("")

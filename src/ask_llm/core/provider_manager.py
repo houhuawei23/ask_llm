@@ -41,7 +41,7 @@ def build_provider_cache(
             return
         seen.add(key)
 
-        base_cfg = config_manager.config.get_provider_config(mc.provider)
+        base_cfg = config_manager.unified_config.get_provider_config(mc.provider)
         overrides = mc.provider_overrides()
         if task.task_kind == "paper_explain":
             overrides["timeout"] = float(paper_request_timeout_seconds())

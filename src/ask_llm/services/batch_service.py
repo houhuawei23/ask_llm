@@ -16,10 +16,10 @@ from typing import Any
 
 from ask_llm.config.manager import ConfigManager
 from ask_llm.config.unified_config import BatchConfig as UnifiedBatchConfig
+from ask_llm.config.unified_config import UnifiedConfig
 from ask_llm.core.batch_models import BatchResult, BatchStatistics, BatchTask, ModelConfig
 from ask_llm.core.command_runner import compute_checkpoint_digest, run_with_checkpoint
 from ask_llm.core.execution_report import ExecutionReport, build_report_from_batch_results
-from ask_llm.core.models import AppConfig
 from ask_llm.utils.api_key_gate import (
     api_key_is_missing_or_unresolved,
     ensure_resolved_provider_keys,
@@ -59,7 +59,7 @@ class _ValidationResult:
 
 def _validate_models(
     provider_models: list[ModelConfig],
-    app_config: AppConfig,
+    unified_config: UnifiedConfig,
     config_manager: ConfigManager,
     *,
     max_workers: int = 8,
@@ -82,10 +82,10 @@ def _validate_models(
         """Run the checks for one model; returns (index, key, ok, note)."""
         model_key = f"{model_config.provider}/{model_config.model}"
 
-        if model_config.provider not in app_config.providers:
+        if model_config.provider not in unified_config.providers:
             return index, model_key, False, "Provider not found"
 
-        provider_config = app_config.providers[model_config.provider]
+        provider_config = unified_config.providers[model_config.provider]
 
         if api_key_is_missing_or_unresolved(provider_config.api_key):
             return index, model_key, False, "API key not configured"
@@ -155,7 +155,7 @@ def _default_batch_checkpoint_path(config_file: str) -> str:
 
 def run_batch_from_config(
     config_file: str,
-    app_config: AppConfig,
+    unified_config: UnifiedConfig,
     config_manager: ConfigManager,
     batch_config_unified: Any,
     *,
@@ -173,7 +173,7 @@ def run_batch_from_config(
 
     Args:
         config_file: Path to the batch YAML configuration file.
-        app_config: Loaded application config (providers, etc.).
+        unified_config: The unified configuration (providers, etc.).
         config_manager: Active config manager for provider/model overrides.
         batch_config_unified: ``batch`` section from the unified config.
         threads: Max concurrent workers.
@@ -227,7 +227,7 @@ def run_batch_from_config(
         console.print("[bold]Validating models and testing connections...[/bold]")
         validation = _validate_models(
             provider_models,
-            app_config,
+            unified_config,
             config_manager,
         )
 
@@ -245,7 +245,9 @@ def run_batch_from_config(
     task_id_counter = 0
 
     for model_config in validation.validated:
-        fallback_configs = build_fallback_chain(app_config, model_config) if use_fallback else []
+        fallback_configs = (
+            build_fallback_chain(unified_config, model_config) if use_fallback else []
+        )
         for original_task in tasks:
             global_task = BatchTask(
                 task_id=task_id_counter,

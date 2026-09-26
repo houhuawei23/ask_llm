@@ -216,7 +216,7 @@ def batch(
 
             run_result = run_batch_from_config(
                 config_file,
-                load_result.app_config,
+                load_result.unified_config,
                 config_manager,
                 batch_cfg,
                 threads=effective_threads,

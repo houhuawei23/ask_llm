@@ -8,14 +8,13 @@ from ask_llm.core.md_heading_formatter import (
     HeadingFormatter,
     HeadingMatch,
 )
-from ask_llm.core.models import AppConfig, ChatHistory, ChatMessage, ProviderConfig
+from ask_llm.core.models import ChatHistory, ChatMessage, ProviderConfig
 from ask_llm.core.processor import RequestProcessor
 from ask_llm.core.protocols import LLMProviderProtocol
 from ask_llm.core.text_splitter import TextChunk
 from ask_llm.core.translator import Translator
 
 __all__ = [
-    "AppConfig",
     "BinarySplitter",
     "BudgetPolicy",
     "ChatHistory",

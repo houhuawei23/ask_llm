@@ -41,8 +41,8 @@ def _success(i: int) -> BatchResult:
 
 
 @pytest.fixture
-def config_manager(app_config):
-    return ConfigManager(app_config)
+def config_manager(unified_config):
+    return ConfigManager(unified_config)
 
 
 class TestComputeCheckpointDigest:

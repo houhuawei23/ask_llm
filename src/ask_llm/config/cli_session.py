@@ -31,7 +31,7 @@ def load_cli_session(
     """
     load_result = ConfigLoader.load(config_path)
     set_config(load_result)
-    config_manager = ConfigManager(load_result.app_config, load_result.unified_config)
+    config_manager = ConfigManager(load_result.unified_config)
     return load_result, config_manager
 
 
@@ -66,7 +66,7 @@ def resolve_and_prepare(
     Raises:
         typer.Exit: If provider or model cannot be resolved.
     """
-    provider = cli_provider or config_manager.config.default_provider
+    provider = cli_provider or config_manager.unified_config.default_provider
     if not provider:
         console.print_error(
             "No provider specified. Use --provider or configure a default provider."

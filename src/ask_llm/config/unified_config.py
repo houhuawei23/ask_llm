@@ -423,8 +423,8 @@ class UnifiedConfig(BaseModel):
 
     Single configuration object for the whole application: provider runtime
     settings (``providers`` / ``default_provider`` / ``default_model``) plus all
-    non-provider feature sections. ``AppConfig`` is derived from this as a
-    provider-facing view (see ``ConfigLoader.load``).
+    non-provider feature sections. This is the ONLY config object; there is
+    no separate provider-facing projection.
     """
 
     default_provider: str = Field(default="", description="Global default provider name")
@@ -445,3 +445,20 @@ class UnifiedConfig(BaseModel):
         default_factory=lambda: ["pyproject.toml", "setup.py", ".git", "default_config.yml"],
         description="Markers to detect project root for @ path resolution",
     )
+
+    def get_provider_config(self, name: str | None = None) -> ProviderConfig:
+        """Return the config for *name* (or the default provider).
+
+        Falls back to the first configured provider when no default is set,
+        so a config file that only declares one provider works as-is.
+
+        Raises:
+            ValueError: If the provider is unknown (message lists what exists).
+        """
+        provider_name = name or self.default_provider
+        if not provider_name:
+            provider_name = next(iter(self.providers))
+        if provider_name not in self.providers:
+            available = ", ".join(self.providers.keys())
+            raise ValueError(f"Provider '{provider_name}' not found. Available: {available}")
+        return self.providers[provider_name]

@@ -176,7 +176,7 @@ Content for section 2.
         """Test configuration loading integration with default_config.yml."""
         load_result = ConfigLoader.load(str(sample_config_file))
         set_config(load_result)
-        assert load_result.app_config.default_provider is not None
+        assert load_result.unified_config.default_provider is not None
         assert load_result.unified_config.translation.target_language == "zh"
 
     def test_config_not_found_raises(self):

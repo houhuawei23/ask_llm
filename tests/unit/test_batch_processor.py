@@ -328,7 +328,7 @@ def test_build_provider_cache_includes_fallbacks():
         api_key="sk-test",
         models=["model-a"],
     )
-    cm.config.get_provider_config.return_value = base_cfg
+    cm.unified_config.get_provider_config.return_value = base_cfg
 
     with patch("ask_llm.utils.provider_cache.create_engine_adapter") as mock_create:
         mock_create.return_value = MagicMock()
@@ -360,7 +360,7 @@ def test_process_global_tasks_creates_per_worker_progress_bars():
     ]
     processor = GlobalBatchProcessor(max_workers=4)
     cm = MagicMock()
-    cm.config.get_provider_config.return_value = ProviderConfig(
+    cm.unified_config.get_provider_config.return_value = ProviderConfig(
         api_provider="primary",
         api_base="https://api.primary.com/v1",
         api_key="sk-test",
@@ -418,7 +418,7 @@ def test_process_global_tasks_bounded_calls_with_fallback_chain():
     ]
     processor = GlobalBatchProcessor(max_workers=4, max_retries=max_retries)
     cm = MagicMock()
-    cm.config.get_provider_config.return_value = ProviderConfig(
+    cm.unified_config.get_provider_config.return_value = ProviderConfig(
         api_provider="primary",
         api_base="https://api.primary.com/v1",
         api_key="sk-test",
@@ -472,7 +472,7 @@ class TestAudit33LanePools:
 
     def _config_manager(self) -> MagicMock:
         cm = MagicMock()
-        cm.config.get_provider_config.return_value = ProviderConfig(
+        cm.unified_config.get_provider_config.return_value = ProviderConfig(
             api_provider="primary",
             api_base="https://api.primary.com/v1",
             api_key="sk-test",

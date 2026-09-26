@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import pytest
+
+from ask_llm.config.unified_config import UnifiedConfig
 from pydantic import SecretStr
 
 from ask_llm.core.batch_models import ModelConfig
-from ask_llm.core.models import AppConfig, FallbackConfig, ProviderConfig
+from ask_llm.core.models import FallbackConfig, ProviderConfig
 from ask_llm.utils.fallback_chain import build_fallback_chain, model_config_with_fallback
 
 
-def _app_config_with_fallbacks(primary: str, fallbacks: list[FallbackConfig]) -> AppConfig:
-    return AppConfig(
+def _app_config_with_fallbacks(primary: str, fallbacks: list[FallbackConfig]) -> UnifiedConfig:
+    return UnifiedConfig(
         default_provider=primary,
         providers={
             primary: ProviderConfig(
@@ -108,20 +110,20 @@ class TestAudit47ChainHygiene:
             "m1",
             temperature=None,
             max_tokens=None,
-            app_config=cfg,
+            unified_config=cfg,
             use_fallback=False,
         )
         assert chain == []
         assert (primary.provider, primary.model) == ("alpha", "m1")
 
         _primary, chain_on = model_config_with_fallback(
-            "alpha", "m1", temperature=None, max_tokens=None, app_config=cfg
+            "alpha", "m1", temperature=None, max_tokens=None, unified_config=cfg
         )
         assert [(c.provider, c.model) for c in chain_on] == [("beta", "bm")]
 
     def test_none_app_config_yields_empty_chain(self):
         _primary, chain = model_config_with_fallback(
-            "alpha", "m1", temperature=None, max_tokens=None, app_config=None
+            "alpha", "m1", temperature=None, max_tokens=None, unified_config=None
         )
         assert chain == []
 

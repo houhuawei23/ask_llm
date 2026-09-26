@@ -6,7 +6,8 @@ from pathlib import Path
 import pytest
 import yaml
 
-from ask_llm.core.models import AppConfig, ProviderConfig, ChatHistory, ChatMessage, MessageRole
+from ask_llm.core.models import ProviderConfig, ChatHistory, ChatMessage, MessageRole
+from ask_llm.config.unified_config import UnifiedConfig
 
 
 @pytest.fixture(autouse=True)
@@ -102,9 +103,9 @@ def provider_config():
 
 
 @pytest.fixture
-def app_config(provider_config):
+def unified_config(provider_config):
     """Sample app config."""
-    return AppConfig(
+    return UnifiedConfig(
         default_provider="test", default_model="test-model", providers={"test": provider_config}
     )
 

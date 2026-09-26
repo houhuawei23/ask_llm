@@ -7,18 +7,18 @@ alternate providers or models when the primary fails.
 
 from __future__ import annotations
 
+from ask_llm.config.unified_config import UnifiedConfig
 from ask_llm.core.batch_models import ModelConfig
-from ask_llm.core.models import AppConfig
 
 
 def build_fallback_chain(
-    app_config: AppConfig,
+    unified_config: UnifiedConfig,
     primary_config: ModelConfig,
 ) -> list[ModelConfig]:
     """Return fallback ``ModelConfig`` chain for a primary task config.
 
     The chain is sourced from the primary provider's ``fallback_to`` list in
-    ``AppConfig``. If the provider is unknown or has no fallbacks, an empty
+    the unified config. If the provider is unknown or has no fallbacks, an empty
     list is returned.
 
     Audit 4.7: entries equal to the primary ``(provider, model)`` are dropped —
@@ -26,13 +26,13 @@ def build_fallback_chain(
     failed — and duplicates keep their first occurrence only.
 
     Args:
-        app_config: Loaded application configuration.
+        unified_config: The unified configuration.
         primary_config: The primary model configuration for the task.
 
     Returns:
         Ordered list of fallback model configurations.
     """
-    provider_cfg = app_config.providers.get(primary_config.provider)
+    provider_cfg = unified_config.providers.get(primary_config.provider)
     if not provider_cfg or not provider_cfg.fallback_to:
         return []
 
@@ -65,7 +65,7 @@ def model_config_with_fallback(
     *,
     temperature: float | None,
     max_tokens: int | None,
-    app_config: AppConfig | None,
+    unified_config: UnifiedConfig | None,
     use_fallback: bool = True,
 ) -> tuple[ModelConfig, list[ModelConfig]]:
     """Build the primary ``ModelConfig`` and its fallback chain in one step.
@@ -80,6 +80,8 @@ def model_config_with_fallback(
         max_tokens=max_tokens,
     )
     fallbacks = (
-        build_fallback_chain(app_config, primary) if use_fallback and app_config is not None else []
+        build_fallback_chain(unified_config, primary)
+        if use_fallback and unified_config is not None
+        else []
     )
     return primary, fallbacks
