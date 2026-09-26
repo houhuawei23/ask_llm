@@ -213,11 +213,12 @@ def _exclude_name(name: str) -> bool:
     lower = name.lower()
     if not lower.endswith(".md"):
         return True
-    if "_trans.md" in lower or lower.endswith("_trans.md"):
-        return True
-    if "-references.md" in lower or lower.endswith("-references.md"):
-        return True
-    return bool("-appendix.md" in lower or "-appendices.md" in lower)
+    return bool(
+        "_trans.md" in lower
+        or "-references.md" in lower
+        or "-appendix.md" in lower
+        or "-appendices.md" in lower
+    )
 
 
 def _pick_main_md(directory: Path) -> Path:

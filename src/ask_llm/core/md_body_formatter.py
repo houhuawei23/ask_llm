@@ -10,7 +10,6 @@ checkpoint save/resume) lives in :class:`ChunkedLLMJob` (P3.3).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from pathlib import Path
 
 from loguru import logger
 
@@ -473,8 +472,11 @@ class BodyFormatter(ChunkedLLMJob):
         failed_chunks_inputs = [
             TextChunk(content=fc.content, chunk_id=fc.chunk_id) for fc in checkpoint.failed_chunks
         ]
-        retry_results, _ = formatter._retry_failed_units(
-            checkpoint,
+        logger.info(
+            f"[BodyFormat] Retrying {len(failed_chunks_inputs)} checkpointed chunk(s): "
+            f"successful={len(checkpoint.successful_chunks)}"
+        )
+        retry_results, _ = formatter._run_units(
             failed_chunks_inputs,
             formatter._process_chunk_worker,
             is_failed=lambda r: not r.success,
@@ -521,19 +523,10 @@ class BodyFormatter(ChunkedLLMJob):
         if formatted_text is None:
             formatted_text = cls._join_chunks(final_chunks)
 
-        # H5: reattach the carved frontmatter. Pre-v3 checkpoints don't carry
-        # it — re-extract from the source file when that is still available.
+        # H5: reattach the carved frontmatter. Checkpoints since v3 carry it;
+        # the empty case means the source had none, so there is nothing to
+        # reattach (the CLI refuses pre-v4 checkpoints entirely).
         frontmatter = checkpoint.frontmatter
-        if not frontmatter and checkpoint.source_file:
-            src = Path(checkpoint.source_file)
-            if src.is_file():
-                try:
-                    source_text = src.read_text(encoding="utf-8")
-                except OSError:
-                    source_text = ""
-                fm_range = MarkdownStructure.parse(source_text).frontmatter_range
-                if fm_range is not None:
-                    frontmatter = source_text[fm_range[0] : fm_range[1]]
         if frontmatter:
             formatted_text = frontmatter + formatted_text
 

@@ -20,7 +20,6 @@ def _make_run_result(**kwargs):
         "skipped_models": [],
         "original_tasks": [],
         "batch_mode": "prompt-content-pairs",
-        "batch_config": {},
         "config_file": "batch.yml",
     }
     defaults.update(kwargs)
@@ -272,7 +271,6 @@ def test_run_batch_from_config_applies_fallback_chain(tmp_path):
             app_config,
             config_manager,
             MagicMock(mode="prompt-contents", threads=1, retries=0),
-            output_format="json",
             threads=1,
             retries=0,
             retry_delay=0.0,
@@ -314,7 +312,6 @@ def test_run_batch_from_config_skips_fallback_when_disabled(tmp_path):
             app_config,
             config_manager,
             MagicMock(mode="prompt-contents", threads=1, retries=0),
-            output_format="json",
             threads=1,
             retries=0,
             retry_delay=0.0,

@@ -246,20 +246,17 @@ That's all!"""
         processor = self._create_mock_processor(mock_response)
         formatter = HeadingFormatter(processor=processor, prompt_template=_TEST_PROMPT_TEMPLATE)
 
-        result = formatter._parse_formatted_headings(
-            mock_response, expected_count=2, take_last_only=False
-        )
+        result = formatter._parse_formatted_headings(mock_response, expected_count=2)
         assert result == ["# Title", "# Section"]
 
-    def test_parse_take_last_only_keeps_last_window(self):
-        """Context-aware batches keep the LAST expected_count headings."""
+    def test_parse_tail_truncation_keeps_last_window(self):
+        """Extra heading-looking lines are truncated from the tail side: the
+        real headings sit at the end (H7/M8)."""
         mock_response = "# Context heading\n# Title\n# Section\n"
         processor = self._create_mock_processor(mock_response)
         formatter = HeadingFormatter(processor=processor, prompt_template=_TEST_PROMPT_TEMPLATE)
 
-        result = formatter._parse_formatted_headings(
-            mock_response, expected_count=2, take_last_only=True
-        )
+        result = formatter._parse_formatted_headings(mock_response, expected_count=2)
         assert result == ["# Title", "# Section"]
 
     def test_load_prompt_from_file(self):
@@ -562,13 +559,13 @@ class TestHeadingResume:
         ).save(str(checkpoint_path))
 
         captured: dict[str, object] = {}
-        original = HeadingFormatter._retry_failed_units
+        original = HeadingFormatter._run_units
 
-        def spy(self, checkpoint, units, worker, **kwargs):
+        def spy(runner_self, units, worker, **kwargs):
             captured["units"] = units
-            return original(self, checkpoint, units, worker, **kwargs)
+            return original(runner_self, units, worker, **kwargs)
 
-        monkeypatch.setattr(HeadingFormatter, "_retry_failed_units", spy)
+        monkeypatch.setattr(HeadingFormatter, "_run_units", spy)
         # The retried batch itself would hit the network; replace the LLM call.
         monkeypatch.setattr(
             HeadingFormatter,
@@ -612,13 +609,13 @@ class TestHeadingResume:
         checkpoint_path.write_text(_json.dumps(payload), encoding="utf-8")
 
         captured: dict[str, object] = {}
-        original = HeadingFormatter._retry_failed_units
+        original = HeadingFormatter._run_units
 
-        def spy(self, checkpoint, units, worker, **kwargs):
+        def spy(runner_self, units, worker, **kwargs):
             captured["units"] = units
-            return original(self, checkpoint, units, worker, **kwargs)
+            return original(runner_self, units, worker, **kwargs)
 
-        monkeypatch.setattr(HeadingFormatter, "_retry_failed_units", spy)
+        monkeypatch.setattr(HeadingFormatter, "_run_units", spy)
         monkeypatch.setattr(
             HeadingFormatter,
             "_process_batch",

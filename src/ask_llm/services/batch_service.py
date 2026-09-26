@@ -14,8 +14,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from loguru import logger
-
 from ask_llm.config.manager import ConfigManager
 from ask_llm.config.unified_config import BatchConfig as UnifiedBatchConfig
 from ask_llm.core.batch_models import BatchResult, BatchStatistics, BatchTask, ModelConfig
@@ -47,7 +45,6 @@ class BatchRunResult:
     skipped_models: list[str]
     original_tasks: list[BatchTask]
     batch_mode: str
-    batch_config: dict[str, Any]
     config_file: str
     report: ExecutionReport | None = None
 
@@ -101,13 +98,7 @@ def _validate_models(
                 f"Model not available. Available: {', '.join(provider_config.models)}",
             )
 
-        overrides: dict[str, Any] = {}
-        if model_config.temperature is not None:
-            overrides["api_temperature"] = model_config.temperature
-        if model_config.top_p is not None:
-            overrides["api_top_p"] = model_config.top_p
-        if model_config.max_tokens is not None:
-            overrides["max_tokens"] = model_config.max_tokens
+        overrides = model_config.provider_overrides()
         provider_config_with_overrides = (
             provider_config.model_copy(update=overrides) if overrides else provider_config
         )
@@ -168,7 +159,6 @@ def run_batch_from_config(
     config_manager: ConfigManager,
     batch_config_unified: Any,
     *,
-    output_format: str,
     threads: int,
     retries: int,
     retry_delay: float,
@@ -186,7 +176,6 @@ def run_batch_from_config(
         app_config: Loaded application config (providers, etc.).
         config_manager: Active config manager for provider/model overrides.
         batch_config_unified: ``batch`` section from the unified config.
-        output_format: Desired output format (used only for validation logging here).
         threads: Max concurrent workers.
         retries: Max retries per failed task.
         retry_delay: Initial retry delay.
@@ -204,8 +193,6 @@ def run_batch_from_config(
     Raises:
         ValueError: If no providers validate.
     """
-    logger.debug(f"Batch output format: {output_format}")
-
     # Load batch configuration
     console.print_info(f"Loading batch configuration from: {config_file}")
     batch_config = BatchConfigLoader.load(config_file)
@@ -306,7 +293,6 @@ def run_batch_from_config(
         validation,
         tasks=tasks,
         batch_mode=batch_mode,
-        batch_config=batch_config,
         config_file=config_file,
         checkpoint_path=checkpoint_path,
     )
@@ -318,7 +304,6 @@ def _build_run_result(
     *,
     tasks: list[BatchTask],
     batch_mode: str,
-    batch_config: dict[str, Any],
     config_file: str,
     checkpoint_path: str,
 ) -> BatchRunResult:
@@ -336,7 +321,6 @@ def _build_run_result(
         skipped_models=validation.skipped,
         original_tasks=tasks,
         batch_mode=batch_mode,
-        batch_config=batch_config,
         config_file=config_file,
         report=report,
     )
@@ -521,7 +505,7 @@ class BatchService:
             output_dir = str(config_file_path.parent / self.batch_cfg.batch_output_dir)
 
         exported_files = BatchResultExporter.export_split_files(
-            deduped_results, output_dir, self.run_result.batch_mode, force=force
+            deduped_results, output_dir, force=force
         )
         console.print()
         console.print_success(f"Results exported to {len(exported_files)} files in: {output_dir}")

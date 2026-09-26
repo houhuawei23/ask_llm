@@ -6,9 +6,9 @@ units → run through the shared bounded runner → collect ordered results →
 save a checkpoint when units fail. This base owns that skeleton; subclasses
 only define their work units, per-unit LLM call, and result assembly.
 
-Resume is symmetric: any subclass gets ``resume_from_checkpoint`` semantics
-through :meth:`_retry_failed_units`, ending the historical asymmetry where
-title checkpoints were written but could never be resumed.
+Resume is symmetric: subclasses rebuild their units from the checkpoint's
+failed records and call :meth:`_run_units` again, ending the historical
+asymmetry where title checkpoints were written but could never be resumed.
 """
 
 from __future__ import annotations
@@ -183,31 +183,3 @@ class ChunkedLLMJob:
         )
         checkpoint.save(path)
         return path
-
-    def _retry_failed_units(
-        self,
-        checkpoint: FormatCheckpoint,
-        units: list[UnitT],
-        worker: Callable[[UnitT, int], WorkerResultT],
-        *,
-        is_failed: Callable[[WorkerResultT], bool],
-        error_message: Callable[[WorkerResultT], str],
-        retry_count_from_result: Callable[[WorkerResultT], int],
-        order_key: Callable[[WorkerResultT], Any],
-        make_interrupted_result: Callable[[UnitT], WorkerResultT] | None = None,
-    ) -> tuple[list[WorkerResultT], bool]:
-        """Re-run checkpoint-failed work units through the shared runner."""
-        logger.info(
-            f"[{type(self).__name__}] Resuming from checkpoint: "
-            f"failed_units={len(checkpoint.failed_chunks)}, "
-            f"successful_units={len(checkpoint.successful_chunks)}"
-        )
-        return self._run_units(
-            units,
-            worker,
-            is_failed=is_failed,
-            error_message=error_message,
-            retry_count_from_result=retry_count_from_result,
-            order_key=order_key,
-            make_interrupted_result=make_interrupted_result,
-        )

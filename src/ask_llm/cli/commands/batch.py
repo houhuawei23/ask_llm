@@ -218,7 +218,6 @@ def batch(
                 load_result.app_config,
                 config_manager,
                 batch_cfg,
-                output_format=output_format,
                 threads=effective_threads,
                 retries=effective_retries,
                 retry_delay=batch_cfg.retry_delay,

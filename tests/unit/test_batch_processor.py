@@ -10,7 +10,7 @@ import pytest
 from ask_llm.core.batch_models import BatchResult, BatchTask, ModelConfig, TaskStatus
 from ask_llm.core.batch_processor import GlobalBatchProcessor
 from ask_llm.core.models import ProviderConfig
-from ask_llm.core.provider_manager import ProviderManager
+from ask_llm.core.provider_manager import build_provider_cache
 from ask_llm.config.unified_config import RateLimitConfig
 from ask_llm.core.error_keywords import ErrorCategory
 
@@ -332,7 +332,7 @@ def test_build_provider_cache_includes_fallbacks():
 
     with patch("ask_llm.utils.provider_cache.create_engine_adapter") as mock_create:
         mock_create.return_value = MagicMock()
-        cache = ProviderManager(cm).build_provider_cache([task])
+        cache = build_provider_cache([task], cm)
 
     assert "primary/model-a" in cache
     assert "fallback/model-b" in cache

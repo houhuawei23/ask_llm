@@ -473,7 +473,6 @@ class BatchResultExporter:
         cls,
         results: list[BatchResult],
         output_dir: str,
-        batch_mode: str | None = None,  # noqa: ARG003
         *,
         force: bool = False,
     ) -> list[str]:
@@ -484,7 +483,6 @@ class BatchResultExporter:
         Args:
             results: List of batch results
             output_dir: Output directory path
-            batch_mode: Batch mode (not used in split mode, kept for API consistency)
             force: Overwrite existing files (audit 4.5). Filename conflicts
                 within this export still resolve via ``_N`` suffixes.
 

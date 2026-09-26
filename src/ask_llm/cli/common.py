@@ -1,7 +1,8 @@
-"""Shared CLI helpers (config init, translation path resolution).
+"""Shared CLI helpers (config init).
 
-The path-resolution helpers live in ``ask_llm.utils.path_resolver`` (P4.3)
-and are re-exported here for backward compatibility.
+Config-init is the only remaining shared CLI helper; path-resolution lives in
+``ask_llm.utils.path_resolver`` and translation paths flow through the
+service layer.
 """
 
 from __future__ import annotations

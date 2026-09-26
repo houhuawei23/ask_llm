@@ -68,7 +68,6 @@ class AskResult:
     """Result of a single ``ask`` processing request."""
 
     content: str
-    output_path: str | None = None
     metadata: RequestMetadata | None = None
     reasoning: str | None = None
     include_metadata: bool = False

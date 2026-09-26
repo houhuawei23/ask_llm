@@ -18,8 +18,6 @@ from ask_llm.core.format_checkpoint import (
     SuccessfulChunkInfo,
 )
 from ask_llm.core.markdown_structure import (
-    CODE_FENCE_PATTERN,
-    HEADING_PATTERN,
     MarkdownStructure,
 )
 from ask_llm.core.processor import RequestProcessor
@@ -59,20 +57,6 @@ class HeadingExtractor:
     there; this class only adapts the spans to ``HeadingMatch`` objects.
     """
 
-    # Kept for backward compatibility (external references/tests); the
-    # canonical definitions live in ask_llm.core.markdown_structure.
-    HEADING_PATTERN = HEADING_PATTERN
-    CODE_FENCE_PATTERN = CODE_FENCE_PATTERN
-
-    @classmethod
-    def _find_code_block_ranges(cls, text: str) -> list[tuple[int, int]]:
-        """Find ranges of code blocks in markdown text.
-
-        Returns:
-            List of (start, end) tuples for each code block.
-        """
-        return MarkdownStructure.parse(text).fence_ranges
-
     @classmethod
     def extract(cls, text: str) -> list[HeadingMatch]:
         """
@@ -85,30 +69,17 @@ class HeadingExtractor:
         Returns:
             List of HeadingMatch objects in order of appearance
         """
-        structure = MarkdownStructure.parse(text)
-
-        headings = []
-        for match in HEADING_PATTERN.finditer(text):
-            start_pos = match.start()
-
-            # Skip headings inside code blocks / frontmatter
-            if structure.is_protected(start_pos):
-                continue
-
-            level = len(match.group(1))  # Number of # characters
-            title = match.group(2).strip()
-            raw_text = match.group(0)  # Full match including # and title
-            end_pos = match.end()
-
-            headings.append(
-                HeadingMatch(
-                    raw_text=raw_text,
-                    start_pos=start_pos,
-                    end_pos=end_pos,
-                    level=level,
-                    title=title,
-                )
+        # MarkdownStructure already filtered protected ranges — no rescan.
+        headings = [
+            HeadingMatch(
+                raw_text=text[span.start_pos : span.end_pos],
+                start_pos=span.start_pos,
+                end_pos=span.end_pos,
+                level=span.level,
+                title=span.title.strip(),
             )
+            for span in MarkdownStructure.parse(text).headings
+        ]
 
         logger.debug(f"Extracted {len(headings)} headings from text")
         return headings
@@ -126,11 +97,13 @@ class HeadingFormatResult:
 
 @dataclass
 class HeadingFormatStats:
-    """Statistics for heading formatting operation."""
+    """Statistics for heading formatting operation.
 
-    total_input_tokens: int = 0
-    total_output_tokens: int = 0
-    total_latency: float = 0.0
+    Token/latency totals are intentionally absent: batch heading calls
+    discard per-call metadata today. Add them when the worker starts
+    carrying RequestMetadata through.
+    """
+
     batches_processed: int = 0
     batches_failed: int = 0
 
@@ -241,7 +214,6 @@ class HeadingFormatter(ChunkedLLMJob):
         return self._parse_formatted_headings(
             result.content.strip(),
             len(batch),
-            take_last_only=bool(context_headings),
         )
 
     @dataclass
@@ -496,7 +468,7 @@ class HeadingFormatter(ChunkedLLMJob):
         # Rebuild failed batches: failed content is "\n"-joined raw heading
         # lines; chunk_id is the first heading ordinal of the batch. The
         # recorded context_headings (audit 3.5) restore the level reference
-        # and the take_last_only parse of the original batch; empty for
+        # and the tail-truncation parse of the original batch; empty for
         # pre-3.5 checkpoints (legacy behavior: no context).
         units: list[tuple[int, list[HeadingMatch], list[str] | None]] = []
         for fc in checkpoint.failed_chunks:
@@ -506,8 +478,11 @@ class HeadingFormatter(ChunkedLLMJob):
                     (fc.chunk_id, cls._lines_to_matches(lines), fc.context_headings or None)
                 )
 
-        retry_results, _ = formatter._retry_failed_units(
-            checkpoint,
+        logger.info(
+            f"[HeadingFormat] Retrying {len(units)} checkpointed batch(es): "
+            f"successful={len(checkpoint.successful_chunks)}"
+        )
+        retry_results, _ = formatter._run_units(
             units,
             formatter._process_batch_worker,
             is_failed=lambda r: not r.success,
@@ -565,7 +540,6 @@ class HeadingFormatter(ChunkedLLMJob):
         self,
         formatted_text: str,
         expected_count: int,
-        take_last_only: bool = False,
     ) -> list[str]:
         """
         Parse formatted headings from LLM response.
@@ -573,8 +547,6 @@ class HeadingFormatter(ChunkedLLMJob):
         Args:
             formatted_text: LLM response text
             expected_count: Expected number of headings
-            take_last_only: When True (context-aware batch), take only the last
-                expected_count headings (LLM may have output context headings too)
 
         Returns:
             List of formatted heading strings
@@ -664,12 +636,8 @@ class HeadingApplier:
         for original, formatted in reversed(
             list(zip(original_headings, formatted_headings, strict=False))
         ):
-            # Ensure formatted heading ends with newline if original did
-            if original.raw_text.endswith("\n") and not formatted.endswith("\n"):
-                formatted = formatted + "\n"
-            elif not original.raw_text.endswith("\n") and formatted.endswith("\n"):
-                formatted = formatted.rstrip("\n")
-
+            # HeadingMatch raw_text is a single-line regex match and never
+            # carries a trailing newline, so no newline harmonizing is needed.
             # Replace in reverse order
             before = result[: original.start_pos]
             after = result[original.end_pos :]

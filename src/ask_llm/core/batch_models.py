@@ -30,6 +30,22 @@ class ModelConfig(BaseModel):
     top_p: float | None = Field(default=None, ge=0.0, le=1.0)
     max_tokens: int | None = Field(default=None, gt=0)
 
+    def provider_overrides(self) -> dict[str, Any]:
+        """Return the ProviderConfig field overrides this config implies.
+
+        Single definition of the ModelConfig → ProviderConfig override
+        mapping (adapter caches, validation probes and config tests all use
+        it), so the fields can never drift apart again.
+        """
+        overrides: dict[str, Any] = {}
+        if self.temperature is not None:
+            overrides["api_temperature"] = self.temperature
+        if self.max_tokens is not None:
+            overrides["max_tokens"] = self.max_tokens
+        if self.top_p is not None:
+            overrides["api_top_p"] = self.top_p
+        return overrides
+
 
 class BatchTask(BaseModel):
     """A single batch processing task."""

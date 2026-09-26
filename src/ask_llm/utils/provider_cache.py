@@ -19,7 +19,6 @@ never-closed HTTP clients):
   cached when the process exits.
 
 Engine access goes through ``ask_llm.utils.engine_facade`` (P4.6); the
-``EngineConfigView`` compatibility import lives here too.
 """
 
 from __future__ import annotations
@@ -35,9 +34,9 @@ from pydantic import SecretStr
 
 from ask_llm.core.models import ProviderConfig
 from ask_llm.core.protocols import LLMProviderProtocol
-from ask_llm.utils.engine_facade import EngineConfigView, create_engine_adapter
+from ask_llm.utils.engine_facade import create_engine_adapter
 
-__all__ = ["EngineConfigView", "ProviderAdapterCache"]
+__all__ = ["ProviderAdapterCache"]
 
 _CACHE_MAXSIZE = 128
 

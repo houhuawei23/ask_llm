@@ -34,7 +34,7 @@ from ask_llm.core.error_keywords import (
 )
 from ask_llm.core.progress_presenter import NullProgressPresenter, ProgressPresenter
 from ask_llm.core.protocols import LLMProviderProtocol
-from ask_llm.core.provider_manager import ProviderManager
+from ask_llm.core.provider_manager import build_provider_cache
 from ask_llm.core.task_executor import TaskExecutor
 from ask_llm.core.telemetry import LogContext, bind_context
 from ask_llm.utils.rate_limiter import get_global_rate_limiter
@@ -267,7 +267,7 @@ class GlobalBatchProcessor:
         pending_tasks = [task for task, _ in task_estimates]
 
         # Pre-build provider cache to avoid per-task adapter creation and ConfigManager mutation
-        provider_cache = ProviderManager(config_manager).build_provider_cache(pending_tasks)
+        provider_cache = build_provider_cache(pending_tasks, config_manager)
 
         # Audit 3.3 (M6): per-(provider, model) lanes. Each lane runs its own
         # bounded pool sized by its own burst limit, so a tight provider no

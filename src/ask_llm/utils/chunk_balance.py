@@ -35,15 +35,6 @@ def _merge_meta(a: _Meta, b: _Meta) -> _Meta:
     return out
 
 
-def _locate_pieces(source: str, pieces: list[str]) -> list[tuple[int, int]]:
-    """Map each piece to ``(start, length)`` within *source* (audit 4.3).
-
-    Thin alias for the canonical implementation in ``core.binary_splitter``
-    (M2/2.25 moved it there so the splitter itself shares it).
-    """
-    return locate_pieces(source, pieces)
-
-
 def _split_by_token_budget(
     text: str, model: str, max_tokens: int, prompt_overhead: int = 0
 ) -> list[str]:
@@ -113,7 +104,7 @@ def plain_text_chunks_by_tokens(
     prefix = text.find(stripped) if stripped else 0
     out: list[TextChunk] = []
     for i, (content, (rel_start, rel_len)) in enumerate(
-        zip(parts, _locate_pieces(stripped, parts), strict=False)
+        zip(parts, locate_pieces(stripped, parts), strict=False)
     ):
         out.append(
             TextChunk(
@@ -159,7 +150,7 @@ def rebalance_translation_chunks(
         parts = _split_by_token_budget(c.content, model, max_chunk_tokens, prompt_overhead)
         stripped = c.content.strip()
         prefix = c.content.find(stripped) if stripped else 0
-        for part, (rel_start, rel_len) in zip(parts, _locate_pieces(stripped, parts), strict=False):
+        for part, (rel_start, rel_len) in zip(parts, locate_pieces(stripped, parts), strict=False):
             pieces.append(
                 (
                     part,
