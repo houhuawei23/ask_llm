@@ -20,7 +20,7 @@ from ask_llm.services.translation_options import (
 )
 from ask_llm.utils.console import console
 from ask_llm.utils.fallback_chain import model_config_with_fallback
-from ask_llm.utils.notebook_translator import NotebookTranslator
+from ask_llm.utils.notebook_translator import NotebookAuthError, NotebookTranslator
 from ask_llm.utils.path_resolver import resolve_translation_output_path
 from ask_llm.utils.pricing import format_cost_estimate
 
@@ -69,7 +69,7 @@ class NotebookFileTranslator:
         )
 
         output_file = Path(output_path)
-        if output_file.exists() and not force:
+        if output_file.exists() and not force and not options.resume:
             console.print_error(
                 f"Output file already exists: {output_path}. Use --force to overwrite."
             )
@@ -110,12 +110,13 @@ class NotebookFileTranslator:
                 balance_chunks=options.balance_translation_chunks,
                 max_chunk_tokens=options.max_chunk_tokens,
                 stream_api=stream_api,
+                resume=bool(
+                    options.resume and Path(f"{output_path}.trans_checkpoint.json").exists()
+                ),
             )
-        except RuntimeError as e:
-            if "API authentication failed" in str(e):
-                console.print_error(str(e))
-                return failed_job_result(file_path, output_path, str(e))
-            raise
+        except NotebookAuthError as e:
+            console.print_error(str(e))
+            return failed_job_result(file_path, output_path, str(e))
 
         total = successful + failed
         console.print_success(f"Translation saved to: {output_path}")

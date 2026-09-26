@@ -21,7 +21,7 @@ from typing import ClassVar
 from ask_llm.config.manager import ConfigManager
 from ask_llm.core.batch_models import BatchResult, BatchTask, ModelConfig, TaskStatus
 from ask_llm.core.command_runner import compute_checkpoint_digest, run_with_checkpoint
-from ask_llm.core.global_batch_runner import run_global_batch_tasks
+from ask_llm.core.command_runner import run_global_batch_tasks
 from ask_llm.core.models import AppConfig, ProviderConfig
 from ask_llm.utils.provider_cache import ProviderAdapterCache
 

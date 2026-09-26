@@ -8,12 +8,19 @@ from loguru import logger
 from nbformat import NotebookNode
 
 from ask_llm.core.batch_models import BatchResult, BatchTask, ModelConfig, TaskStatus
-from ask_llm.core.global_batch_runner import run_global_batch_tasks
+from ask_llm.core.command_runner import compute_checkpoint_digest, run_with_checkpoint
 from ask_llm.core.markdown_token_splitter import MarkdownTokenSplitter
 from ask_llm.core.text_splitter import TextChunk
 from ask_llm.core.translator import Translator
 from ask_llm.utils.chunk_balance import rebalance_translation_chunks
 from ask_llm.utils.token_counter import TokenCounter
+
+
+class NotebookAuthError(RuntimeError):
+    """Raised when every notebook chunk failed on API authentication.
+
+    Dedicated type (P1): callers used to string-match the RuntimeError message.
+    """
 
 
 def _split_markdown_cell_tokens(
@@ -123,6 +130,7 @@ class NotebookTranslator:
         balance_chunks: bool = True,
         max_chunk_tokens: int = 2400,
         stream_api: bool = True,
+        resume: bool = False,
     ) -> tuple[int, int, int, int]:
         """
         Translate a Jupyter notebook.
@@ -136,6 +144,7 @@ class NotebookTranslator:
             show_progress: Whether to show progress
             balance_chunks: Rebalance markdown sub-chunks by token estimate (per cell)
             max_chunk_tokens: Token cap for splitting and rebalance
+            resume: Continue from an existing checkpoint (completed chunks kept)
 
         Returns:
             Tuple of (successful_count, failed_count, total_input_tokens, total_output_tokens)
@@ -188,23 +197,38 @@ class NotebookTranslator:
                 )
             )
 
-        # Process through the unified entry point: it performs the API-key
-        # fail-fast gate, wires the global rate limiter, and returns the
-        # processor so auth-failure state stays inspectable.
-        results, processor = run_global_batch_tasks(
-            tasks,
-            config_manager,
-            max_workers=max_workers,
+        # Shared checkpoint lifecycle (P4.1): the same resume filtering,
+        # incremental saves and unlink-on-success semantics the text/batch
+        # paths use — a long notebook no longer loses all paid work on
+        # interrupt. Checkpoints live next to the output.
+        checkpoint_path = f"{output_path}.trans_checkpoint.json"
+        outcome = run_with_checkpoint(
+            command="notebook",
+            config_digest=compute_checkpoint_digest(input_path, tasks),
+            checkpoint_path=checkpoint_path,
+            tasks=tasks,
+            config_manager=config_manager,
+            resume=resume,
             max_retries=max_retries,
+            max_workers=max_workers,
             show_progress=show_progress,
+            clamp_workers_to_task_count=True,
             stream_api=stream_api,
         )
+        results = sorted(outcome.results, key=lambda r: r.task_id)
         self.last_results = list(results)
+
+        processor = outcome.processor
+        if outcome.interrupted:
+            logger.warning(
+                f"Notebook translation interrupted: progress saved to {checkpoint_path}; "
+                "resume to continue."
+            )
 
         successful = sum(1 for r in results if r.status == TaskStatus.SUCCESS)
         failed = len(results) - successful
-        if successful == 0 and failed > 0 and getattr(processor, "auth_error_logged", False):
-            raise RuntimeError("API authentication failed; no translated output.")
+        if successful == 0 and failed > 0 and processor and processor.auth_error_logged:
+            raise NotebookAuthError("API authentication failed; no translated output.")
 
         # Build cell_index -> list of translated chunks (in order)
         result_map = {r.task_id: r for r in results}

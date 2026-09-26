@@ -3,7 +3,7 @@
 from typing import Any
 
 from loguru import logger
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
 from ask_llm.core.models import ProviderConfig
 
@@ -380,6 +380,7 @@ class RateLimitConfig(BaseModel):
         default_factory=ProviderRateLimitConfig,
         description="Default limits when no provider-specific entry matches",
     )
+    _limits_cache: dict[str, ProviderRateLimitConfig] = PrivateAttr(default_factory=dict)
 
     def get_limits(self, provider: str, model: str | None = None) -> ProviderRateLimitConfig:
         """Return the most specific limits available for provider/model.
@@ -388,16 +389,33 @@ class RateLimitConfig(BaseModel):
         1. ``provider/model`` (e.g. ``deepseek/deepseek-reasoner``)
         2. ``provider``
         3. ``default_limits``
+
+        Key matching is case-insensitive on both sides (YAML authors write
+        ``DeepSeek:`` as often as ``deepseek:``). Validated entries are cached
+        so the hot per-request path does not re-run Pydantic validation.
         """
         provider = provider.lower()
+        key = f"{provider}/{model.lower()}" if model else provider
+        cached = self._limits_cache.get(key)
+        if cached is not None:
+            return cached
+
         extras = self.model_extra or {}
+        # Index extras by lowercased key once so lookups match either case.
+        lowered: dict[str, object] = {k.lower(): v for k, v in extras.items()}
+        limits: ProviderRateLimitConfig | None = None
         if model:
-            key = f"{provider}/{model.lower()}"
-            if key in extras:
-                return ProviderRateLimitConfig.model_validate(extras[key])
-        if provider in extras:
-            return ProviderRateLimitConfig.model_validate(extras[provider])
-        return self.default_limits
+            entry = lowered.get(key)
+            if entry is not None:
+                limits = ProviderRateLimitConfig.model_validate(entry)
+        if limits is None:
+            entry = lowered.get(provider)
+            if entry is not None:
+                limits = ProviderRateLimitConfig.model_validate(entry)
+        if limits is None:
+            limits = self.default_limits
+        self._limits_cache[key] = limits
+        return limits
 
 
 class UnifiedConfig(BaseModel):

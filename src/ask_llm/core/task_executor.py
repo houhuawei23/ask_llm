@@ -31,7 +31,7 @@ from ask_llm.core.telemetry import (
     bind_context,
     classify_error,
 )
-from ask_llm.utils.rate_limiter import get_global_rate_limiter
+from ask_llm.utils.rate_limiter import GlobalRateLimiter, get_global_rate_limiter
 from ask_llm.utils.token_counter import TokenCounter
 
 
@@ -74,13 +74,30 @@ def _update_global_task_progress_failed(
 class TaskExecutor:
     """Execute a single provider/model attempt for a batch task."""
 
-    def __init__(self, *, verbose: bool = False, stream_api: bool = True) -> None:
+    def __init__(
+        self,
+        *,
+        verbose: bool = False,
+        stream_api: bool = True,
+        rate_limiter: GlobalRateLimiter | None = None,
+    ) -> None:
         self.verbose = verbose
         self.stream_api = stream_api
+        # Explicit injection (P0): the executor used to call
+        # get_global_rate_limiter() bare, silently depending on
+        # GlobalBatchProcessor configuring the singleton first. Whatever runs
+        # this executor must hand it the configured limiter.
+        self.rate_limiter = rate_limiter
         self._auth_error_lock = threading.Lock()
         # M3: dedupe per provider/model — a single executor-level flag let the
         # first failing provider silence every *other* provider's auth errors.
         self._auth_error_logged_keys: set[str] = set()
+
+    def _get_limiter(self) -> GlobalRateLimiter:
+        """Return the injected limiter, falling back to the process singleton."""
+        if self.rate_limiter is not None:
+            return self.rate_limiter
+        return get_global_rate_limiter()
 
     @property
     def auth_error_logged(self) -> bool:
@@ -377,7 +394,7 @@ class TaskExecutor:
         progress_tokens = f"body≈{body_tokens} input≈{display_input_tokens}"
 
         try:
-            limiter = get_global_rate_limiter()
+            limiter = self._get_limiter()
             acquire_timeout = limiter.acquire_timeout(model_config.provider, model_config.model)
             acquired = limiter.acquire(
                 model_config.provider,

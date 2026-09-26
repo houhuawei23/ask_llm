@@ -104,7 +104,12 @@ class GlobalBatchProcessor:
         self.retry_delay = retry_delay
         self.retry_delay_max = retry_delay_max
         self.rate_limit_config = rate_limit_config
-        self._task_executor = TaskExecutor(verbose=verbose, stream_api=stream_api)
+        # Configure (and own) the process limiter here — the single point that
+        # knows the rate_limit_config — and hand it to the executor explicitly.
+        self._rate_limiter = get_global_rate_limiter(rate_limit_config)
+        self._task_executor = TaskExecutor(
+            verbose=verbose, stream_api=stream_api, rate_limiter=self._rate_limiter
+        )
         self.last_metrics: RunMetrics | None = None
 
     @property
@@ -132,7 +137,7 @@ class GlobalBatchProcessor:
         low-burst provider in a mixed batch drag every other provider down to
         its limit (and a single-provider batch to the same effective cap).
         """
-        limiter = get_global_rate_limiter(self.rate_limit_config)
+        limiter = self._rate_limiter
         grouped: dict[str, list[BatchTask]] = {}
         lane_bounds: dict[str, tuple[str, str]] = {}
         for task in tasks:

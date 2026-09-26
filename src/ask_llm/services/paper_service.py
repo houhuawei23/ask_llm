@@ -20,9 +20,9 @@ from ask_llm.core.batch_models import (
     BatchTask,
     TaskStatus,
 )
+from ask_llm.core.command_runner import run_global_batch_tasks
 from ask_llm.core.constants import OUTPUT_TOKEN_MULTIPLIERS, TaskKind
 from ask_llm.core.execution_report import build_report_from_batch_results
-from ask_llm.core.global_batch_runner import run_global_batch_tasks
 from ask_llm.core.models import AppConfig
 from ask_llm.core.paper_explain import (
     PaperBundle,

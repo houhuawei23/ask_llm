@@ -97,9 +97,9 @@ class TestBodyFormatInterrupt:
         # 1. Output must retain every chunk: formatted chunks appear as
         # ``formatted[...]``, abandoned ones keep their original text.
         for para in _PARAGRAPHS:
-            assert (
-                para in result.text or f"formatted[{para[-20:]}]" in result.text
-            ), f"lost chunk content: {para!r}"
+            assert para in result.text or f"formatted[{para[-20:]}]" in result.text, (
+                f"lost chunk content: {para!r}"
+            )
 
         # 2. A checkpoint must exist covering the abandoned chunks.
         assert result.checkpoint_path is not None
@@ -130,9 +130,9 @@ class TestBodyFormatInterrupt:
         assert resumed.failed_chunks == []
         # Every original chunk is either formatted or present verbatim.
         for para in _PARAGRAPHS:
-            assert (
-                para in resumed.text or f"formatted[{para[-20:]}]" in resumed.text
-            ), f"resume lost chunk ending {para[-20:]!r}"
+            assert para in resumed.text or f"formatted[{para[-20:]}]" in resumed.text, (
+                f"resume lost chunk ending {para[-20:]!r}"
+            )
 
     def test_no_interrupt_writes_no_checkpoint(self, tmp_path):
         set_config(ConfigLoader.load())

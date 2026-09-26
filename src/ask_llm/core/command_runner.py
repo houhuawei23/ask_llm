@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import threading
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import cast
@@ -26,8 +26,8 @@ from loguru import logger
 from ask_llm.config.manager import ConfigManager
 from ask_llm.core.batch_checkpoint import BatchCheckpoint
 from ask_llm.core.batch_models import BatchResult, BatchTask, TaskStatus
-from ask_llm.core.batch_processor import GlobalBatchProcessor
-from ask_llm.core.global_batch_runner import run_global_batch_tasks
+from ask_llm.core.batch_processor import GlobalBatchProcessor, rate_limit_config_from
+from ask_llm.utils.api_key_gate import ensure_resolved_provider_keys
 
 # D6: persist incremental checkpoint progress every N successful results so a
 # hard kill (SIGKILL/OOM) loses at most ~N results instead of the whole run.
@@ -36,6 +36,64 @@ from ask_llm.core.global_batch_runner import run_global_batch_tasks
 # quadratic bytes written for shrinking loss-window value.
 _INCREMENTAL_SAVE_EVERY = 10
 _MAX_INCREMENTAL_SAVE_EVERY = 50
+
+
+def run_global_batch_tasks(
+    tasks: list[BatchTask],
+    config_manager: ConfigManager,
+    *,
+    max_workers: int,
+    max_retries: int = 3,
+    retry_delay: float = 1.0,
+    retry_delay_max: float = 10.0,
+    verbose: bool = False,
+    show_progress: bool = True,
+    clamp_workers_to_task_count: bool = False,
+    stream_api: bool = True,
+    on_result: Callable[[BatchResult], None] | None = None,
+) -> tuple[list[BatchResult], GlobalBatchProcessor]:
+    """Create a GlobalBatchProcessor and run process_global_tasks.
+
+    The single entry point for every paid fan-out (batch / trans / paper /
+    notebook): the API-key gate, rate-limit wiring and processor construction
+    live only here.
+
+    When ``clamp_workers_to_task_count`` is True (e.g. paper explain), worker count is
+    ``max(1, min(max_workers, len(tasks)))`` so we do not over-allocate threads for few jobs.
+
+    For translation-style workloads with a fixed thread pool size, pass
+    ``clamp_workers_to_task_count=False`` (default); the executor will not use extra threads anyway.
+
+    ``on_result`` (D6) is forwarded to the runner so callers (e.g.
+    ``run_with_checkpoint``) can persist incremental checkpoint progress.
+
+    Raises:
+        UnresolvedAPIKeyError: if any task's provider has a missing or unresolved
+            API key (fail fast before fanning out concurrent calls).
+    """
+    # Fail fast: never fan out batch/trans/paper calls with an unresolved key.
+    providers = [t.model_settings.provider for t in tasks if t.model_settings]
+    ensure_resolved_provider_keys(config_manager, providers)
+
+    n = len(tasks)
+    if clamp_workers_to_task_count and n > 0:
+        effective_workers = max(1, min(max_workers, n))
+    else:
+        effective_workers = max(1, max_workers)
+
+    processor = GlobalBatchProcessor(
+        max_workers=effective_workers,
+        max_retries=max_retries,
+        retry_delay=retry_delay,
+        retry_delay_max=retry_delay_max,
+        verbose=verbose,
+        stream_api=stream_api,
+        rate_limit_config=rate_limit_config_from(config_manager),
+    )
+    results = processor.process_global_tasks(
+        tasks, config_manager, show_progress=show_progress, on_result=on_result
+    )
+    return results, processor
 
 
 def compute_checkpoint_digest(

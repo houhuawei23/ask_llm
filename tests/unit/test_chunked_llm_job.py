@@ -138,10 +138,9 @@ class TestRunUnits:
 
     def test_routes_concurrency_and_retry_settings_to_runner(self):
         job = EchoJob(concurrency=8, retries=2)
-        with patch(
-            "ask_llm.core.chunked_llm_job.BoundedRetryRunner"
-        ) as mock_runner_cls, patch.object(
-            ask_llm.core.chunked_llm_job, "logger"
+        with (
+            patch("ask_llm.core.chunked_llm_job.BoundedRetryRunner") as mock_runner_cls,
+            patch.object(ask_llm.core.chunked_llm_job, "logger"),
         ):
             mock_runner = mock_runner_cls.return_value
             mock_runner.run_with_metrics.return_value = ([], RunMetrics())
@@ -184,7 +183,9 @@ class TestRunUnits:
             def run_with_metrics(self, _tasks, _worker, **kwargs):
                 make_interrupted = kwargs["make_interrupted_result"]
                 # Simulate one abandoned unit converted by the callback.
-                return [make_interrupted(make_units(1)[0])], RunMetrics(interrupted=True, abandoned=1)
+                return [make_interrupted(make_units(1)[0])], RunMetrics(
+                    interrupted=True, abandoned=1
+                )
 
         job = EchoJob(concurrency=2)
         with patch("ask_llm.core.chunked_llm_job.BoundedRetryRunner", InterruptingRunner):
