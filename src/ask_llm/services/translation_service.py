@@ -23,7 +23,7 @@ from ask_llm.config.unified_config import UnifiedConfig
 from ask_llm.core.batch_models import BatchResult
 from ask_llm.core.execution_report import ExecutionReport, build_report_from_batch_results
 from ask_llm.core.models import AppConfig
-from ask_llm.core.text_splitter import TextSplitter
+from ask_llm.core.text_splitter import detect_file_type
 from ask_llm.core.translator import Translator
 from ask_llm.services.notebook_file_translator import NotebookFileTranslator
 from ask_llm.services.text_file_translator import (
@@ -169,7 +169,7 @@ class TranslationService:
         text_jobs: list[TextTranslationJob] = []
 
         for file_path in resolved_files:
-            file_type = TextSplitter.detect_file_type(file_path)
+            file_type = detect_file_type(file_path)
             if file_type == "notebook":
                 notebook_files.append(file_path)
             elif file_type in ("markdown", "text"):

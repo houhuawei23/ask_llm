@@ -15,6 +15,7 @@ from pathlib import Path
 from loguru import logger
 
 from ask_llm.config.context import get_config_or_none
+from ask_llm.core.binary_splitter import create_markdown_splitter
 from ask_llm.core.chunked_llm_job import ChunkedLLMJob
 from ask_llm.core.format_checkpoint import (
     FailedChunkInfo,
@@ -22,7 +23,6 @@ from ask_llm.core.format_checkpoint import (
     SuccessfulChunkInfo,
 )
 from ask_llm.core.markdown_structure import MarkdownStructure
-from ask_llm.core.markdown_token_splitter import MarkdownTokenSplitter
 from ask_llm.core.models import RequestMetadata
 from ask_llm.core.processor import RequestProcessor
 from ask_llm.core.text_splitter import TextChunk
@@ -174,7 +174,7 @@ class BodyFormatter(ChunkedLLMJob):
         # covers prompt + content. With a content-only budget, a large template
         # plus a near-full context window could overflow (review V2 D2).
         prompt_overhead = TokenCounter.count_tokens(template, self.model)
-        splitter = MarkdownTokenSplitter(
+        splitter = create_markdown_splitter(
             model=self.model,
             max_chunk_tokens=self.max_chunk_tokens,
             prompt_overhead_tokens=prompt_overhead,

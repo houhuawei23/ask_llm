@@ -83,7 +83,7 @@ def test_prepare_text_file_applies_fallback_chain(tmp_path: Path):
 
     with (
         patch(
-            "ask_llm.services.translation_service.TextSplitter.detect_file_type",
+            "ask_llm.services.translation_service.detect_file_type",
             return_value="text",
         ),
         patch("ask_llm.services.text_file_translator.FileHandler.read", return_value="hello world"),
@@ -134,7 +134,7 @@ def test_prepare_text_file_skips_fallback_when_disabled(tmp_path: Path):
 
     with (
         patch(
-            "ask_llm.services.translation_service.TextSplitter.detect_file_type",
+            "ask_llm.services.translation_service.detect_file_type",
             return_value="text",
         ),
         patch("ask_llm.services.text_file_translator.FileHandler.read", return_value="hello world"),

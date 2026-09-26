@@ -107,22 +107,22 @@ class TestBinarySplitter:
 
     def test_compat_wrapper_matches(self):
         """MarkdownTokenSplitter delegates to BinarySplitter identically."""
-        from ask_llm.core.markdown_token_splitter import MarkdownTokenSplitter
+        from ask_llm.core.binary_splitter import create_markdown_splitter
 
         text = "# A\n\n" + ("body " * 100) + "\n\n## B\n\n" + ("more " * 100)
-        via_wrapper = MarkdownTokenSplitter(MODEL, 50).split(text)
+        via_wrapper = create_markdown_splitter(MODEL, 50).split(text)
         via_impl = _split(text, 50)
         assert [c.content for c in via_wrapper] == [c.content for c in via_impl]
         assert [c.chunk_id for c in via_wrapper] == [c.chunk_id for c in via_impl]
 
     def test_wrapper_prompt_overhead(self):
-        from ask_llm.core.markdown_token_splitter import MarkdownTokenSplitter
+        from ask_llm.core.binary_splitter import create_markdown_splitter
 
         text = "\n\n".join(f"Paragraph {i}. " + "text " * 40 for i in range(6))
-        splitter = MarkdownTokenSplitter(MODEL, 100, prompt_overhead_tokens=60)
-        assert splitter._budget.prompt_overhead == 60
+        splitter = create_markdown_splitter(MODEL, 100, prompt_overhead_tokens=60)
+        assert splitter.budget.prompt_overhead == 60
         chunks = splitter.split(text)
-        plain = MarkdownTokenSplitter(MODEL, 100).split(text)
+        plain = create_markdown_splitter(MODEL, 100).split(text)
         assert len(chunks) >= len(plain)
 
 

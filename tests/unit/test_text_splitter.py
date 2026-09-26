@@ -2,30 +2,24 @@
 
 The char-based ``MarkdownSplitter`` / ``PlainTextSplitter`` / ``create_splitter``
 were removed in v2.17 (P3.2) as dead production code; the live algorithm is
-``BinarySplitter`` with ``TokenBudget`` (covered by
-``test_markdown_token_splitter.py`` and ``test_binary_splitter.py``).
+``BinarySplitter`` with ``TokenBudget`` (covered by ``test_binary_splitter.py``).
 """
 
-from ask_llm.core.text_splitter import TextChunk, TextSplitter
+from ask_llm.core.text_splitter import TextChunk, detect_file_type
 
 
-class TestTextSplitter:
-    """Test TextSplitter base class."""
-
+class TestDetectFileType:
     def test_detect_file_type_markdown(self):
-        """Test Markdown file type detection."""
-        assert TextSplitter.detect_file_type("test.md") == "markdown"
-        assert TextSplitter.detect_file_type("test.markdown") == "markdown"
-        assert TextSplitter.detect_file_type("/path/to/file.md") == "markdown"
+        assert detect_file_type("test.md") == "markdown"
+        assert detect_file_type("test.markdown") == "markdown"
+        assert detect_file_type("/path/to/file.md") == "markdown"
 
     def test_detect_file_type_text(self):
-        """Test plain text file type detection."""
-        assert TextSplitter.detect_file_type("test.txt") == "text"
-        assert TextSplitter.detect_file_type("test") == "text"
+        assert detect_file_type("test.txt") == "text"
+        assert detect_file_type("test") == "text"
 
     def test_detect_file_type_notebook(self):
-        """Test notebook file type detection."""
-        assert TextSplitter.detect_file_type("nb.ipynb") == "notebook"
+        assert detect_file_type("nb.ipynb") == "notebook"
 
 
 class TestTextChunk:

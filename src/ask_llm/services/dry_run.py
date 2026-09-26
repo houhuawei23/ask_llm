@@ -15,9 +15,9 @@ from pathlib import Path
 
 import nbformat
 
+from ask_llm.core.binary_splitter import create_markdown_splitter
 from ask_llm.core.constants import OUTPUT_TOKEN_MULTIPLIERS, TaskKind
-from ask_llm.core.markdown_token_splitter import MarkdownTokenSplitter
-from ask_llm.core.text_splitter import TextSplitter
+from ask_llm.core.text_splitter import detect_file_type
 from ask_llm.core.translator import Translator
 from ask_llm.utils.chunk_balance import (
     plain_text_chunks_by_tokens,
@@ -121,7 +121,7 @@ def estimate_translation_file(
     was ignored, so estimates diverged from the paid run).
     """
     file_path = Path(file_path)
-    file_type = TextSplitter.detect_file_type(str(file_path))
+    file_type = detect_file_type(str(file_path))
     if file_type not in ("markdown", "text", "notebook"):
         return None
 
@@ -168,7 +168,7 @@ def estimate_translation_file(
     prompt_overhead = TokenCounter.count_tokens(translator.prompt_template_for_batch(), model)
 
     if file_type == "markdown":
-        chunks = MarkdownTokenSplitter(
+        chunks = create_markdown_splitter(
             model, max_chunk_tokens, prompt_overhead_tokens=prompt_overhead
         ).split(content)
     else:
@@ -294,7 +294,7 @@ def estimate_format_run(
             requests = max(1, -(-len(headings) // max(1, heading_batch_size)))
             input_tokens = TokenCounter.count_tokens(content, model)
         else:
-            chunks = MarkdownTokenSplitter(model, max_chunk_tokens).split(content)
+            chunks = create_markdown_splitter(model, max_chunk_tokens).split(content)
             requests = len(chunks)
             input_tokens = sum(TokenCounter.count_tokens(c.content, model) for c in chunks)
 

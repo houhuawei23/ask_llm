@@ -90,6 +90,22 @@ class TokenBudget:
         return TokenCounter.split_hard_by_max_tokens(text, self._raw_content_cap, self.model)
 
 
+def create_markdown_splitter(
+    model: str, max_chunk_tokens: int, prompt_overhead_tokens: int = 0
+) -> BinarySplitter:
+    """Build the standard markdown splitter with a token budget.
+
+    Factory for the former ``MarkdownTokenSplitter`` shim: one place that
+    documents the budget semantics (max per chunk minus prompt-template
+    overhead) for translation/format callers.
+    """
+    return BinarySplitter(
+        TokenBudget(
+            model=model, max_tokens=max_chunk_tokens, prompt_overhead=prompt_overhead_tokens
+        )
+    )
+
+
 def locate_pieces(source: str, pieces: list[str]) -> list[tuple[int, int]]:
     """Map each piece to ``(start, length)`` within *source* (M2/2.25).
 

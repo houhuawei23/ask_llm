@@ -19,10 +19,10 @@ from loguru import logger
 
 from ask_llm.config.manager import ConfigManager
 from ask_llm.core.batch_models import BatchResult, BatchTask, TaskStatus
+from ask_llm.core.binary_splitter import create_markdown_splitter
 from ask_llm.core.command_runner import compute_checkpoint_digest, run_with_checkpoint
-from ask_llm.core.markdown_token_splitter import MarkdownTokenSplitter
 from ask_llm.core.models import AppConfig
-from ask_llm.core.text_splitter import TextChunk, TextSplitter
+from ask_llm.core.text_splitter import TextChunk, detect_file_type
 from ask_llm.core.translator import Translator
 from ask_llm.services.translation_options import (
     TranslationJobResult,
@@ -87,7 +87,7 @@ class TextFileTranslator:
         console.print()
         console.print(f"[bold]Preparing: {file_path}[/bold]")
 
-        file_type = TextSplitter.detect_file_type(file_path)
+        file_type = detect_file_type(file_path)
         if file_type not in ("markdown", "text"):
             console.print_warning(
                 f"Unsupported file type: {Path(file_path).suffix}. "
@@ -121,7 +121,7 @@ class TextFileTranslator:
         )
 
         if file_type == "markdown":
-            chunks = MarkdownTokenSplitter(
+            chunks = create_markdown_splitter(
                 self.model, options.max_chunk_tokens, prompt_overhead_tokens=prompt_overhead
             ).split(content)
         else:

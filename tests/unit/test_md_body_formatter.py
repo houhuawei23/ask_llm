@@ -356,7 +356,7 @@ class TestBodyFormatter:
         )
 
         with patch(
-            "ask_llm.core.markdown_token_splitter.MarkdownTokenSplitter.split",
+            "ask_llm.core.binary_splitter.BinarySplitter.split",
             return_value=chunks,
         ):
             body_result = formatter.format_body("dummy")
@@ -407,7 +407,7 @@ class TestBodyFormatter:
         )
 
         with patch(
-            "ask_llm.core.markdown_token_splitter.MarkdownTokenSplitter.split",
+            "ask_llm.core.binary_splitter.BinarySplitter.split",
             return_value=chunks,
         ):
             body_result = formatter.format_body("dummy")

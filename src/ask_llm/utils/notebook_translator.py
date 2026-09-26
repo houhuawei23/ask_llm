@@ -8,8 +8,8 @@ from loguru import logger
 from nbformat import NotebookNode
 
 from ask_llm.core.batch_models import BatchResult, BatchTask, ModelConfig, TaskStatus
+from ask_llm.core.binary_splitter import create_markdown_splitter
 from ask_llm.core.command_runner import compute_checkpoint_digest, run_with_checkpoint
-from ask_llm.core.markdown_token_splitter import MarkdownTokenSplitter
 from ask_llm.core.text_splitter import TextChunk
 from ask_llm.core.translator import Translator
 from ask_llm.utils.chunk_balance import rebalance_translation_chunks
@@ -29,7 +29,7 @@ def _split_markdown_cell_tokens(
     """Split long markdown cell text by token budget (structure-aware)."""
     if not text.strip():
         return []
-    splitter = MarkdownTokenSplitter(
+    splitter = create_markdown_splitter(
         model, max_chunk_tokens, prompt_overhead_tokens=prompt_overhead
     )
     return [c.content for c in splitter.split(text)]
