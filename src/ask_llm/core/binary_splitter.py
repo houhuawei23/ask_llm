@@ -127,6 +127,19 @@ def locate_pieces(source: str, pieces: list[str]) -> list[tuple[int, int]]:
     return spans
 
 
+_FENCE_MARKER_RE = re.compile(r"^[ \t]*(?:```|~~~)", re.MULTILINE)
+
+
+def _fence_marker_parity(paragraph: str) -> bool:
+    """True when the paragraph holds an odd number of fence-marker lines.
+
+    B3: blank lines inside a fenced block split the fence across
+    "paragraphs"; parity tracking is what lets the paragraph merger keep
+    every fenced block inside one unit.
+    """
+    return len(_FENCE_MARKER_RE.findall(paragraph)) % 2 == 1
+
+
 def _stripped_span_chunk(raw: str, chunk_id: int, raw_start: int, type_name: str) -> TextChunk:
     """Build a chunk whose span covers exactly its stripped content.
 
@@ -318,15 +331,21 @@ class BinarySplitter:
         if not paragraphs:
             return self._split_long_paragraph(text, start_pos, start_chunk_id)
 
-        # Merge display-math blocks ($$...$$) with their preceding paragraph so
-        # that a $$ block never starts a chunk on its own (which causes LLMs to
-        # drop or garble the equation).
+        # Merge paragraphs that must not stand alone:
+        # - a paragraph left with an unclosed fence (odd marker parity)
+        #   absorbs the following paragraphs until the fence closes (B3),
+        # - display-math blocks ($$...$$) join their preceding paragraph so
+        #   that a $$ block never starts a chunk on its own (which causes
+        #   LLMs to drop or garble the equation).
         merged_paragraphs: list[str] = []
+        inside_fence = False
         for p in paragraphs:
-            if p.startswith("$$") and merged_paragraphs:
+            parity = _fence_marker_parity(p)
+            if merged_paragraphs and (inside_fence or p.startswith("$$")):
                 merged_paragraphs[-1] = merged_paragraphs[-1] + "\n\n" + p
             else:
                 merged_paragraphs.append(p)
+            inside_fence = parity
         paragraphs = merged_paragraphs
 
         mid_idx = len(paragraphs) // 2
@@ -393,22 +412,24 @@ class BinarySplitter:
             return self._split_paragraph_with_fences(paragraph, start_pos, start_chunk_id)
 
         if not re.search(r"[.!?]+\s+", paragraph):
-            chunks: list[TextChunk] = []
-            chunk_id = start_chunk_id
-            current_pos = start_pos
-            for piece in self.budget.hard_split(paragraph):
-                chunks.append(
-                    TextChunk(
-                        content=piece,
-                        chunk_id=chunk_id,
-                        start_pos=current_pos,
-                        end_pos=current_pos + len(piece),
-                        metadata={"type": "character_split"},
-                    )
+            pieces = self.budget.hard_split(paragraph)
+            # hard_split strips its input first — locate each piece verbatim
+            # inside the stripped paragraph (falling back to the whole span
+            # when a piece was synthesized) so spans point at the real text
+            # instead of drifting by the stripped whitespace (B4/B5).
+            stripped = paragraph.strip()
+            lead = len(paragraph) - len(paragraph.lstrip())
+            spans = locate_pieces(stripped, pieces)
+            return [
+                TextChunk(
+                    content=piece,
+                    chunk_id=start_chunk_id + i,
+                    start_pos=start_pos + lead + s,
+                    end_pos=start_pos + lead + s + len(piece),
+                    metadata={"type": "character_split"},
                 )
-                chunk_id += 1
-                current_pos += len(piece)
-            return chunks
+                for i, (piece, (s, _length)) in enumerate(zip(pieces, spans, strict=False))
+            ]
 
         sentences = re.split(r"([.!?]+\s+)", paragraph)
         combined_sentences: list[str] = []

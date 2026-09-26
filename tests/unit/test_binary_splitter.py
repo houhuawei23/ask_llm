@@ -257,3 +257,47 @@ def test_spans_point_exactly_at_content_after_budget_enforcement():
     spans = [(c.start_pos, c.end_pos) for c in sorted(chunks, key=lambda c: c.chunk_id)]
     for (_, prev_end), (next_start, _) in pairwise(spans):
         assert prev_end <= next_start
+
+
+class TestFenceParityMerge:
+    """B3: blank lines inside a fenced block must not split the fence."""
+
+    def test_fenced_block_with_blank_lines_stays_intact(self):
+        text = (
+            "Intro paragraph with enough words to exceed the small budget.\n\n"
+            "```python\n"
+            "line_one = 1\n\n"
+            "line_two = 2\n\n"
+            "line_three = 3\n"
+            "```\n\n"
+            "Outro paragraph with enough words to exceed the small budget."
+        )
+        chunks = _split(text, 60)
+        joined = "\n\n".join(c.content for c in chunks)
+        # The fence block must appear verbatim inside exactly one chunk —
+        # never split across chunk boundaries.
+        fence_chunk = [c for c in chunks if "```python" in c.content]
+        assert len(fence_chunk) == 1
+        assert "line_three = 3\n```" in fence_chunk[0].content
+        # No content lost.
+        assert "line_one = 1" in joined and "Outro paragraph" in joined
+
+    def test_display_math_still_merges_with_preceding_paragraph(self):
+        text = (
+            "Paragraph before the equation.\n\n"
+            "$$\nE = mc^2\n$$\n\n"
+            "Paragraph after the equation with more filler words to fill budget."
+        )
+        chunks = _split(text, 60)
+        eq_chunk = [c for c in chunks if "E = mc^2" in c.content]
+        assert len(eq_chunk) == 1
+        assert eq_chunk[0].content.startswith("Paragraph before")
+
+    def test_character_split_spans_point_at_real_text(self):
+        """B4/B5: hard-split piece spans must locate the piece verbatim in the
+        source (hard_split strips its input first)."""
+        text = "   " + ("word " * 200)  # leading whitespace + no sentence punct
+        chunks = _split(text, 30)
+        assert len(chunks) > 1
+        for c in chunks:
+            assert text[c.start_pos : c.end_pos] == c.content
