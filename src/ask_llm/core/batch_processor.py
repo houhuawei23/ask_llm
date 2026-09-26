@@ -28,16 +28,15 @@ from ask_llm.core.constants import (
     OUTPUT_TOKEN_MULTIPLIERS,
     TaskKind,
 )
+from ask_llm.core.error_keywords import (
+    classify_error_message,
+    should_fallback_for_error,
+)
 from ask_llm.core.progress_presenter import NullProgressPresenter, ProgressPresenter
 from ask_llm.core.protocols import LLMProviderProtocol
 from ask_llm.core.provider_manager import ProviderManager
 from ask_llm.core.task_executor import TaskExecutor
-from ask_llm.core.telemetry import (
-    LogContext,
-    bind_context,
-    classify_error,
-    should_fallback_for_error,
-)
+from ask_llm.core.telemetry import LogContext, bind_context
 from ask_llm.utils.rate_limiter import get_global_rate_limiter
 
 
@@ -335,7 +334,7 @@ class GlobalBatchProcessor:
 
         def _on_worker_exception(task: BatchTask, exc: BaseException) -> BatchResult:
             error_msg = f"Unexpected error: {exc!s}"
-            category = classify_error(error_msg)
+            category = classify_error_message(error_msg)
             bind_context(LogContext(task_id=task.task_id, phase="global_batch")).bind(
                 error_category=category.value
             ).error(f"Unexpected error processing task: {exc}")
@@ -356,7 +355,8 @@ class GlobalBatchProcessor:
         def _make_interrupted_result(task: BatchTask) -> BatchResult:
             # Audit 3.2: an explicit failure record for every task the
             # interrupt abandoned, so summaries/reports/checkpoint all see
-            # it (resume re-runs it via mark_all_failed_for_retry).
+            # it (resume re-runs it because it is absent from
+            # completed_task_ids).
             return BatchResult(
                 task_id=task.task_id,
                 prompt=task.prompt,
@@ -366,7 +366,7 @@ class GlobalBatchProcessor:
                 or ModelConfig(provider="unknown", model="unknown"),
                 status=TaskStatus.FAILED,
                 error="Interrupted (Ctrl-C) before completion",
-                error_category=classify_error("interrupted"),
+                error_category=classify_error_message("interrupted"),
             )
 
         lane_results: list[BatchResult] = []

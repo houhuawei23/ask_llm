@@ -12,7 +12,7 @@ from ask_llm.core.batch_processor import GlobalBatchProcessor
 from ask_llm.core.models import ProviderConfig
 from ask_llm.core.provider_manager import ProviderManager
 from ask_llm.config.unified_config import RateLimitConfig
-from ask_llm.core.telemetry import ErrorCategory
+from ask_llm.core.error_keywords import ErrorCategory
 
 
 @pytest.fixture(autouse=True)

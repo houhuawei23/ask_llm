@@ -104,7 +104,11 @@ class BaseCheckpoint(ABC, Generic[TTask, TResult]):
         created_at: ISO timestamp when the checkpoint was created.
         config_digest: Hash/digest of the relevant configuration for consistency checks.
         completed_task_ids: Task IDs that have finished successfully.
-        failed_tasks: Task contexts that failed and may be retried.
+        failed_tasks: Audit-only records of the tasks that failed in the last
+            run (via ``mark_all_failed_for_retry``). Resume does NOT read
+            these — it filters the *current* task list by
+            ``completed_task_ids`` — so treat this as diagnostics, not as a
+            retry queue.
         successful_results: Results from completed tasks.
     """
 
@@ -192,6 +196,9 @@ class BaseCheckpoint(ABC, Generic[TTask, TResult]):
 
     def mark_all_failed_for_retry(self, failed_results: list[TResult]) -> None:
         """Replace the failed task list with tasks derived from failed results.
+
+        Audit-only diagnostics: resume does not consume this list (it filters
+        the current task list by ``completed_task_ids``).
 
         Subclasses must map results back to tasks via :meth:`result_to_task`.
         """

@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 from ask_llm import __version__
 from ask_llm.core.batch_models import AttemptRecord, BatchResult, TaskStatus
-from ask_llm.core.telemetry import ErrorCategory
+from ask_llm.core.error_keywords import ErrorCategory
 
 # Re-export for backward compatibility (callers imported AttemptRecord from here).
 __all__ = [

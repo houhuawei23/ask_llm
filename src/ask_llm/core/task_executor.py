@@ -21,16 +21,12 @@ from rich.progress import Progress, TaskID
 
 from ask_llm.config.context import get_config_or_none
 from ask_llm.core.batch_models import BatchResult, BatchTask, ModelConfig, TaskStatus
+from ask_llm.core.error_keywords import ErrorCategory, classify_error_message
 from ask_llm.core.models import RequestMetadata
 from ask_llm.core.processor import RequestProcessor
 from ask_llm.core.protocols import LLMProviderProtocol
 from ask_llm.core.stream_collector import stream_and_collect
-from ask_llm.core.telemetry import (
-    ErrorCategory,
-    LogContext,
-    bind_context,
-    classify_error,
-)
+from ask_llm.core.telemetry import LogContext, bind_context
 from ask_llm.utils.rate_limiter import GlobalRateLimiter, get_global_rate_limiter
 from ask_llm.utils.token_counter import TokenCounter
 
@@ -113,7 +109,7 @@ class TaskExecutor:
     ) -> None:
         """Log task failure; collapse duplicate authentication errors from parallel workers."""
         if category is None:
-            category = classify_error(error_msg)
+            category = classify_error_message(error_msg)
         ctx = LogContext(task_id=task_id, phase="global_batch")
         bound = bind_context(ctx).bind(model_key=model_key, error_category=category.value)
         if category == ErrorCategory.AUTHENTICATION:
@@ -466,7 +462,7 @@ class TaskExecutor:
 
         except Exception as e:
             error_msg = str(e)
-            category = classify_error(error_msg)
+            category = classify_error_message(error_msg)
             self.log_task_failure(task.task_id, model_key, error_msg, category)
 
             if self.verbose:

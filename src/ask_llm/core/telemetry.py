@@ -1,12 +1,9 @@
 """Structured observability primitives for Ask LLM.
 
-Provides error classification, request/task log context, and helpers for
-injecting correlation IDs into Loguru logs without leaking CLI details into
-core modules.
-
-Error classification consumes the single keyword rule table in
-``ask_llm.core.error_keywords`` (P4.8); ``ErrorCategory`` is re-exported here
-for backward compatibility.
+Provides request/task log context and helpers for injecting correlation IDs
+into Loguru logs without leaking CLI details into core modules. Error
+classification lives in ``ask_llm.core.error_keywords`` (the single rule
+table); import it from there directly.
 """
 
 from __future__ import annotations
@@ -16,16 +13,6 @@ from typing import Any
 
 from loguru import logger
 from pydantic import BaseModel, Field
-
-from ask_llm.core.error_keywords import ErrorCategory, classify_error_message
-
-__all__ = [
-    "ErrorCategory",
-    "LogContext",
-    "bind_context",
-    "classify_error",
-    "should_fallback_for_error",
-]
 
 
 class LogContext(BaseModel):
@@ -52,33 +39,6 @@ class LogContext(BaseModel):
             "attempt": self.attempt,
             "phase": self.phase,
         }
-
-
-def classify_error(error_message: str | None) -> ErrorCategory:
-    """Classify a raw error message into a stable :class:`ErrorCategory`.
-
-    Delegates to the single keyword rule table in
-    ``ask_llm.core.error_keywords`` (first matching rule in table order wins).
-    The heuristic is intentionally conservative: we only categorize errors that
-    are clearly identifiable from common provider/HTTP signatures. Everything
-    else falls back to ``UNKNOWN`` so users are not misled.
-    """
-    return classify_error_message(error_message)
-
-
-def should_fallback_for_error(category: ErrorCategory) -> bool:
-    """Return whether a failed attempt should be allowed to try the next fallback config.
-
-    Authentication and content-filter failures are unlikely to be resolved by a
-    different provider/model, so we skip fallback for those categories.
-    Validation errors (e.g. provider not in cache) are also terminal.
-    """
-    terminal = {
-        ErrorCategory.AUTHENTICATION,
-        ErrorCategory.CONTENT_FILTER,
-        ErrorCategory.VALIDATION_ERROR,
-    }
-    return category not in terminal
 
 
 def bind_context(ctx: LogContext | None = None, **kwargs: Any) -> Any:

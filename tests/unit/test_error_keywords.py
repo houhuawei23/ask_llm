@@ -5,9 +5,9 @@ from ask_llm.core.error_keywords import (
     TRANSIENT_KEYWORDS,
     ErrorCategory,
     classify_error_message,
+    is_retryable_error,
+    should_fallback_for_error,
 )
-from ask_llm.core.retry_policy import DEFAULT_TRANSIENT_KEYWORDS, RetryPolicy
-from ask_llm.core.telemetry import classify_error
 
 
 class TestClassify:
@@ -33,14 +33,8 @@ class TestClassify:
         assert classify_error_message(None) == ErrorCategory.UNKNOWN
         assert classify_error_message("") == ErrorCategory.UNKNOWN
 
-    def test_telemetry_delegates(self):
-        assert classify_error("429") == ErrorCategory.RATE_LIMIT
-
 
 class TestTransientDerivation:
-    def test_retry_policy_derives_from_table(self):
-        assert DEFAULT_TRANSIENT_KEYWORDS == TRANSIENT_KEYWORDS
-
     def test_historical_keywords_still_transient(self):
         """Keywords from the pre-P4.8 hardcoded list remain retryable."""
         for kw in (
@@ -57,7 +51,7 @@ class TestTransientDerivation:
             "temporarily unavailable",
             "try again",
         ):
-            assert kw in DEFAULT_TRANSIENT_KEYWORDS
+            assert kw in TRANSIENT_KEYWORDS
 
     def test_terminal_keywords_not_transient(self):
         for rule in ERROR_KEYWORD_RULES:
@@ -75,9 +69,22 @@ def test_cert_and_proxy_errors_not_retried_via_connection_keyword():
     the terminal cert/proxy rules are checked before the wide transient
     'connection'/'connect' rules, so a bad cert/proxy config can't burn the
     retry budget."""
-    policy = RetryPolicy()
-    assert not policy.is_retryable("connection failed: invalid SSL certificate")
-    assert not policy.is_retryable("connection error: proxy authentication required")
+    assert not is_retryable_error("connection failed: invalid SSL certificate")
+    assert not is_retryable_error("connection error: proxy authentication required")
     # Genuine transient connection failures remain retryable.
-    assert policy.is_retryable("connection refused")
-    assert policy.is_retryable("connection timed out")
+    assert is_retryable_error("connection refused")
+    assert is_retryable_error("connection timed out")
+
+
+class TestFallbackDerivation:
+    def test_no_fallback_categories_are_table_derived(self):
+        """P2 unification: authentication/content-filter/validation rules are
+        marked fallback=False in the table; everything else escalates."""
+        assert should_fallback_for_error(ErrorCategory.AUTHENTICATION) is False
+        assert should_fallback_for_error(ErrorCategory.CONTENT_FILTER) is False
+        assert should_fallback_for_error(ErrorCategory.VALIDATION_ERROR) is False
+        # Billing is terminal for the same key but a fallback provider may
+        # still have quota.
+        assert should_fallback_for_error(ErrorCategory.BILLING) is True
+        assert should_fallback_for_error(ErrorCategory.RATE_LIMIT) is True
+        assert should_fallback_for_error(ErrorCategory.MODEL_ERROR) is True

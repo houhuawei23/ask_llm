@@ -2,13 +2,12 @@
 
 import pytest
 
-from ask_llm.core.telemetry import (
+from ask_llm.core.error_keywords import (
     ErrorCategory,
-    LogContext,
-    bind_context,
-    classify_error,
+    classify_error_message as classify_error,
     should_fallback_for_error,
 )
+from ask_llm.core.telemetry import LogContext, bind_context
 
 
 @pytest.mark.parametrize(

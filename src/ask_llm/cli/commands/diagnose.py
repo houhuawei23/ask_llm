@@ -11,8 +11,8 @@ import typer
 from ask_llm.cli.errors import cli_errors
 from ask_llm.config.cli_session import load_pricing_with_hint
 from ask_llm.core.batch_models import TaskStatus
+from ask_llm.core.error_keywords import ErrorCategory
 from ask_llm.core.execution_report import ExecutionReport
-from ask_llm.core.telemetry import ErrorCategory
 from ask_llm.utils.console import console
 from ask_llm.utils.pricing import estimate_cost_cny, lookup_pricing
 

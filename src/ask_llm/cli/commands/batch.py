@@ -13,6 +13,7 @@ from ask_llm.cli.errors import cli_errors
 from ask_llm.config.cli_session import load_cli_session, load_pricing_with_hint
 from ask_llm.services.batch_service import BatchService, run_batch_from_config
 from ask_llm.utils.console import console
+from ask_llm.utils.export_formats import detect_export_format
 
 
 def batch(
@@ -194,26 +195,14 @@ def batch(
             effective_retries = retries if retries is not None else batch_cfg.retries
 
             if output_format is None and output:
-                output_path_obj = Path(output)
-                suffix = output_path_obj.suffix.lower()
-                extension_to_format = {
-                    ".json": "json",
-                    ".yaml": "yaml",
-                    ".yml": "yaml",
-                    ".csv": "csv",
-                    ".md": "markdown",
-                    ".markdown": "markdown",
-                }
-                detected = extension_to_format.get(suffix)
-                if suffix and detected is None:
+                suffix = Path(output).suffix.lower()
+                try:
+                    output_format = detect_export_format(output, default="", strict=True)
+                except ValueError as e:
                     # Audit 4.5: an unknown extension no longer silently
                     # exports JSON into e.g. a .txt target.
-                    raise typer.BadParameter(
-                        f"Cannot infer output format from extension '{suffix}' of "
-                        f"'{output}'. Pass --format explicitly."
-                    )
-                output_format = detected
-                if output_format is not None:
+                    raise typer.BadParameter(str(e)) from e
+                if output_format:
                     logger.debug(
                         f"Auto-detected output format '{output_format}' "
                         f"from file extension '{suffix}'"

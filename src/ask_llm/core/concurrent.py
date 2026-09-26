@@ -24,7 +24,7 @@ from typing import Any, Generic, TypeVar
 
 from loguru import logger
 
-from ask_llm.core.retry_policy import RetryPolicy
+from ask_llm.core.error_keywords import is_retryable_error as error_keywords_is_retryable
 
 TTask = TypeVar("TTask")
 TResult = TypeVar("TResult")
@@ -99,16 +99,12 @@ class BoundedRetryRunner(Generic[TTask, TResult]):
         max_retries: int,
         retry_delay: float,
         retry_delay_max: float,
-        retry_policy: RetryPolicy | None = None,
         stop_event: threading.Event | None = None,
     ) -> None:
         self.max_workers = max(1, max_workers)
         self.max_retries = max_retries
         self.retry_delay = retry_delay
         self.retry_delay_max = retry_delay_max
-        # Audit 3.1: an explicit policy (e.g. per-provider) takes precedence
-        # over the shared DEFAULT_RETRY_POLICY fallback.
-        self.retry_policy = retry_policy
         # Audit 3.3: cooperative stop for runners driven from non-main threads
         # (per-provider lanes): the SIGINT handler lives on the main thread and
         # sets this event; each lane runner treats it as its own interrupt.
@@ -151,10 +147,7 @@ class BoundedRetryRunner(Generic[TTask, TResult]):
         treated as a normal failure (escalating through the fallback chain).
         """
         if is_retryable_error is None:
-            if self.retry_policy is not None:
-                is_retryable_error = self.retry_policy.is_retryable
-            else:
-                is_retryable_error = _is_transient_error
+            is_retryable_error = error_keywords_is_retryable
 
         results: list[TResult] = []
         pending: deque[tuple[TTask, int]] = deque((t, 0) for t in tasks)
@@ -427,15 +420,3 @@ def run_bounded_with_retries(
         order_key=order_key,
         make_interrupted_result=make_interrupted_result,
     )
-
-
-def _is_transient_error(error_message: str) -> bool:
-    """Return True if *error_message* looks transient/retryable.
-
-    Thin backward-compatible wrapper around :data:`RetryPolicy`. New code should
-    construct a :class:`~ask_llm.core.retry_policy.RetryPolicy` directly to allow
-    per-provider customization.
-    """
-    from ask_llm.core.retry_policy import DEFAULT_RETRY_POLICY
-
-    return DEFAULT_RETRY_POLICY.is_retryable(error_message)

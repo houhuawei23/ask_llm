@@ -9,7 +9,7 @@ from ask_llm.cli.app import app
 from ask_llm.core.batch_models import BatchResult, ModelConfig, TaskStatus
 from ask_llm.core.execution_report import build_report_from_batch_results
 from ask_llm.core.models import RequestMetadata
-from ask_llm.core.telemetry import ErrorCategory
+from ask_llm.core.error_keywords import ErrorCategory
 
 
 runner = CliRunner()

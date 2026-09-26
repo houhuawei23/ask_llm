@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 from ask_llm.core.batch_models import BatchTask, ModelConfig, TaskStatus
 from ask_llm.core.task_executor import TaskExecutor
-from ask_llm.core.telemetry import ErrorCategory
+from ask_llm.core.error_keywords import ErrorCategory
 
 
 def _task() -> BatchTask:

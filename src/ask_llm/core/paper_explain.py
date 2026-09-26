@@ -18,7 +18,7 @@ from ask_llm.core.paper_explain_pipeline import (
     resolve_job_key_to_prompt_key,
     slugify_output_stem,
 )
-from ask_llm.utils.prompt_resolver import resolve_prompt_file
+from ask_llm.utils.prompt_resolver import expand_prompt, resolve_prompt_file
 
 
 def _pipeline_or_builtin(
@@ -548,14 +548,19 @@ def format_prompt(
     content: str,
     section_heading: str | None = None,
 ) -> str:
-    """Fill template placeholders: title, section_name, section_heading, content."""
+    """Fill template placeholders: title, section_name, section_heading, content.
+
+    ``{content}`` is expanded through the shared ``expand_prompt`` semantics
+    (P2 unification): replace when present, otherwise append — a template
+    missing the placeholder can no longer silently drop the paper content.
+    """
     sh = section_heading if section_heading is not None else section_name
-    return (
+    partial = (
         template.replace("{paper_title}", paper_title)
         .replace("{section_name}", section_name)
         .replace("{section_heading}", sh)
-        .replace("{content}", content)
     )
+    return expand_prompt(partial, content)
 
 
 def section_display_name(

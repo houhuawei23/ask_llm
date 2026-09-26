@@ -10,7 +10,7 @@ from ask_llm.core.execution_report import (
     build_report_from_batch_results,
 )
 from ask_llm.core.models import RequestMetadata
-from ask_llm.core.telemetry import ErrorCategory
+from ask_llm.core.error_keywords import ErrorCategory
 
 
 def _success_result(task_id: int, provider: str, model: str) -> BatchResult:

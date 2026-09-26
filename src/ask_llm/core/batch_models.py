@@ -6,8 +6,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from ask_llm.core.error_keywords import ErrorCategory
 from ask_llm.core.models import RequestMetadata
-from ask_llm.core.telemetry import ErrorCategory
 from ask_llm.utils.prompt_resolver import expand_prompt
 from ask_llm.utils.token_counter import TokenCounter
 
