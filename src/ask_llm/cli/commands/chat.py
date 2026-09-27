@@ -7,12 +7,8 @@ from typing import Annotated
 
 import typer
 
+from ask_llm.cli.common import paid_command_prelude
 from ask_llm.cli.errors import cli_errors
-from ask_llm.config.cli_session import (
-    gate_api_key_or_exit,
-    load_cli_session,
-    resolve_and_prepare,
-)
 from ask_llm.core.chat import ChatSession
 from ask_llm.utils.console import console
 from ask_llm.utils.engine_facade import create_engine_adapter
@@ -99,21 +95,16 @@ def chat(
     # cli_errors already converts KI to a message + exit 1, and the REPL
     # handles its own Ctrl-C (core/chat.py). Removed the dead wrapper.
     with cli_errors("chat"):
-        # Load configuration
-        _load_result, config_manager = load_cli_session(config_path)
-
-        final_provider, final_model = resolve_and_prepare(
-            config_manager,
-            cli_provider=provider,
-            cli_model=model,
+        # Single paid-command preamble: load + resolve + gate.
+        prelude = paid_command_prelude(
+            config_path,
+            provider=provider,
+            model=model,
             temperature=temperature,
-        )
-
-        gate_api_key_or_exit(
-            config_manager,
-            final_provider,
             skip_api_key_check=skip_api_key_check,
         )
+        config_manager = prelude.config_manager
+        final_model = prelude.model
 
         provider_config = config_manager.get_provider_config()
 

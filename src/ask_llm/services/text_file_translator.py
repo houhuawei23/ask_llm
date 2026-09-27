@@ -18,7 +18,6 @@ from pathlib import Path
 from loguru import logger
 
 from ask_llm.config.manager import ConfigManager
-from ask_llm.config.unified_config import UnifiedConfig
 from ask_llm.core.batch_models import BatchResult, BatchTask, ModelConfig, TaskStatus
 from ask_llm.core.binary_splitter import create_markdown_splitter
 from ask_llm.core.command_runner import compute_checkpoint_digest, run_with_checkpoint
@@ -65,14 +64,12 @@ class TextFileTranslator:
         model: str,
         pricing_map: PricingMap | None = None,
         pricing_source: Path | None = None,
-        unified_config: UnifiedConfig | None = None,
     ) -> None:
         self.config_manager = config_manager
         self.provider = provider
         self.model = model
         self.pricing_map = pricing_map or {}
         self.pricing_source = pricing_source
-        self.unified_config = unified_config
 
     def prepare(
         self,

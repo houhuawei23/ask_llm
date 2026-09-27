@@ -175,7 +175,6 @@ class TestPartialChunkFailure:
             MagicMock(),
             provider="openai",
             model="gpt-4",
-            unified_config=_make_app_config(),
         )
 
     def _job(self, tmp_path: Path):

@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from ask_llm import __version__
 from ask_llm.core.batch_models import AttemptRecord, BatchResult, TaskStatus
 from ask_llm.core.error_keywords import ErrorCategory
+from ask_llm.utils.console import console
 
 # Re-export for backward compatibility (callers imported AttemptRecord from here).
 __all__ = [
@@ -114,6 +115,24 @@ class ExecutionReport(BaseModel):
 
         data = Path(path).read_text(encoding="utf-8")
         return cls.model_validate_json(data)
+
+
+def export_execution_report(
+    report: ExecutionReport | None,
+    report_path: str | None,
+) -> str | None:
+    """Write *report* to *report_path* and announce it on the console.
+
+    Single implementation of the ``--report`` export shared by batch,
+    translation and paper (three verbatim copies existed). Returns the
+    exported path, or ``None`` when no path was requested or no report
+    is available.
+    """
+    if not report_path or report is None:
+        return None
+    report.to_json_file(report_path)
+    console.print_info(f"Execution report saved to: {report_path}")
+    return report_path
 
 
 def _batch_result_to_attempt_records(result: BatchResult) -> list[AttemptRecord]:

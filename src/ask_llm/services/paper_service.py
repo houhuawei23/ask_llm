@@ -24,7 +24,7 @@ from ask_llm.core.batch_models import (
 from ask_llm.core.binary_splitter import TokenBudget
 from ask_llm.core.command_runner import run_global_batch_tasks
 from ask_llm.core.constants import OUTPUT_TOKEN_MULTIPLIERS, TaskKind
-from ask_llm.core.execution_report import build_report_from_batch_results
+from ask_llm.core.execution_report import build_report_from_batch_results, export_execution_report
 from ask_llm.core.paper_explain import (
     PaperBundle,
     build_bundle_from_directory,
@@ -706,15 +706,7 @@ class PaperService:
             )
 
     def export_report(self, report_path: str | None) -> str | None:
-        """Export the execution report to ``report_path`` if available.
-
-        Args:
-            report_path: Destination path for the JSON report.
-
-        Returns:
-            The exported path, or ``None`` if no report was generated or no path
-            was requested.
-        """
+        """Export the execution report to ``report_path`` if available."""
         if not report_path or self._last_results is None:
             return None
         report = build_report_from_batch_results(
@@ -722,6 +714,4 @@ class PaperService:
             self._last_results,
             metadata={"provider": self.provider, "model": self.model},
         )
-        report.to_json_file(report_path)
-        console.print_info(f"Execution report saved to: {report_path}")
-        return report_path
+        return export_execution_report(report, report_path)

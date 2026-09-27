@@ -8,6 +8,7 @@ service layer.
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 import typer
@@ -117,6 +118,22 @@ def bootstrap_command(
     return load_result, config_manager, pricing_map, pricing_source
 
 
+@dataclass(frozen=True)
+class CommandPrelude:
+    """Everything a paid command needs after its standard preamble.
+
+    One object instead of a 6-tuple: call sites unpack by name and new
+    fields (pricing, ...) can be added without touching every command.
+    """
+
+    load_result: LoadResult
+    config_manager: ConfigManager
+    provider: str
+    model: str
+    pricing_map: dict
+    pricing_source: Path | None
+
+
 def paid_command_prelude(
     config_path: str | Path | None,
     *,
@@ -125,7 +142,7 @@ def paid_command_prelude(
     temperature: float | Callable[[LoadResult], float],
     pricing_path: str | Path | None = None,
     skip_api_key_check: bool = False,
-) -> tuple[LoadResult, ConfigManager, str, str, dict, Path | None]:
+) -> CommandPrelude:
     """One preamble for every command that can spend API tokens.
 
     Composes the standard paid-command sequence: load config + pricing →
@@ -142,9 +159,6 @@ def paid_command_prelude(
             own section default (e.g. ``lambda lr: lr.unified_config.paper.temperature``).
         pricing_path: Optional explicit providers.yml pricing path.
         skip_api_key_check: Forwarded to the gate (``--dry-run`` passes True).
-
-    Returns:
-        ``(load_result, config_manager, provider, model, pricing_map, pricing_source)``.
     """
     load_result, config_manager, pricing_map, pricing_source = bootstrap_command(
         config_path,
@@ -158,4 +172,11 @@ def paid_command_prelude(
         temperature=effective_temperature,
     )
     gate_api_key_or_exit(config_manager, final_provider, skip_api_key_check=skip_api_key_check)
-    return load_result, config_manager, final_provider, final_model, pricing_map, pricing_source
+    return CommandPrelude(
+        load_result=load_result,
+        config_manager=config_manager,
+        provider=final_provider,
+        model=final_model,
+        pricing_map=pricing_map,
+        pricing_source=pricing_source,
+    )

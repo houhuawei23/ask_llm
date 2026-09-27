@@ -9,6 +9,7 @@ import typer
 
 from ask_llm.cli.common import paid_command_prelude
 from ask_llm.cli.errors import cli_errors
+from ask_llm.core.constants import MAX_CONCURRENCY
 from ask_llm.services.paper_service import PaperExplainOptions, PaperService
 from ask_llm.utils.console import console
 
@@ -152,14 +153,7 @@ def paper(
             console.print_error(f"Path not found: {path}")
             raise typer.Exit(1)
 
-        (
-            load_result,
-            config_manager,
-            final_provider,
-            final_model,
-            pricing_map,
-            pricing_source,
-        ) = paid_command_prelude(
+        prelude = paid_command_prelude(
             config_path,
             provider=provider,
             model=model,
@@ -167,10 +161,18 @@ def paper(
             pricing_path=providers_pricing,
             skip_api_key_check=skip_api_key_check or dry_run,
         )
-        paper_cfg = load_result.unified_config.paper
+        paper_cfg = prelude.load_result.unified_config.paper
+        if resume:
+            console.print_error(
+                "--resume for paper takes no value (resume filters by existing outputs)."
+            )
+            raise typer.Exit(2)
+        resume_enabled = resume is not None
         workers = concurrency if concurrency is not None else paper_cfg.concurrency
-        if workers < 1 or workers > 64:
-            console.print_error("--concurrency / paper.concurrency must be between 1 and 64")
+        if workers < 1 or workers > MAX_CONCURRENCY:
+            console.print_error(
+                f"--concurrency / paper.concurrency must be between 1 and {MAX_CONCURRENCY}"
+            )
             raise typer.Exit(1)
 
         section_filter: set[str] | None = None
@@ -185,18 +187,18 @@ def paper(
             include_metadata=metadata,
             concurrency=workers,
             dry_run=dry_run,
-            resume=resume,
+            resume=resume_enabled,
             pipeline_path=pipeline,
             retries=retries,
         )
 
         service = PaperService(
-            config_manager=config_manager,
-            unified_config=load_result.unified_config,
-            provider=final_provider,
-            model=final_model,
-            pricing_map=pricing_map,
-            pricing_source=pricing_source,
+            config_manager=prelude.config_manager,
+            unified_config=prelude.load_result.unified_config,
+            provider=prelude.provider,
+            model=prelude.model,
+            pricing_map=prelude.pricing_map,
+            pricing_source=prelude.pricing_source,
         )
 
         try:

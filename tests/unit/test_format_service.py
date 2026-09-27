@@ -445,21 +445,14 @@ def test_sequential_run_continues_after_single_file_error(tmp_path, monkeypatch)
 
     stats = fs_mod.run_format(
         [str(bad), str(good)],
-        format_type="body",
         processor=MagicMock(),
-        model="gpt-4",
-        prompt_file_resolved="p.md",
-        heading_batch_size=None,
-        heading_concurrency=None,
-        body_max_chunk_tokens=None,
-        body_concurrency=None,
-        output=None,
-        inplace=False,
-        force=True,
+        options=fs_mod.FormatOptions(
+            format_type="body",
+            model="gpt-4",
+            prompt_file_resolved="p.md",
+            force=True,
+        ),
         max_workers=1,  # sequential path
-        retries=None,
-        retry_delay=None,
-        retry_delay_max=None,
     )
     assert calls == [str(bad), str(good)]
     assert stats.failed_count == 1

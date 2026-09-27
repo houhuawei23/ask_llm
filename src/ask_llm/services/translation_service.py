@@ -21,7 +21,11 @@ from loguru import logger
 from ask_llm.config.manager import ConfigManager
 from ask_llm.config.unified_config import UnifiedConfig
 from ask_llm.core.batch_models import BatchResult
-from ask_llm.core.execution_report import ExecutionReport, build_report_from_batch_results
+from ask_llm.core.execution_report import (
+    ExecutionReport,
+    build_report_from_batch_results,
+    export_execution_report,
+)
 from ask_llm.core.text_splitter import detect_file_type
 from ask_llm.core.translator import Translator
 from ask_llm.services.notebook_file_translator import NotebookFileTranslator
@@ -69,7 +73,6 @@ class TranslationService:
             model: Resolved model name.
             pricing_map: Optional pricing data for cost estimates.
             pricing_source: Optional path/label of the pricing source.
-            unified_config: Unified configuration; required for the fallback chain.
         """
         self.config_manager = config_manager
         self.unified_config = unified_config
@@ -77,7 +80,6 @@ class TranslationService:
         self.model = model
         self.pricing_map = pricing_map or {}
         self.pricing_source = pricing_source
-        self.unified_config = unified_config
         # Per-chunk results for the session report. Written ONLY on the main
         # thread (via _accumulate) — P4.5 removed cross-thread mutation.
         self._batch_results: list[BatchResult] = []
@@ -87,7 +89,6 @@ class TranslationService:
             model=model,
             pricing_map=pricing_map,
             pricing_source=pricing_source,
-            unified_config=unified_config,
         )
         self._notebook_file_translator = NotebookFileTranslator(
             config_manager,
@@ -95,7 +96,6 @@ class TranslationService:
             model=model,
             pricing_map=pricing_map,
             pricing_source=pricing_source,
-            unified_config=unified_config,
         )
 
     def translate_files(
@@ -374,22 +374,10 @@ class TranslationService:
         Prefers ``session_result.report`` (built during ``translate_files``) so
         the exported report is identical to the session report; falls back to
         rebuilding from the accumulated per-chunk results.
-
-        Args:
-            report_path: Destination path for the JSON report.
-            session_result: Session whose report should be exported.
-
-        Returns:
-            The exported path, or ``None`` if no report was generated or no path
-            was requested.
         """
         if not report_path:
             return None
         report = session_result.report if session_result is not None else None
-        if report is None:
-            if not self._batch_results:
-                return None
+        if report is None and self._batch_results:
             report = self._build_report()
-        report.to_json_file(report_path)
-        console.print_info(f"Execution report saved to: {report_path}")
-        return report_path
+        return export_execution_report(report, report_path)

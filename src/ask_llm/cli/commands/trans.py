@@ -22,6 +22,7 @@ except ImportError:
 
 from ask_llm.cli.common import paid_command_prelude
 from ask_llm.cli.errors import cli_errors
+from ask_llm.core.constants import MAX_CONCURRENCY
 from ask_llm.services.translation_service import (
     TranslationOptions,
     TranslationService,
@@ -75,7 +76,7 @@ def trans(
             "-T",
             help="Max concurrent API calls per file (from default_config.yml if not set)",
             min=1,
-            max=100,
+            max=MAX_CONCURRENCY,
         ),
     ] = None,
     max_parallel_files: Annotated[
@@ -84,7 +85,7 @@ def trans(
             "--max-parallel-files",
             help="Max files to translate in parallel (default: 3)",
             min=1,
-            max=50,
+            max=MAX_CONCURRENCY,
         ),
     ] = None,
     retries: Annotated[
@@ -210,12 +211,18 @@ def trans(
         ),
     ] = None,
     resume: Annotated[
-        bool,
+        str | None,
         typer.Option(
-            "--resume/--no-resume",
-            help="Resume translation from per-file checkpoints (default: False)",
+            "--resume",
+            is_flag=False,
+            flag_value="",
+            help=(
+                "Resume translation from per-file checkpoints. Takes no value "
+                "here (checkpoints live next to each output file); only "
+                "batch/format accept an explicit --resume PATH."
+            ),
         ),
-    ] = False,
+    ] = None,
     dry_run: Annotated[
         bool,
         typer.Option(
@@ -252,14 +259,7 @@ def trans(
     _t0 = time.perf_counter()
     try:
         with cli_errors("trans"):
-            (
-                load_result,
-                config_manager,
-                final_provider,
-                final_model,
-                pricing_map,
-                pricing_source,
-            ) = paid_command_prelude(
+            prelude = paid_command_prelude(
                 config,
                 provider=provider,
                 model=model,
@@ -267,7 +267,15 @@ def trans(
                 pricing_path=providers_pricing,
                 skip_api_key_check=skip_api_key_check or dry_run,
             )
-            trans_cfg = load_result.unified_config.translation
+            trans_cfg = prelude.load_result.unified_config.translation
+
+            if resume:
+                console.print_error(
+                    "--resume for trans takes no value (per-file checkpoints "
+                    "are auto-named next to each output file)."
+                )
+                raise typer.Exit(2)
+            resume_enabled = resume is not None
 
             if dry_run:
                 from ask_llm.core.translator import Translator
@@ -288,8 +296,8 @@ def trans(
                 glossary_pairs = Translator.load_glossary(glossary) if glossary else []
                 dry_report = estimate_translation_run(
                     input_paths,
-                    final_model,
-                    final_provider,
+                    prelude.model,
+                    prelude.provider,
                     target_language=target_lang or trans_cfg.target_language,
                     source_language=trans_cfg.source_language
                     if source_lang is None
@@ -303,9 +311,9 @@ def trans(
                         else trans_cfg.max_chunk_tokens
                     ),
                     balance_chunks=trans_cfg.balance_translation_chunks and not no_balance_chunks,
-                    pricing_map=pricing_map,
+                    pricing_map=prelude.pricing_map,
                 )
-                for line in dry_report.render(pricing_source=pricing_source):
+                for line in dry_report.render(pricing_source=prelude.pricing_source):
                     console.print(line)
                 return
 
@@ -334,16 +342,16 @@ def trans(
                 translatable_extensions=trans_cfg.translatable_extensions,
                 recursive_dir=trans_cfg.recursive_dir,
                 prompt_file=prompt_file,
-                resume=resume,
+                resume=resume_enabled,
             )
 
             service = TranslationService(
-                config_manager=config_manager,
-                unified_config=load_result.unified_config,
-                provider=final_provider,
-                model=final_model,
-                pricing_map=pricing_map,
-                pricing_source=pricing_source,
+                config_manager=prelude.config_manager,
+                unified_config=prelude.load_result.unified_config,
+                provider=prelude.provider,
+                model=prelude.model,
+                pricing_map=prelude.pricing_map,
+                pricing_source=prelude.pricing_source,
             )
 
             session_result = service.translate_files(

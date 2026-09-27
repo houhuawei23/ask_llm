@@ -19,7 +19,11 @@ from ask_llm.config.unified_config import BatchConfig as UnifiedBatchConfig
 from ask_llm.config.unified_config import UnifiedConfig
 from ask_llm.core.batch_models import BatchResult, BatchStatistics, BatchTask, ModelConfig
 from ask_llm.core.command_runner import compute_checkpoint_digest, run_with_checkpoint
-from ask_llm.core.execution_report import ExecutionReport, build_report_from_batch_results
+from ask_llm.core.execution_report import (
+    ExecutionReport,
+    build_report_from_batch_results,
+    export_execution_report,
+)
 from ask_llm.utils.api_key_gate import (
     api_key_is_missing_or_unresolved,
     ensure_resolved_provider_keys,
@@ -555,17 +559,5 @@ class BatchService:
         return BatchExportResult(exported_paths=[exported_file], export_mode="single")
 
     def export_report(self, report_path: str | None) -> str | None:
-        """Export the execution report to ``report_path`` if one is available.
-
-        Args:
-            report_path: Destination path for the JSON report.
-
-        Returns:
-            The exported path, or ``None`` if no report was generated or no path
-            was requested.
-        """
-        if not report_path or self.run_result.report is None:
-            return None
-        self.run_result.report.to_json_file(report_path)
-        console.print_info(f"Execution report saved to: {report_path}")
-        return report_path
+        """Export the execution report to ``report_path`` if one is available."""
+        return export_execution_report(self.run_result.report, report_path)

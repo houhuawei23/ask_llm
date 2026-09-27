@@ -28,6 +28,10 @@ OUTPUT_TOKEN_MULTIPLIERS = {
 # Fallback model for batch scheduling/estimation when a task carries no model settings
 DEFAULT_BATCH_FALLBACK_MODEL = "gpt-3.5-turbo"
 
+# Upper bound for user-facing concurrency knobs across all commands (--threads,
+# --workers, --concurrency). One constant instead of four diverging limits.
+MAX_CONCURRENCY = 100
+
 # Minimum token estimate for tasks with zero or unknown input
 DEFAULT_MIN_OUTPUT_TOKENS = 100
 
