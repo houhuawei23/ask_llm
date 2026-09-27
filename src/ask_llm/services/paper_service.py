@@ -18,8 +18,10 @@ from ask_llm.core.batch_models import (
     BatchResult,
     BatchStatistics,
     BatchTask,
+    ModelConfig,
     TaskStatus,
 )
+from ask_llm.core.binary_splitter import TokenBudget
 from ask_llm.core.command_runner import run_global_batch_tasks
 from ask_llm.core.constants import OUTPUT_TOKEN_MULTIPLIERS, TaskKind
 from ask_llm.core.execution_report import build_report_from_batch_results
@@ -43,7 +45,6 @@ from ask_llm.core.paper_explain_pipeline import (
     parse_section_job_key,
 )
 from ask_llm.utils.console import console
-from ask_llm.utils.fallback_chain import model_config_with_fallback
 from ask_llm.utils.file_handler import FileHandler
 from ask_llm.utils.model_limits import (
     load_providers_model_limits,
@@ -68,7 +69,6 @@ class PaperExplainOptions:
     dry_run: bool
     resume: bool
     pipeline_path: str | None
-    use_fallback: bool = True
     retries: int | None = None
 
 
@@ -208,8 +208,9 @@ class PaperService:
 
         idx_to_meta: dict[int, tuple[str, str, str | None]] = {}
         paper_tasks: list[BatchTask] = []
+        task_id = 0
 
-        for orig_idx, (key, body, appendix_h2) in jobs_with_orig_idx:
+        for _orig_idx, (key, body, appendix_h2) in jobs_with_orig_idx:
             template, full_prompt = self._render_job_prompt(
                 bundle, key, body, appendix_h2, explain_pipeline, prompt_dir
             )
@@ -219,27 +220,54 @@ class PaperService:
                 f"paper job: key={key!r} model={job_model!r} max_tokens={eff_max} "
                 f"(paper.max_output_tokens={paper_max_tokens})"
             )
-            model_config, fallback_configs = model_config_with_fallback(
-                current_provider,
-                job_model,
+            model_config = ModelConfig(
+                provider=current_provider,
+                model=job_model,
                 temperature=options.temperature,
                 max_tokens=eff_max,
-                unified_config=self.unified_config,
-                use_fallback=options.use_fallback,
             )
-            idx_to_meta[orig_idx] = (key, template, appendix_h2)
-            paper_tasks.append(
-                BatchTask(
-                    task_id=orig_idx,
-                    prompt=full_prompt,
-                    content="",
-                    output_filename=f"paper:{key}",
-                    model_settings=model_config,
-                    task_kind="paper_explain",
-                    return_reasoning=key.startswith("full"),
-                    fallback_model_configs=fallback_configs,
+
+            # Input budget guard (A8): a section body that cannot fit the
+            # model's context window (input + reserved output) would die at the
+            # API with an opaque context-length error AFTER paying for the
+            # attempt. Split such a body into budget-fitting parts; each part
+            # becomes its own job (distinct task id → distinct output file),
+            # the section key stays the same.
+            bodies = [body]
+            limits = model_limits_map.get(job_model)
+            if limits and limits.context_length:
+                budget = TokenBudget(
+                    model=job_model,
+                    max_tokens=max(1, limits.context_length - eff_max),
+                    prompt_overhead=TokenCounter.count_tokens(template, job_model),
                 )
-            )
+                if not budget.fits(body):
+                    bodies = budget.hard_split(body)
+                    console.print_warning(
+                        f"Section '{key}' exceeds the {job_model} context window; "
+                        f"split into {len(bodies)} part(s), each explained separately"
+                    )
+
+            for part_body in bodies:
+                if len(bodies) == 1:
+                    part_prompt = full_prompt
+                else:
+                    _, part_prompt = self._render_job_prompt(
+                        bundle, key, part_body, appendix_h2, explain_pipeline, prompt_dir
+                    )
+                idx_to_meta[task_id] = (key, template, appendix_h2)
+                paper_tasks.append(
+                    BatchTask(
+                        task_id=task_id,
+                        prompt=part_prompt,
+                        content="",
+                        output_filename=f"paper:{key}",
+                        model_settings=model_config,
+                        task_kind="paper_explain",
+                        return_reasoning=key.startswith("full"),
+                    )
+                )
+                task_id += 1
 
         max_workers = max(1, min(options.concurrency, len(paper_tasks)))
         console.print_info(

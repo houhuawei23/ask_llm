@@ -52,6 +52,4 @@ def build_provider_cache(
         if not task.model_settings:
             continue
         _add_config(task.model_settings, task)
-        for fallback_config in task.fallback_model_configs:
-            _add_config(fallback_config, task)
     return cache

@@ -13,6 +13,7 @@ from ask_llm.config.cli_session import (
     load_cli_session,
     resolve_and_prepare,
 )
+from ask_llm.core.models import RequestMetadata
 from ask_llm.core.processor import RequestProcessor
 from ask_llm.core.protocols import ReasoningChunk
 from ask_llm.services.ask_service import AskService, validate_input_source
@@ -247,6 +248,7 @@ def ask(
                 console.print(result.metadata.format())
         else:
             if stream:
+                metadata_out: list[RequestMetadata] = []
                 _print_stream(
                     service,
                     content,
@@ -254,7 +256,10 @@ def ask(
                     system_prompt=system,
                     include_reasoning=include_reasoning,
                     temperature=temperature,
+                    metadata_out=metadata_out if metadata else None,
                 )
+                if metadata and metadata_out:
+                    console.print(metadata_out[0].format())
             else:
                 processing_result = service.process(
                     content,
@@ -280,6 +285,7 @@ def _print_stream(
     system_prompt: str | None,
     include_reasoning: bool,
     temperature: float | None,
+    metadata_out: list[RequestMetadata] | None = None,
 ) -> None:
     """Presentation-only streaming loop: content flows live, reasoning prints after."""
     console.print("[bold blue]Response:[/bold blue] ", end="")
@@ -290,6 +296,7 @@ def _print_stream(
         system_prompt=system_prompt,
         include_reasoning=include_reasoning,
         temperature=temperature,
+        metadata_out=metadata_out,
     ):
         if isinstance(chunk, ReasoningChunk):
             reasoning_parts.append(chunk.reasoning)

@@ -5,7 +5,6 @@ import pytest
 from ask_llm.core.error_keywords import (
     ErrorCategory,
     classify_error_message as classify_error,
-    should_fallback_for_error,
 )
 from ask_llm.core.telemetry import LogContext, bind_context
 
@@ -34,23 +33,6 @@ from ask_llm.core.telemetry import LogContext, bind_context
 )
 def test_classify_error(message, expected):
     assert classify_error(message) == expected
-
-
-@pytest.mark.parametrize(
-    ("category", "expected"),
-    [
-        (ErrorCategory.AUTHENTICATION, False),
-        (ErrorCategory.CONTENT_FILTER, False),
-        (ErrorCategory.VALIDATION_ERROR, False),
-        (ErrorCategory.RATE_LIMIT, True),
-        (ErrorCategory.TIMEOUT, True),
-        (ErrorCategory.MODEL_ERROR, True),
-        (ErrorCategory.NETWORK_ERROR, True),
-        (ErrorCategory.UNKNOWN, True),
-    ],
-)
-def test_should_fallback_for_error(category, expected):
-    assert should_fallback_for_error(category) == expected
 
 
 def test_log_context_defaults():

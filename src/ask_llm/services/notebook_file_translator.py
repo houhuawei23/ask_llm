@@ -12,6 +12,7 @@ from pathlib import Path
 
 from ask_llm.config.manager import ConfigManager
 from ask_llm.config.unified_config import UnifiedConfig
+from ask_llm.core.batch_models import ModelConfig
 from ask_llm.core.translator import Translator
 from ask_llm.services.translation_options import (
     TranslationJobResult,
@@ -19,7 +20,6 @@ from ask_llm.services.translation_options import (
     failed_job_result,
 )
 from ask_llm.utils.console import console
-from ask_llm.utils.fallback_chain import model_config_with_fallback
 from ask_llm.utils.notebook_translator import NotebookAuthError, NotebookTranslator
 from ask_llm.utils.path_resolver import resolve_translation_output_path
 from ask_llm.utils.pricing import format_cost_estimate
@@ -84,19 +84,16 @@ class NotebookFileTranslator:
             glossary_pairs=glossary_pairs,
         )
 
-        model_config, fallback_configs = model_config_with_fallback(
-            self.provider,
-            self.model,
+        model_config = ModelConfig(
+            provider=self.provider,
+            model=self.model,
             temperature=options.temperature,
             max_tokens=options.max_output_tokens,
-            unified_config=self.unified_config,
-            use_fallback=options.use_fallback,
         )
 
         notebook_translator = NotebookTranslator(
             translator=translator,
             model_config=model_config,
-            fallback_configs=fallback_configs,
         )
 
         try:

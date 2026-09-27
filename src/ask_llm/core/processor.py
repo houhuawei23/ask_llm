@@ -50,11 +50,19 @@ def _call_kwargs(
 def _iter_provider_response(
     gen: Iterator[str | ReasoningChunk] | str | ReasoningChunk,
 ) -> Iterator[str | ReasoningChunk]:
-    """Yield chunks from a provider call result (single value or iterator)."""
+    """Yield chunks from a provider call result (single value or iterator).
+
+    Normalizes ``(content, reasoning)`` tuples into :class:`ReasoningChunk` —
+    some providers yield tuples even when reasoning was not requested.
+    """
     if isinstance(gen, (str, ReasoningChunk)):
         yield gen
         return
-    yield from gen
+    for item in gen:
+        if isinstance(item, tuple) and len(item) == 2:
+            yield ReasoningChunk(content=item[0], reasoning=item[1])
+        else:
+            yield item
 
 
 class RequestProcessor:
@@ -173,11 +181,7 @@ class RequestProcessor:
         if isinstance(gen, (str, ReasoningChunk)):
             yield gen
             return
-        for item in gen:
-            if isinstance(item, tuple) and len(item) == 2:
-                yield ReasoningChunk(content=item[0], reasoning=item[1])
-            else:
-                yield item
+        yield from _iter_provider_response(gen)
 
     def process_with_metadata(
         self,

@@ -55,10 +55,6 @@ class BatchTask(BaseModel):
     content: str
     output_filename: str | None = None  # Optional output filename for split mode
     model_settings: ModelConfig | None = None  # Optional per-task model configuration
-    fallback_model_configs: list[ModelConfig] = Field(
-        default_factory=list,
-        description="Ordered list of fallback provider/model configs to try on failure",
-    )
     # Value set MUST stay aligned with TaskKind in constants.py so
     # estimate_output_tokens can look up multipliers without error fallbacks.
     task_kind: Literal["translation", "paper_explain"] = "translation"
@@ -154,9 +150,9 @@ class BatchResult(BaseModel):
     attempt_history: list[AttemptRecord] = Field(
         default_factory=list,
         description=(
-            "Preceding attempts for this task (e.g. earlier configs in a fallback "
-            "chain). Flat AttemptRecords, never the final result itself, so the "
-            "object graph stays acyclic."
+            "Preceding attempts for this task (retry history). Flat "
+            "AttemptRecords, never the final result itself, so the object "
+            "graph stays acyclic."
         ),
     )
     timestamp: datetime = Field(default_factory=datetime.now)
@@ -180,8 +176,25 @@ class BatchResult(BaseModel):
                 "top_p": self.model_settings.top_p,
             },
             "response": self.response,
+            "reasoning": self.reasoning,
             "status": self.status.value,
             "error": self.error,
+            "error_category": self.error_category.value if self.error_category else None,
+            "throttled": self.throttled,
+            "attempt_history": [
+                {
+                    "provider": a.provider,
+                    "model": a.model,
+                    "status": a.status.value,
+                    "error": a.error,
+                    "error_category": a.error_category.value if a.error_category else None,
+                    "latency": a.latency,
+                    "input_tokens": a.input_tokens,
+                    "output_tokens": a.output_tokens,
+                    "timestamp": a.timestamp.isoformat(),
+                }
+                for a in self.attempt_history
+            ],
             "metadata": {
                 "provider": self.metadata.provider,
                 "model": self.metadata.model,

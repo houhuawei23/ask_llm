@@ -2,11 +2,9 @@
 
 from ask_llm.core.error_keywords import (
     ERROR_KEYWORD_RULES,
-    TRANSIENT_KEYWORDS,
     ErrorCategory,
     classify_error_message,
     is_retryable_error,
-    should_fallback_for_error,
 )
 
 
@@ -37,6 +35,7 @@ class TestClassify:
 class TestTransientDerivation:
     def test_historical_keywords_still_transient(self):
         """Keywords from the pre-P4.8 hardcoded list remain retryable."""
+        transient = {r.keyword for r in ERROR_KEYWORD_RULES if r.transient}
         for kw in (
             "timeout",
             "connection",
@@ -51,7 +50,7 @@ class TestTransientDerivation:
             "temporarily unavailable",
             "try again",
         ):
-            assert kw in TRANSIENT_KEYWORDS
+            assert kw in transient
 
     def test_terminal_keywords_not_transient(self):
         for rule in ERROR_KEYWORD_RULES:
@@ -74,17 +73,3 @@ def test_cert_and_proxy_errors_not_retried_via_connection_keyword():
     # Genuine transient connection failures remain retryable.
     assert is_retryable_error("connection refused")
     assert is_retryable_error("connection timed out")
-
-
-class TestFallbackDerivation:
-    def test_no_fallback_categories_are_table_derived(self):
-        """P2 unification: authentication/content-filter/validation rules are
-        marked fallback=False in the table; everything else escalates."""
-        assert should_fallback_for_error(ErrorCategory.AUTHENTICATION) is False
-        assert should_fallback_for_error(ErrorCategory.CONTENT_FILTER) is False
-        assert should_fallback_for_error(ErrorCategory.VALIDATION_ERROR) is False
-        # Billing is terminal for the same key but a fallback provider may
-        # still have quota.
-        assert should_fallback_for_error(ErrorCategory.BILLING) is True
-        assert should_fallback_for_error(ErrorCategory.RATE_LIMIT) is True
-        assert should_fallback_for_error(ErrorCategory.MODEL_ERROR) is True

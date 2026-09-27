@@ -133,13 +133,6 @@ def batch(
             help="Resume from a checkpoint file (auto-generated if omitted)",
         ),
     ] = None,
-    fallback: Annotated[
-        bool,
-        typer.Option(
-            "--fallback/--no-fallback",
-            help="Enable fallback to alternate providers/models on failure",
-        ),
-    ] = True,
     report: Annotated[
         str | None,
         typer.Option(
@@ -226,7 +219,6 @@ def batch(
                 skip_api_key_check=skip_api_key_check,
                 verbose=verbose,
                 resume_checkpoint_path=resume,
-                use_fallback=fallback,
                 skip_validation=skip_validation,
             )
 

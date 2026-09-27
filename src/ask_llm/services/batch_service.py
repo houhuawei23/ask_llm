@@ -27,7 +27,6 @@ from ask_llm.utils.api_key_gate import (
 from ask_llm.utils.batch_exporter import BatchResultExporter
 from ask_llm.utils.batch_loader import BatchConfigLoader
 from ask_llm.utils.console import console
-from ask_llm.utils.fallback_chain import build_fallback_chain
 from ask_llm.utils.interactive_config import InteractiveConfigHelper
 from ask_llm.utils.pricing import format_cost_estimate
 from ask_llm.utils.provider_cache import ProviderAdapterCache
@@ -166,7 +165,6 @@ def run_batch_from_config(
     skip_api_key_check: bool = False,
     verbose: bool = False,
     resume_checkpoint_path: str | None = None,
-    use_fallback: bool = True,
     skip_validation: bool = False,
 ) -> BatchRunResult:
     """Load a batch YAML config, validate models, and execute all tasks.
@@ -185,7 +183,6 @@ def run_batch_from_config(
         skip_validation: Skip the model/connection validation stage entirely
             (plan 5.6) — every configured provider/model runs unvalidated;
             failures surface per task at execution time.
-        use_fallback: Whether to enable fallback to alternate providers/models.
 
     Returns:
         BatchRunResult with all results, statistics and metadata for export.
@@ -245,9 +242,6 @@ def run_batch_from_config(
     task_id_counter = 0
 
     for model_config in validation.validated:
-        fallback_configs = (
-            build_fallback_chain(unified_config, model_config) if use_fallback else []
-        )
         for original_task in tasks:
             global_task = BatchTask(
                 task_id=task_id_counter,
@@ -255,7 +249,6 @@ def run_batch_from_config(
                 content=original_task.content,
                 output_filename=original_task.output_filename,
                 model_settings=model_config,
-                fallback_model_configs=fallback_configs,
             )
             global_tasks.append(global_task)
             task_id_counter += 1

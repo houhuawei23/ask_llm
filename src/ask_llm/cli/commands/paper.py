@@ -124,13 +124,6 @@ def paper(
             help="Path to paper-explain-pipeline.yml (overrides paper.pipeline_config in config)",
         ),
     ] = None,
-    fallback: Annotated[
-        bool,
-        typer.Option(
-            "--fallback/--no-fallback",
-            help="Enable fallback to alternate providers/models on failure",
-        ),
-    ] = True,
     report: Annotated[
         str | None,
         typer.Option(
@@ -194,7 +187,6 @@ def paper(
             dry_run=dry_run,
             resume=resume,
             pipeline_path=pipeline,
-            use_fallback=fallback,
             retries=retries,
         )
 

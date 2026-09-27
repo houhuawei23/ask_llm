@@ -70,7 +70,17 @@ def stream_and_collect(
                 else:
                     output_token_count += TokenCounter.count_words(chunk.reasoning)
         else:
-            text_chunk = chunk if isinstance(chunk, str) else str(chunk)
+            if isinstance(chunk, ReasoningChunk):
+                # Provider emitted a reasoning pair although reasoning was not
+                # requested: keep the content, never the object repr.
+                text_chunk = chunk.content
+            elif isinstance(chunk, str):
+                text_chunk = chunk
+            else:
+                raise TypeError(
+                    f"Unexpected stream chunk type {type(chunk).__name__!r}; "
+                    "refusing to write its repr into the response"
+                )
             response_parts.append(text_chunk)
             if encoding is not None:
                 output_token_count += len(encoding.encode(text_chunk))

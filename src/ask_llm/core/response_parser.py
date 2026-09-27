@@ -189,9 +189,11 @@ def unwrap_translation_payload(text: str) -> str:
         # "text"/"content" among its own fields — compressing the whole
         # document to one key's value silently destroyed the rest.
         # Envelope test: an unambiguous key ("translation" / "translated_text")
-        # is present, or every key is a known wrapper key.
+        # is present, or the object has exactly one weak wrapper key
+        # ({"text": ...} alone). Two weak keys ("text" + "result") look exactly
+        # like a small translated document, so they are NOT unwrapped.
         is_envelope = any(k in _ENVELOPE_STRONG_KEYS for k in obj) or (
-            bool(obj) and all(k in _PAYLOAD_KEYS for k in obj)
+            len(obj) == 1 and next(iter(obj)) in _PAYLOAD_KEYS
         )
         if is_envelope:
             best = ""

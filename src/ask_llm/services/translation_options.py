@@ -32,7 +32,6 @@ class TranslationOptions:
     recursive_dir: bool
     prompt_file: str | None = None
     resume: bool = False
-    use_fallback: bool = True
 
 
 @dataclass

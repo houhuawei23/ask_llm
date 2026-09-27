@@ -150,7 +150,7 @@ def estimate_translation_file(
             if not task_data:
                 return None
             input_tokens = sum(
-                TokenCounter.count_tokens(content, model) for _, content in task_data
+                TokenCounter.count_tokens(content, model) for _, content, _, _ in task_data
             )
             return DryRunFileEstimate(
                 path=str(file_path), chunks=len(task_data), input_tokens=input_tokens

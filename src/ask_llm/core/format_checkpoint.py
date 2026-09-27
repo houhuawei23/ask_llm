@@ -72,6 +72,31 @@ def compute_format_digest(
     return h.hexdigest()
 
 
+def verify_source_integrity(checkpoint: FormatCheckpoint) -> None:
+    """Raise when the source file no longer matches the checkpoint's digest.
+
+    Gate for every resume entry point (formatters included, not just
+    ``FormatService``): resuming onto a source file that changed after the
+    checkpoint was written would splice old results into new content. Checks
+    only the source file — run-option drift (model/prompt/budget) is the
+    caller's concern, validated where the current options are known.
+    """
+    if not checkpoint.config_digest:
+        return
+    current = compute_format_digest(
+        checkpoint.source_file,
+        prompt_template=checkpoint.prompt_template,
+        model=checkpoint.model,
+        max_chunk_tokens=checkpoint.max_chunk_tokens,
+        format_type=checkpoint.format_type,
+    )
+    if current != checkpoint.config_digest:
+        raise RuntimeError(
+            f"checkpoint 与源文件不一致: {checkpoint.source_file} 在 checkpoint 创建后被修改过。"
+            "为避免把旧结果错拼到新内容上, 已拒绝恢复; 请删除该 checkpoint 后重新运行。"
+        )
+
+
 @dataclass
 class FailedChunkInfo:
     """Information about a single failed chunk for checkpoint/resume.

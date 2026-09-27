@@ -8,9 +8,9 @@ from loguru import logger
 from nbformat import NotebookNode
 
 from ask_llm.core.batch_models import BatchResult, BatchTask, ModelConfig, TaskStatus
-from ask_llm.core.binary_splitter import create_markdown_splitter
+from ask_llm.core.binary_splitter import create_markdown_splitter, locate_pieces
 from ask_llm.core.command_runner import compute_checkpoint_digest, run_with_checkpoint
-from ask_llm.core.text_splitter import TextChunk
+from ask_llm.core.text_splitter import TextChunk, join_chunks_position_aware
 from ask_llm.core.translator import Translator
 from ask_llm.utils.chunk_balance import rebalance_translation_chunks
 from ask_llm.utils.token_counter import TokenCounter
@@ -70,7 +70,7 @@ def plan_notebook_translation(
         with open(input_path, encoding="utf-8") as f:
             notebook = nbformat.read(f, as_version=4)
 
-    tasks_data: list[tuple[int, str]] = []
+    tasks_data: list[tuple[int, str, int, int]] = []
     prompt_overhead = TokenCounter.count_tokens(prompt_template, model)
     for i, cell in enumerate(notebook.cells):
         if not _is_markdown_cell(cell):
@@ -84,8 +84,17 @@ def plan_notebook_translation(
         raw_chunks = _split_markdown_cell_tokens(
             original_text, model, max_chunk_tokens, prompt_overhead
         )
+        # Real spans (locate_pieces) so the per-cell reassembly can restore the
+        # original inter-chunk separators instead of forcing blank lines.
+        located = locate_pieces(original_text, raw_chunks)
         tmp_chunks = [
-            TextChunk(content=s, chunk_id=j, start_pos=0, end_pos=len(s), metadata={})
+            TextChunk(
+                content=s,
+                chunk_id=j,
+                start_pos=located[j][0],
+                end_pos=located[j][0] + located[j][1],
+                metadata={},
+            )
             for j, s in enumerate(raw_chunks)
         ]
         balanced = rebalance_translation_chunks(
@@ -96,7 +105,7 @@ def plan_notebook_translation(
             prompt_overhead=prompt_overhead,
         )
         for part in balanced:
-            tasks_data.append((i, part.content))
+            tasks_data.append((i, part.content, part.start_pos, part.end_pos))
     return tasks_data
 
 
@@ -111,11 +120,9 @@ class NotebookTranslator:
         self,
         translator: Translator,
         model_config: ModelConfig,
-        fallback_configs: list[ModelConfig] | None = None,
     ):
         self.translator = translator
         self.model_config = model_config
-        self.fallback_configs = fallback_configs or []
         self.last_results: list[BatchResult] = []
 
     def translate_notebook(
@@ -186,14 +193,13 @@ class NotebookTranslator:
         # Create BatchTasks (template keeps {content}; processor merges once).
         # ``prompt_template`` was measured above for chunk sizing (D2).
         tasks: list[BatchTask] = []
-        for task_id, (_, chunk_content) in enumerate(tasks_data):
+        for task_id, (_, chunk_content, _, _) in enumerate(tasks_data):
             tasks.append(
                 BatchTask(
                     task_id=task_id,
                     prompt=prompt_template,
                     content=chunk_content,
                     model_settings=self.model_config,
-                    fallback_model_configs=self.fallback_configs,
                 )
             )
 
@@ -230,10 +236,10 @@ class NotebookTranslator:
         if successful == 0 and failed > 0 and processor and processor.auth_error_logged:
             raise NotebookAuthError("API authentication failed; no translated output.")
 
-        # Build cell_index -> list of translated chunks (in order)
+        # Build cell_index -> list of (translated, span) in order
         result_map = {r.task_id: r for r in results}
-        cell_translations: dict[int, list[str]] = {}
-        for task_id, (cell_idx, _) in enumerate(tasks_data):
+        cell_translations: dict[int, list[tuple[str, tuple[int, int]]]] = {}
+        for task_id, (cell_idx, _, chunk_start, chunk_end) in enumerate(tasks_data):
             result = result_map.get(task_id)
             if result and result.response and result.status == TaskStatus.SUCCESS:
                 translated = result.response.strip()
@@ -241,17 +247,24 @@ class NotebookTranslator:
                 translated = tasks_data[task_id][1]
                 logger.warning(f"Translation failed for cell {cell_idx} chunk, keeping original")
 
-            if cell_idx not in cell_translations:
-                cell_translations[cell_idx] = []
-            cell_translations[cell_idx].append(translated)
+            cell_translations.setdefault(cell_idx, []).append(
+                (translated, (chunk_start, chunk_end))
+            )
 
         # Merge chunks per cell and update notebook in place: mutating the
         # existing cell preserves attachments (embedded images) and the cell
         # ``id`` required by nbformat >= 4.5 — rebuilding the node from a
-        # 3-key dict silently dropped both.
-        for cell_idx, translated_chunks in cell_translations.items():
-            merged_text = "\n\n".join(translated_chunks)
-            notebook.cells[cell_idx].source = merged_text
+        # 3-key dict silently dropped both. The position-aware joiner restores
+        # the cell's original inter-chunk separators; ``"\n\n"`` is the
+        # fallback when spans are unusable.
+        for cell_idx, translated_items in cell_translations.items():
+            cell_source = notebook.cells[cell_idx].source
+            if isinstance(cell_source, list):
+                cell_source = "".join(cell_source)
+            parts = [t for t, _ in translated_items]
+            spans = [s for _, s in translated_items]
+            joined = join_chunks_position_aware(parts, spans, cell_source)
+            notebook.cells[cell_idx].source = joined if joined is not None else "\n\n".join(parts)
         translated_cells = notebook.cells
 
         # Create output notebook

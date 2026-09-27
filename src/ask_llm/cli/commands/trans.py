@@ -224,13 +224,6 @@ def trans(
             help="Estimate chunks, tokens and cost without any API call",
         ),
     ] = False,
-    fallback: Annotated[
-        bool,
-        typer.Option(
-            "--fallback/--no-fallback",
-            help="Enable fallback to alternate providers/models on failure",
-        ),
-    ] = True,
     report: Annotated[
         str | None,
         typer.Option(
@@ -342,7 +335,6 @@ def trans(
                 recursive_dir=trans_cfg.recursive_dir,
                 prompt_file=prompt_file,
                 resume=resume,
-                use_fallback=fallback,
             )
 
             service = TranslationService(

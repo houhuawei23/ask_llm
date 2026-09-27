@@ -16,7 +16,7 @@ A modern command-line tool for calling multiple LLM APIs (DeepSeek, Qwen, etc.) 
 - 🔌 **Multiple Providers** - Support for DeepSeek, Kimi, Ollama (local), and OpenAI-compatible APIs
 - 📦 **Batch Processing** - Process multiple tasks concurrently with multi-threading
 - 🔄 **Checkpoint / Resume** - Resume interrupted batch, translation, and paper runs
-- 🛡️ **Provider Fallback** - Automatic fallback to alternate providers/models on failure
+- 🛡️ **Paid-run protection** - dry-run cost estimates, resume checkpoints, and terminal-error aware retries (no burned budget on auth/content errors)
 - 📈 **Observability** - Structured execution reports and `ask-llm diagnose` for failure analysis
 - ⚡ **Performance Tuning** - Optional non-streaming API calls, tiktoken encoding cache, global per-provider rate limiter, and a shared provider adapter cache
 

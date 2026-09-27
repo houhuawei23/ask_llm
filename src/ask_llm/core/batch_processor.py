@@ -28,10 +28,7 @@ from ask_llm.core.constants import (
     OUTPUT_TOKEN_MULTIPLIERS,
     TaskKind,
 )
-from ask_llm.core.error_keywords import (
-    classify_error_message,
-    should_fallback_for_error,
-)
+from ask_llm.core.error_keywords import classify_error_message
 from ask_llm.core.progress_presenter import NullProgressPresenter, ProgressPresenter
 from ask_llm.core.protocols import LLMProviderProtocol
 from ask_llm.core.provider_manager import build_provider_cache
@@ -169,31 +166,23 @@ class GlobalBatchProcessor:
         input_tokens: int | None = None,
         attempt_history_by_task: dict[int, list[AttemptRecord]] | None = None,
     ) -> BatchResult:
-        """Process one escalation step of a task: attempt exactly ONE config.
+        """Attempt exactly one provider/model execution of a task.
 
-        Shared-budget escalation (ARCHITECTURE_REVIEW.md B1 / P1.1): the
-        fallback chain and the retry budget are a *single* escalation of at most
-        ``max_retries + 1`` attempts. Attempt ``retry_count`` uses
-        ``configs[min(retry_count, len(configs) - 1)]`` — a transient failure
-        advances to the next config (or re-tries the last one when the chain is
-        shorter than the budget); a terminal failure (auth, content policy, …)
-        stops at once. The :class:`BoundedRetryRunner` drives ``retry_count`` and
-        the backoff heap; the worker itself never re-walks the chain, so the
-        number of API calls per task is bounded by the retry budget instead of
-        multiplying by the chain length.
+        Retry semantics live entirely in the :class:`BoundedRetryRunner`: it
+        drives ``retry_count`` and the backoff heap, and consults
+        ``is_retryable_error`` on the failure message so terminal errors
+        (auth, content policy, billing, ...) are never retried. The worker
+        itself is stateless between calls.
 
-        ``attempt_history_by_task`` threads the flat attempt records across runner
-        retries (the worker is stateless between calls). May be ``None`` for an
-        isolated single-step call.
+        ``attempt_history_by_task`` threads the flat attempt records across
+        runner retries. May be ``None`` for an isolated call.
 
         Returns:
-            Batch result for this step (success, transient failure, or terminal
-            failure with ``retry_count`` saturated to ``max_retries``).
+            Batch result for this attempt (success or failure).
         """
         if not task.model_settings:
             raise ValueError("Task must have model_settings for global batch processing")
 
-        configs = [task.model_settings, *task.fallback_model_configs]
         # Flat attempt records (not BatchResults) — keeps the object graph acyclic
         # by construction, so no manual cycle-guard slicing is needed. See B7.
         history: list[AttemptRecord] = (
@@ -202,10 +191,9 @@ class GlobalBatchProcessor:
             else []
         )
 
-        model_config = configs[min(retry_count, len(configs) - 1)]
         result = self._task_executor.try_run_with_config(
             task,
-            model_config,
+            task.model_settings,
             provider_cache,
             retry_count,
             progress,
@@ -217,18 +205,6 @@ class GlobalBatchProcessor:
         # History holds the *preceding* attempts; the current step's own record
         # (always the last element) is excluded from the result's attempt_history.
         result.attempt_history = history[:-1]
-
-        if result.status == TaskStatus.SUCCESS:
-            return result
-
-        # Terminal error: a different provider/model won't help. Stop escalating
-        # by saturating retry_count so the runner declines to schedule again.
-        if result.error_category and not should_fallback_for_error(result.error_category):
-            bind_context(LogContext(task_id=task.task_id, phase="global_batch")).warning(
-                f"Stopping escalation at attempt {retry_count + 1}: "
-                f"terminal error category '{result.error_category.value}'"
-            )
-            result.retry_count = self.max_retries
         return result
 
     def process_global_tasks(
@@ -380,6 +356,10 @@ class GlobalBatchProcessor:
                 retry_delay=self.retry_delay,
                 retry_delay_max=self.retry_delay_max,
                 stop_event=stop_event,
+                # Single SIGINT owner: the outer handler installed above (main
+                # thread) signals ``stop_event``; the runner must not install
+                # its own handler or a second Ctrl-C would need three presses.
+                install_sigint_handler=False,
             )
 
             def _worker(task: BatchTask, retry_count: int) -> BatchResult:
@@ -421,9 +401,9 @@ class GlobalBatchProcessor:
 
         try:
             if len(lanes) == 1:
-                # Single lane: run inline (no extra thread, SIGINT via the
-                # runner's own main-thread handler is irrelevant — the shared
-                # stop_event path above already covers it).
+                # Single lane: run inline on the calling (main) thread — the
+                # shared stop_event above is the only stop channel (the runner
+                # installs no SIGINT handler of its own).
                 _workers, only_tasks = next(iter(lanes.values()))
                 _run_lane(only_tasks, _workers)
             else:

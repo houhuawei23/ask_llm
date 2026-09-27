@@ -81,16 +81,6 @@ class ChatHistory(BaseModel):
         }
 
 
-class FallbackConfig(BaseModel):
-    """Fallback provider/model configuration."""
-
-    provider: str = Field(..., description="Fallback provider name")
-    model: str = Field(..., description="Fallback model name")
-    temperature: float | None = Field(default=None, ge=0.0, le=2.0)
-    top_p: float | None = Field(default=None, ge=0.0, le=1.0)
-    max_tokens: int | None = Field(default=None, gt=0)
-
-
 class ProviderConfig(BaseModel):
     """Configuration for an LLM provider."""
 
@@ -107,9 +97,6 @@ class ProviderConfig(BaseModel):
     )
     max_tokens: int | None = Field(default=None, gt=0, description="Maximum tokens to generate")
     timeout: float = Field(default=60.0, gt=0, description="API timeout in seconds")
-    fallback_to: list[FallbackConfig] = Field(
-        default_factory=list, description="Ordered fallback provider/model chain"
-    )
 
     @field_validator("api_key")
     @classmethod

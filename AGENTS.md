@@ -40,7 +40,7 @@ ask_llm/
 │   │   ├── batch_checkpoint.py        # Concrete checkpoint for batch/translation tasks
 │   │   ├── telemetry.py               # LogContext, bind_context (error classification lives in error_keywords)
 │   │   ├── execution_report.py        # Structured execution reports (AttemptRecord projection)
-│   │   ├── error_keywords.py          # Single authority: (keyword -> category, transient, fallback) rule table
+│   │   ├── error_keywords.py          # Single authority: (keyword -> category, transient) rule table
 │   │   ├── response_parser.py         # unwrap_translation_payload (JSON / LaTeX-escape repair)
 │   │   ├── translator.py              # Translation prompt assembly
 │   │   ├── text_splitter.py           # TextChunk + detect_file_type (single split algorithm: BinarySplitter)
@@ -76,7 +76,6 @@ ask_llm/
 │   └── utils/              # Utility modules
 │       ├── engine_facade.py            # SINGLE llm_engine import point (create_engine_adapter, EngineConfigView)
 │       ├── provider_cache.py           # ProviderAdapterCache (process-wide LRU)
-│       ├── fallback_chain.py           # build_fallback_chain + model_config_with_fallback (P4.6b)
 │       ├── model_limits.py             # DeepSeek max_tokens caps + ModelLimits (renamed from provider_specs, P4.6b)
 │       ├── api_key_gate.py             # Pure key checks + UnresolvedAPIKeyError (interactive gate lives in cli_session)
 │       ├── rate_limiter.py             # GlobalRateLimiter (per-(provider,model) token bucket)
@@ -326,8 +325,13 @@ manager.apply_overrides(model="gpt-4", temperature=0.5)
 CLI commands are thin adapters. Heavy workflows (ask, batch, format, translation, paper explain)
 are orchestrated by modules under `ask_llm.services.*`, which receive a prepared
 `ConfigManager` / `RequestProcessor` and return structured results for the CLI to print/export.
-Services must not call `typer.Exit`; they raise `ValueError`, `FileNotFoundError`, or
-`RuntimeError` and let the CLI convert to user-facing messages and exit codes.
+
+**Convention (v2.26 decision): services MAY print progress and summaries via
+`ask_llm.utils.console`** — this is a CLI application, not a library. The hard rules that
+remain: services must not import `typer`/`click`, must not call `typer.Exit`, and must
+return a structured result the CLI translates into an exit code. Services raise
+`ValueError`, `FileNotFoundError`, or `RuntimeError` and let the CLI convert to
+user-facing messages and exit codes.
 
 ```python
 from ask_llm.config.cli_session import (

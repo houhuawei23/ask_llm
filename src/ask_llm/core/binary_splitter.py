@@ -371,10 +371,18 @@ class BinarySplitter:
             # symmetric full-length case recursing on the whole left half).
             # Fall back to a character-offset split: both halves are strictly
             # smaller, so recursion terminates. Prefer a whitespace boundary
-            # near the midpoint so chunks don't start/end mid-word.
+            # near the midpoint so chunks don't start/end mid-word, and never
+            # inside a fenced code block or the frontmatter (fence-parity merges
+            # produce synthetic paragraphs whose find-miss previously landed
+            # the cut mid-fence).
             mid = max(1, len(text) // 2)
             lo, hi = max(1, mid - 200), min(len(text), mid + 200)
-            candidates = [i for i in range(lo, hi) if text[i].isspace()]
+            structure = MarkdownStructure.parse(text)
+            candidates = [
+                i
+                for i in range(lo, hi)
+                if text[i].isspace() and not structure.is_protected(i)
+            ]
             split_text_pos = min(candidates, key=lambda i: abs(i - mid)) if candidates else mid
             logger.debug("Paragraph find-miss; falling back to character-offset split.")
 

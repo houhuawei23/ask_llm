@@ -16,6 +16,7 @@ from ask_llm.core.format_checkpoint import (
     FailedChunkInfo,
     FormatCheckpoint,
     SuccessfulChunkInfo,
+    verify_source_integrity,
 )
 from ask_llm.core.markdown_structure import (
     MarkdownStructure,
@@ -455,6 +456,9 @@ class HeadingFormatter(ChunkedLLMJob):
             HeadingFormatResult with complete formatted headings
         """
         checkpoint = FormatCheckpoint.load(checkpoint_path)
+        # Gate every resume entry point (not just FormatService): a source
+        # file changed after the checkpoint was written must never be spliced.
+        verify_source_integrity(checkpoint)
         formatter = cls(processor=processor, prompt_template=checkpoint.prompt_template)
 
         stats = HeadingFormatStats()

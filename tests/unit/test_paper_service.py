@@ -74,7 +74,6 @@ def _options() -> PaperExplainOptions:
         dry_run=False,
         resume=False,
         pipeline_path=None,
-        use_fallback=False,
         retries=1,
     )
 

@@ -146,7 +146,7 @@ def format_one_markdown_file(
     file_path: str,
     *,
     processor: RequestProcessor,
-    model: str = "",
+    model: str,
     prompt_file_resolved: str,
     heading_batch_size: int | None,
     heading_concurrency: int | None,

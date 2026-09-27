@@ -53,7 +53,7 @@ class BatchCheckpoint(BaseCheckpoint[BatchTask, BatchResult]):
     def result_to_task(self, result: BatchResult) -> BatchTask:
         # Audit-only projection (see BaseCheckpoint.failed_tasks): resume does
         # NOT read it (resume filters by completed_task_ids against the
-        # current task list). BatchResult does not carry the fallback chain or
+        # current task list). BatchResult does not carry the prompt/content of
         # task_kind, so the record reflects the final attempted config with
         # BatchTask defaults for the rest — good enough for diagnostics, and
         # no consumer can mistake it for a re-runnable task.
