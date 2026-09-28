@@ -7,10 +7,8 @@ from loguru import logger
 from ask_llm.core.binary_splitter import BinarySplitter, TokenBudget, locate_pieces
 from ask_llm.core.text_splitter import TextChunk
 
-_Meta = dict
 
-
-def _merge_meta(a: _Meta, b: _Meta) -> _Meta:
+def _merge_meta(a: dict, b: dict) -> dict:
     """Union of two chunk metadata dicts preserving BOTH sides (audit 4.3).
 
     ``{**a, **b}`` let the right side silently overwrite shared keys — merging
@@ -56,11 +54,11 @@ def _split_by_token_budget(
 
 
 def _merge_adjacent_greedy(
-    items: list[tuple[str, _Meta, int, int]],
+    items: list[tuple[str, dict, int, int]],
     model: str,
     max_tokens: int,
     prompt_overhead: int = 0,
-) -> list[tuple[str, _Meta, int, int]]:
+) -> list[tuple[str, dict, int, int]]:
     """Merge adjacent translation bodies left-to-right while the combined body fits the budget.
 
     Chunks are merged as raw markdown/text only; the translation prompt is applied later per
@@ -75,7 +73,7 @@ def _merge_adjacent_greedy(
     if not items:
         return []
     budget = TokenBudget(model=model, max_tokens=max_tokens, prompt_overhead=prompt_overhead)
-    merged: list[tuple[str, _Meta, int, int]] = []
+    merged: list[tuple[str, dict, int, int]] = []
     buf_s, buf_m, buf_start, buf_end = items[0]
     sep = "\n\n"
     for nxt_s, nxt_m, nxt_start, nxt_end in items[1:]:
@@ -144,7 +142,7 @@ def rebalance_translation_chunks(
     if not enabled or not chunks:
         return chunks
 
-    pieces: list[tuple[str, _Meta, int, int]] = []
+    pieces: list[tuple[str, dict, int, int]] = []
     for c in sorted(chunks, key=lambda x: x.chunk_id):
         base_meta = dict(c.metadata)
         parts = _split_by_token_budget(c.content, model, max_chunk_tokens, prompt_overhead)

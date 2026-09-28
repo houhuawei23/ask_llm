@@ -55,8 +55,9 @@ class TestResolveEnvVars:
         monkeypatch.setenv("MY_EMPTY", "")
 
         assert resolve_env_vars("${MY_MISSING}") == "${MY_MISSING}"
-        # An empty-but-set value is falsy, so the placeholder survives too.
-        assert resolve_env_vars("${MY_EMPTY}") == "${MY_EMPTY}"
+        # An explicitly empty value ("VAR=''") is a deliberate "set to empty"
+        # and resolves; only an UNSET variable keeps the placeholder.
+        assert resolve_env_vars("${MY_EMPTY}") == ""
         # Nested value in a structure: unresolved reference stays literal.
         assert resolve_env_vars({"k": ["${MY_MISSING}"]}) == {"k": ["${MY_MISSING}"]}
 

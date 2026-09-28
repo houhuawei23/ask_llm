@@ -167,8 +167,11 @@ def resolve_env_vars(value: Any) -> Any:
 
         if matches:
             for var_name in matches:
+                # ``is not None`` (not truthiness): an explicitly empty value
+                # (``VAR=""``) is a deliberate "set to empty" and resolves,
+                # while an unset var keeps the placeholder (and warns below).
                 env_value = os.getenv(var_name)
-                if env_value:
+                if env_value is not None:
                     value = value.replace(f"${{{var_name}}}", env_value)
                 else:
                     if var_name not in _WARNED_UNSET_ENV_VARS:

@@ -113,17 +113,21 @@ class ProviderConfig(BaseModel):
         """
         provider_name = info.data.get("api_provider", "unknown")
         key = v.get_secret_value()
+        # Conventional env var (must match api_key_gate.provider_env_var_name):
+        # deepseek -> DEEPSEEK_API_KEY. Inlined to keep core.models free of a
+        # utils import.
+        env_var = f"{provider_name.upper().replace('-', '_')}_API_KEY"
         if "${" in key and "}" in key:
             logger.warning(
                 f"Provider '{provider_name}' API key has unresolved ${{...}} "
-                f"placeholder. Set ASK_LLM_{provider_name.upper()}_API_KEY "
+                f"placeholder. Set {env_var} "
                 f"(or the referenced variable) before running; the API-key gate "
                 f"will block calls until it resolves."
             )
         elif not key.strip():
             logger.warning(
                 f"Provider '{provider_name}' has empty API key. "
-                f"Set ASK_LLM_{provider_name.upper()}_API_KEY environment variable "
+                f"Set {env_var} environment variable "
                 f"or configure in default_config.yml"
             )
         return v

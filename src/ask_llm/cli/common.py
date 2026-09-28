@@ -139,7 +139,7 @@ def paid_command_prelude(
     *,
     provider: str | None,
     model: str | None,
-    temperature: float | Callable[[LoadResult], float],
+    temperature: float | None | Callable[[LoadResult], float | None],
     pricing_path: str | Path | None = None,
     skip_api_key_check: bool = False,
 ) -> CommandPrelude:
@@ -154,9 +154,10 @@ def paid_command_prelude(
         config_path: Optional explicit default_config.yml path.
         provider: CLI --provider override (None = config default).
         model: CLI --model override (None = config default).
-        temperature: Effective temperature, either a plain float (CLI flag)
-            or a callable evaluated on the loaded config for the command's
-            own section default (e.g. ``lambda lr: lr.unified_config.paper.temperature``).
+        temperature: Effective temperature — a plain float (CLI flag), None
+            (command has no temperature), or a callable evaluated on the loaded
+            config for the command's own section default (e.g.
+            ``lambda lr: lr.unified_config.paper.temperature``).
         pricing_path: Optional explicit providers.yml pricing path.
         skip_api_key_check: Forwarded to the gate (``--dry-run`` passes True).
     """

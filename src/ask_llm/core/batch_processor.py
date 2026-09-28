@@ -113,16 +113,6 @@ class GlobalBatchProcessor:
         # a batch-wide authentication failure across parallel workers.
         return self._task_executor.auth_error_logged
 
-    def _effective_max_workers(self, tasks: list[BatchTask]) -> int:
-        """Total worker slots across all (provider, model) lanes (audit 3.3).
-
-        Sum of the per-lane caps — each lane is bounded by its own burst limit
-        instead of every lane inheriting the tightest burst in the batch.
-        Retained as a summary for callers/tests; scheduling uses
-        :meth:`_build_lanes`.
-        """
-        return sum(workers for workers, _ in self._build_lanes(tasks).values()) or self.max_workers
-
     def _build_lanes(self, tasks: list[BatchTask]) -> dict[str, tuple[int, list[BatchTask]]]:
         """Partition tasks into per-(provider, model) lanes (audit 3.3 / M6).
 

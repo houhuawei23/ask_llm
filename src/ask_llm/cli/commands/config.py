@@ -189,14 +189,14 @@ def config(
             # Per-key provenance: which layer supplied each final value.
             if load_result.provenance:
                 by_source: dict[str, list[str]] = {}
-                for key_path, source in load_result.provenance.items():
-                    by_source.setdefault(source, []).append(key_path)
+                for prov_key, source in load_result.provenance.items():
+                    by_source.setdefault(source, []).append(prov_key)
                 console.print("  Value sources (per key, raw config-file naming):")
                 for source in sorted(by_source):
                     keys = sorted(by_source[source])
                     console.print(f"    {source} ({len(keys)} keys):")
-                    for key_path in keys:
-                        console.print(f"      {key_path}")
+                    for prov_key in keys:
+                        console.print(f"      {prov_key}")
             console.print("")
 
         if action == "show":

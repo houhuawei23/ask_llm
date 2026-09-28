@@ -7,10 +7,8 @@ from typing import Any
 
 from loguru import logger
 from rich.console import Console as RichConsole
-from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
-from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
 
@@ -74,7 +72,6 @@ class Console:
         """
         self._quiet = quiet
         self._debug = debug
-        self._log_format = log_format
 
         if not append:
             logger.remove()
@@ -194,20 +191,6 @@ class Console:
             return
         logger.info(message)
 
-    def print_markdown(self, text: str) -> None:
-        """Print markdown formatted text."""
-        if self._quiet:
-            return
-        md = Markdown(text)
-        self._console.print(md)
-
-    def print_code(self, code: str, language: str = "python", theme: str = "monokai") -> None:
-        """Print syntax-highlighted code."""
-        if self._quiet:
-            return
-        syntax = Syntax(code, language, theme=theme, line_numbers=True)
-        self._console.print(syntax)
-
     def print_table(
         self, headers: list[str], rows: list[list[Any]], title: str | None = None
     ) -> None:
@@ -246,15 +229,6 @@ class Console:
         # and ensure compatibility with all Rich versions
         sys.stdout.write(str(text) + end)
         sys.stdout.flush()
-
-    def clear_line(self) -> None:
-        """Clear current line."""
-        sys.stdout.write("\r\033[K")
-        sys.stdout.flush()
-
-    def clear_screen(self) -> None:
-        """Clear screen."""
-        self._console.clear()
 
     def progress(self, description: str = "Working...", transient: bool = False) -> Progress:
         """

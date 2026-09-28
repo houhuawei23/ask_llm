@@ -49,11 +49,6 @@ class TranslationExporter:
         # Create mapping from chunk_id to result
         self.result_map = {result.task_id: result for result in results}
 
-    @staticmethod
-    def _unwrap_translation_payload(text: str) -> str:
-        """Unwrap JSON-wrapped translation payloads (delegates to response_parser)."""
-        return unwrap_translation_payload(text)
-
     def export(self, output_path: str, format_type: str | None = None) -> str:
         """
         Export translation results to file.
@@ -122,7 +117,7 @@ class TranslationExporter:
         for chunk in sorted_chunks:
             result = self.result_map.get(chunk.chunk_id)
             if result and result.response:
-                translated_text = self._unwrap_translation_payload(result.response).strip()
+                translated_text = unwrap_translation_payload(result.response).strip()
                 if self.include_original:
                     content_parts.append(f"{chunk.content}\n---\n{translated_text}\n")
                 else:
@@ -157,27 +152,9 @@ class TranslationExporter:
         for chunk in sorted_chunks:
             result = self.result_map.get(chunk.chunk_id)
             if result and result.response:
-                translated_text = self._unwrap_translation_payload(result.response).strip()
+                translated_text = unwrap_translation_payload(result.response).strip()
 
-                # If chunk has heading metadata, preserve it
-                if "heading_level" in chunk.metadata:
-                    level = chunk.metadata["heading_level"]
-                    heading_prefix = "#" * level + " "
-                    # Extract heading from translated text if present
-                    # Otherwise use original heading title
-                    heading_title = chunk.metadata.get("heading_title", "")
-                    # Try to find heading in translated text
-                    lines = translated_text.split("\n")
-                    if lines and lines[0].startswith("#"):
-                        # Heading already in translated text
-                        content_parts.append(translated_text)
-                    else:
-                        # Add heading if we have title
-                        if heading_title:
-                            content_parts.append(f"{heading_prefix}{heading_title}\n")
-                        content_parts.append(translated_text)
-                else:
-                    content_parts.append(translated_text)
+                content_parts.append(translated_text)
 
                 if self.include_original:
                     content_parts.append(f"\n\n<!-- Original:\n{chunk.content}\n-->")

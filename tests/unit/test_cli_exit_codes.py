@@ -56,9 +56,7 @@ def _patch_format_bootstrap(monkeypatch):
     from ask_llm.cli.commands import format_cmd
 
     prelude = _make_prelude()
-    monkeypatch.setattr(
-        format_cmd, "paid_command_prelude", mock.MagicMock(return_value=prelude)
-    )
+    monkeypatch.setattr(format_cmd, "paid_command_prelude", mock.MagicMock(return_value=prelude))
     monkeypatch.setattr(format_cmd, "create_engine_adapter", mock.MagicMock())
     monkeypatch.setattr(format_cmd, "RequestProcessor", mock.MagicMock())
 
@@ -134,9 +132,7 @@ def _patch_format_run(monkeypatch):
     from ask_llm.cli.commands import format_cmd
 
     prelude = _make_prelude()
-    monkeypatch.setattr(
-        format_cmd, "paid_command_prelude", mock.MagicMock(return_value=prelude)
-    )
+    monkeypatch.setattr(format_cmd, "paid_command_prelude", mock.MagicMock(return_value=prelude))
     monkeypatch.setattr(format_cmd, "create_engine_adapter", mock.MagicMock())
     monkeypatch.setattr(format_cmd, "RequestProcessor", mock.MagicMock())
     return format_cmd

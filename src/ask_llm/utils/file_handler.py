@@ -251,16 +251,3 @@ class FileHandler:
 
         output_name = f"{stem}{suffix}{ext}"
         return str(input_file.parent / output_name)
-
-    @classmethod
-    def detect_type(cls, path: str | Path) -> str:
-        """
-        Detect file type based on extension.
-
-        Args:
-            path: File path
-
-        Returns:
-            File extension (lowercase)
-        """
-        return Path(path).suffix.lower()

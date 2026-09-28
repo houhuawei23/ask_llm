@@ -48,7 +48,7 @@ def plan_notebook_translation(
     max_chunk_tokens: int = 2400,
     balance_chunks: bool = True,
     notebook: NotebookNode | None = None,
-) -> list[tuple[int, str]]:
+) -> list[tuple[int, str, int, int]]:
     """Build the (cell_index, chunk_content) translation plan for a notebook.
 
     M10/2.25: extracted from ``NotebookTranslator.translate_notebook`` so the

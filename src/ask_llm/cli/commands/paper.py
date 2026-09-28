@@ -13,16 +13,6 @@ from ask_llm.core.constants import MAX_CONCURRENCY
 from ask_llm.services.paper_service import PaperExplainOptions, PaperService
 from ask_llm.utils.console import console
 
-try:
-    from ask_llm.utils import (
-        engine_facade as _engine_facade,  # noqa: F401 — fail fast if engine missing
-    )
-except ImportError:
-    console.print_error(
-        "llm_engine is required but not installed. Please install it with: pip install llm-engine"
-    )
-    raise
-
 
 def paper(
     input_path: Annotated[

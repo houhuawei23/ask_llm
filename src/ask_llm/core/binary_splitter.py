@@ -16,24 +16,13 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Protocol
 
 from loguru import logger
 
 from ask_llm.core.constants import APPROX_TOKEN_SAFETY_FACTOR
 from ask_llm.core.markdown_structure import MarkdownStructure
 from ask_llm.core.text_splitter import TextChunk
-from ask_llm.utils.token_counter import TokenCounter
-
-
-class BudgetPolicy(Protocol):
-    """Decides whether a text fits the budget and measures it."""
-
-    def fits(self, text: str) -> bool: ...
-
-    def count(self, text: str) -> int: ...
-
-    def hard_split(self, text: str) -> list[str]: ...
+from ask_llm.utils.token_counter import TokenCounter, split_hard_by_max_tokens
 
 
 @dataclass(frozen=True)
@@ -87,7 +76,7 @@ class TokenBudget:
         # Pass the raw cap; ``split_hard_by_max_tokens`` applies the safety
         # factor internally for approximate models, so the effective budget
         # matches ``content_max_tokens`` without double-applying it.
-        return TokenCounter.split_hard_by_max_tokens(text, self._raw_content_cap, self.model)
+        return split_hard_by_max_tokens(text, self._raw_content_cap, self.model)
 
 
 def create_markdown_splitter(
@@ -167,7 +156,7 @@ class BinarySplitter:
 
     Structure facts (fences, frontmatter, headings) come from a single
     :class:`MarkdownStructure` parse; the budget decision is delegated to the
-    injected :class:`BudgetPolicy`.
+    injected :class:`TokenBudget`.
     """
 
     # Audit 4.1: hard recursion cap for paragraph splitting. The find-based
@@ -176,7 +165,7 @@ class BinarySplitter:
     # line of defense degrading to a forced token split.
     _MAX_PARAGRAPH_DEPTH: int = 64
 
-    def __init__(self, budget: BudgetPolicy):
+    def __init__(self, budget: TokenBudget):
         self.budget = budget
 
     def split(self, text: str) -> list[TextChunk]:
@@ -379,9 +368,7 @@ class BinarySplitter:
             lo, hi = max(1, mid - 200), min(len(text), mid + 200)
             structure = MarkdownStructure.parse(text)
             candidates = [
-                i
-                for i in range(lo, hi)
-                if text[i].isspace() and not structure.is_protected(i)
+                i for i in range(lo, hi) if text[i].isspace() and not structure.is_protected(i)
             ]
             split_text_pos = min(candidates, key=lambda i: abs(i - mid)) if candidates else mid
             logger.debug("Paragraph find-miss; falling back to character-offset split.")

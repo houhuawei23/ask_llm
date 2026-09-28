@@ -8,18 +8,6 @@ from typing import Annotated
 import typer
 from loguru import logger
 
-try:
-    from ask_llm.utils import (
-        engine_facade as _engine_facade,  # noqa: F401 — fail fast if engine missing
-    )
-except ImportError:
-    from ask_llm.utils.console import console
-
-    console.print_error(
-        "llm_engine is required but not installed. Please install it with: pip install llm-engine"
-    )
-    raise
-
 from ask_llm.cli.common import paid_command_prelude
 from ask_llm.cli.errors import cli_errors
 from ask_llm.core.constants import MAX_CONCURRENCY

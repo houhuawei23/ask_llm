@@ -75,46 +75,6 @@ def test_tight_provider_lane_does_not_throttle_other_lanes():
     lanes = processor._build_lanes(tasks)
     assert lanes["deepseek:deepseek-chat"][0] == 3
     assert lanes["qwen:qwen-max"][0] == 20  # capped by user's max_workers, not qwen's burst
-    # Summary view: total slots across lanes.
-    assert processor._effective_max_workers(tasks) == 23
-
-
-def test_effective_max_workers_respects_user_max():
-    rate_config = RateLimitConfig(
-        qwen={"requests_per_minute": 300, "burst_size": 100},
-    )
-    processor = GlobalBatchProcessor(max_workers=5, rate_limit_config=rate_config)
-    tasks = [
-        BatchTask(
-            task_id=1,
-            prompt="p",
-            content="c",
-            model_settings=ModelConfig(provider="qwen", model="qwen-max"),
-        ),
-    ]
-    assert processor._effective_max_workers(tasks) == 5
-
-
-def test_effective_max_workers_at_least_one():
-    rate_config = RateLimitConfig(
-        deepseek={"requests_per_minute": 100, "burst_size": 1},
-    )
-    processor = GlobalBatchProcessor(max_workers=10, rate_limit_config=rate_config)
-    tasks = [
-        BatchTask(
-            task_id=1,
-            prompt="p",
-            content="c",
-            model_settings=ModelConfig(provider="deepseek", model="deepseek-chat"),
-        ),
-    ]
-    assert processor._effective_max_workers(tasks) == 1
-
-
-def test_effective_max_workers_without_model_config():
-    processor = GlobalBatchProcessor(max_workers=10)
-    tasks = [BatchTask(task_id=1, prompt="p", content="c")]
-    assert processor._effective_max_workers(tasks) == 10
 
 
 def test_acquire_timeout_defaults_to_60_without_config():

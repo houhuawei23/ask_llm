@@ -29,23 +29,23 @@ ask_llm/
 │   │   ├── processor.py               # RequestProcessor (prompt format + LLM call)
 │   │   ├── chat.py                    # Interactive chat session (from_initial_context bootstrap)
 │   │   ├── batch_models.py            # BatchTask, BatchResult, AttemptRecord, BatchStatistics, TaskStatus
-│   │   ├── batch_processor.py         # GlobalBatchProcessor (thin orchestrator: escalation + pool sizing)
+│   │   ├── batch_processor.py         # GlobalBatchProcessor (thin orchestrator: retry gating + lane pool sizing)
 │   │   ├── task_executor.py           # Single-config attempt: rate-limit + adapter + stream + metadata
 │   │   ├── stream_collector.py        # Streaming + token collection (pure)
 │   │   ├── progress_presenter.py      # Per-worker Rich progress bars
 │   │   ├── provider_manager.py        # Build provider adapter cache for a batch
 │   │   ├── command_runner.py          # run_with_checkpoint (shared checkpoint lifecycle for batch/trans)
-│   │   ├── concurrent.py              # BoundedRetryRunner (single-queue scheduler + retry heap + SIGINT)
+│   │   ├── concurrent.py              # BoundedRetryRunner (single-queue scheduler + retry heap + SIGINT; owns the retryable gate)
 │   │   ├── checkpoint.py              # Generic atomic checkpoint base (tmp + os.replace)
 │   │   ├── batch_checkpoint.py        # Concrete checkpoint for batch/translation tasks
 │   │   ├── telemetry.py               # LogContext, bind_context (error classification lives in error_keywords)
-│   │   ├── execution_report.py        # Structured execution reports (AttemptRecord projection)
+│   │   ├── execution_report.py        # Structured execution reports + shared export_execution_report (--report)
 │   │   ├── error_keywords.py          # Single authority: (keyword -> category, transient) rule table
 │   │   ├── response_parser.py         # unwrap_translation_payload (JSON / LaTeX-escape repair)
 │   │   ├── translator.py              # Translation prompt assembly
-│   │   ├── text_splitter.py           # TextChunk + detect_file_type (single split algorithm: BinarySplitter)
+│   │   ├── text_splitter.py           # TextChunk + detect_file_type + shared position-aware chunk joiner
 │   │   ├── markdown_structure.py      # Single-pass parser: fences, frontmatter, heading spans
-│   │   ├── binary_splitter.py         # Budget-pluggable splitter (TokenBudget: safety factor + prompt_overhead)
+│   │   ├── binary_splitter.py         # BinarySplitter + TokenBudget (safety factor, prompt_overhead, hard split)
 │   │   ├── chunked_llm_job.py         # Shared orchestration base for Heading/Body formatters
 │   │   ├── md_heading_formatter.py    # Heading format pipeline
 │   │   ├── md_body_formatter.py       # Body format pipeline (frontmatter carve + position-aware reassembly)
@@ -54,7 +54,7 @@ ask_llm/
 │   │   ├── paper_explain.py           # Paper explanation pipeline
 │   │   ├── paper_explain_pipeline.py  # Paper pipeline domain model + YAML loader (moved from config/ in P2.6)
 │   │   ├── protocols.py               # LLMProviderProtocol
-│   │   └── constants.py               # APPROX_TOKEN_SAFETY_FACTOR, TaskKind, defaults
+│   │   └── constants.py               # APPROX_TOKEN_SAFETY_FACTOR, TaskKind, MAX_CONCURRENCY, defaults
 │   ├── services/            # Use-case / orchestration services
 │   │   ├── ask_service.py              # Single-request incl. streaming iter_stream (0 typer, returns dataclass)
 │   │   ├── batch_service.py            # Batch orchestration (run_batch_from_config + BatchService print/export)
@@ -499,4 +499,5 @@ Providers are handled externally by `llm-api-engine`. Update configuration in `p
   2.21.0 bug fixes & consolidation with assistance from **ZCode** (agent) and **GLM-5.3** (model). \
   2.22.0 correctness & dead-code sweep with assistance from **ZCode** (agent) and **GLM-5.3** (model). \
   2.23.0 full-audit repair (3C+10H+~20M), test-chain backfill and repo hygiene with assistance from **Claude Code** (agent). \
-  2.24.0 six-phase deep audit (security, paid-work protection, retry/concurrency, parsing/cost/export, dry-run & config & chat enhancements) with assistance from **Claude Code** (agent).
+  2.24.0 six-phase deep audit (security, paid-work protection, retry/concurrency, parsing/cost/export, dry-run & config & chat enhancements) with assistance from **Claude Code** (agent). \
+  2.26.0 architecture-refactor execution (fallback stack deletion, 10 correctness fixes, four-pipeline unification, lossless translation rejoin, dead-code sweep) with assistance from **GLM-5.3-Flash** (agent, OpenCode).

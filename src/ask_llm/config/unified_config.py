@@ -294,6 +294,12 @@ class PaperConfig(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
+    temperature: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=2.0,
+        description="Sampling temperature for paper explain (null uses provider default)",
+    )
     default_run: str = Field(
         default="all",
         description="Default --run: sections, full, or all",
