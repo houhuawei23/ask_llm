@@ -31,7 +31,7 @@ dependencies = [
     "loguru>=0.7.0",
     "pydantic>=2.0.0",
     "pyyaml>=6.0.0",
-    "litellm>=1.63.0,<2.0.0",   # LLM adapter backend（替代 llm-api-engine）；reasoning_content 自 1.63.0 标准化；实测 1.82.6
+    "litellm>=1.63.0,<2.0.0",   # LLM adapter backend（替代 llm-api-engine）；reasoning_content 自 1.63.0 标准化；实测 1.82.6 与 1.103.0
     "nbformat>=5.0.0",          # Jupyter notebook support for trans .ipynb
 ]
 

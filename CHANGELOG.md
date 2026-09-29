@@ -50,6 +50,11 @@ litellm（`>=1.63.0,<2.0.0`）+ 自研适配器 `ask_llm.core.provider_adapter` 
 - 新增 `tests/unit/test_provider_adapter.py`（模型串映射、参数组装、reasoning
   流/非流提取、usage、门控真值表、错误片段、懒加载、per-call client 生命周期等
   ~70 例）；`test_engine_facade.py` 重写（清除对 `llm_engine.config_loader` 的活引用）。
+- **litellm 1.103.0 兼容性实测通过**（隔离 venv + 主环境双验）：异常层级
+  （`lit.openai.APIError`、伪 key 仍为 BadRequestError——与 1.82.6 一致）、
+  `llms.custom_httpx.HTTPHandler` 内部路径、`client=` 透传、reasoning_content 流式、
+  真实 usage、7 并发冷启动（1.103 共享客户端本身已不复现该竞态，per-call client
+  保留作为跨版本防护）。全量 794 测试通过，CLI 启动 0.22s 不受影响。
 
 ## 2.25.0 (2026-09-23)
 
