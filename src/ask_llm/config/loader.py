@@ -256,7 +256,7 @@ class ConfigLoader:
 
             base_url = provider_config.get("base_url", "")
             if not base_url:
-                # Engine catalog fallback (via the engine facade seam, P4.6).
+                # providers.yml catalog fallback (via the engine facade seam, P4.6).
                 providers_config = load_engine_providers_config()
                 if name in providers_config.get("providers", {}):
                     base_url = providers_config["providers"][name].get("base_url", "")
@@ -264,7 +264,7 @@ class ConfigLoader:
             if not base_url:
                 raise ValueError(
                     f"Provider '{name}' has no base_url configured and it cannot be resolved "
-                    f"from llm_engine. Please set base_url for provider '{name}' in your config."
+                    f"from providers.yml. Please set base_url for provider '{name}' in your config."
                 )
 
             converted_config = {

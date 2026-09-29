@@ -254,7 +254,7 @@ class FormatBodyConfig(BaseModel):
         ge=256,
         le=128000,
         description="Completion max_tokens per body chunk API call. Must cover reasoning "
-        "models whose reasoning_tokens count against max_tokens; the llm_engine "
+        "models whose reasoning_tokens count against max_tokens; the previous engine's "
         "default of 2000 truncates reasoning_content and yields empty output.",
     )
     concurrency: int = Field(

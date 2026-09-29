@@ -108,7 +108,7 @@ def chat(
 
         provider_config = config_manager.get_provider_config()
 
-        # Initialize provider using llm_engine factory
+        # Initialize the litellm-backed provider adapter (via the facade seam)
         llm_provider = create_engine_adapter(provider_config, default_model=final_model)
 
         # Load initial context

@@ -2,6 +2,7 @@
 
 import time
 from collections.abc import Iterator
+from typing import Any
 
 from loguru import logger
 
@@ -58,7 +59,10 @@ def _iter_provider_response(
     if isinstance(gen, (str, ReasoningChunk)):
         yield gen
         return
-    for item in gen:
+    # Item type is Any on purpose: adapters declare the typed shapes above but
+    # tolerate plain 2-tuples at runtime (see normalization below).
+    items: Iterator[Any] = gen
+    for item in items:
         if isinstance(item, tuple) and len(item) == 2:
             yield ReasoningChunk(content=item[0], reasoning=item[1])
         else:
@@ -238,8 +242,10 @@ class RequestProcessor:
             )
         )
         reasoning: str | None = None
+        usage = None
         if isinstance(raw, ReasoningChunk):
             response, reasoning = raw.content, raw.reasoning
+            usage = raw.usage
         else:
             response = raw if isinstance(raw, str) else str(raw)
 
@@ -253,6 +259,14 @@ class RequestProcessor:
 
         resolved_model = model or self.provider.default_model
 
+        # Prefer provider-reported accounting when the API returned a usage
+        # block; fall back to the local estimates otherwise.
+        input_stats = dict(input_stats)
+        output_tokens = output_stats["token_count"]
+        if usage is not None:
+            input_stats["token_count"] = usage.input_tokens
+            output_tokens = usage.output_tokens
+
         # Create metadata
         metadata = RequestMetadata.from_execution(
             provider_name=self.provider.name,
@@ -261,7 +275,7 @@ class RequestProcessor:
             default_temperature=self.provider.config.api_temperature,
             input_stats=input_stats,
             output_words=output_stats["word_count"],
-            output_tokens=output_stats["token_count"],
+            output_tokens=output_tokens,
             latency=latency,
         )
 

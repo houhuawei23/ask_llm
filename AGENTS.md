@@ -10,7 +10,7 @@
 - **Pydantic** - Data validation and serialization
 - **Rich** - Beautiful console output
 - **Loguru** - Powerful logging
-- **llm-api-engine** - External LLM engine dependency
+- **litellm** - LLM adapter backend (first-party adapter in `core/provider_adapter.py`)
 
 ## Project Structure
 
@@ -74,7 +74,7 @@ ask_llm/
 │   │   ├── manager.py                  # ConfigManager (provider/model overrides)
 │   │   └── cli_session.py              # CLI bootstrap (resolve_and_prepare, gate_api_key_or_exit, bootstrap_command)
 │   └── utils/              # Utility modules
-│       ├── engine_facade.py            # SINGLE llm_engine import point (create_engine_adapter, EngineConfigView)
+│       ├── engine_facade.py            # facade over the litellm-backed adapter (create_engine_adapter, load_engine_providers_config)
 │       ├── provider_cache.py           # ProviderAdapterCache (process-wide LRU)
 │       ├── model_limits.py             # DeepSeek max_tokens caps + ModelLimits (renamed from provider_specs, P4.6b)
 │       ├── api_key_gate.py             # Pure key checks + UnresolvedAPIKeyError (interactive gate lives in cli_session)
@@ -238,8 +238,7 @@ pre-commit run --all-files
 | rich | Console output | >=13.0.0 |
 | pydantic | Data validation | >=2.0.0 |
 | loguru | Logging | >=0.7.0 |
-| openai | OpenAI API client | >=1.0.0 |
-| llm-api-engine | External LLM engine | >=0.1.2 |
+| litellm | LLM adapter backend | >=1.63.0,<2.0.0 |
 | tiktoken | Token counting | >=0.5.0 |
 | tqdm | Progress bars | >=4.65.0 |
 | pyyaml | YAML support | >=6.0.0 |
@@ -297,13 +296,14 @@ ask-llm format doc.md --type body --resume doc.md.body_checkpoint.json
 
 ### Provider Pattern
 
-The project uses `llm-api-engine` as the LLM provider abstraction:
+Provider adapters are built by the facade over the first-party litellm-backed
+adapter (`core/provider_adapter.py`):
 
 ```python
-from llm_engine import create_provider_adapter
+from ask_llm.utils.engine_facade import create_engine_adapter
 
-provider = create_provider_adapter(provider_config, default_model="gpt-4")
-response = provider.call(messages=[...])
+provider = create_engine_adapter(provider_config, default_model="gpt-4")
+response = provider.call(messages=[...])  # flat str / ReasoningChunk / stream
 ```
 
 ### Config Management
@@ -476,7 +476,9 @@ adapter = ProviderAdapterCache.get(provider_config, default_model="gpt-4")
 
 ### Adding a New Provider
 
-Providers are handled externally by `llm-api-engine`. Update configuration in `providers.yml`.
+Requests are routed through litellm model strings (`deepseek/...`, `openai/...`,
+`anthropic/...`) by `ask_llm.core.provider_adapter`; add the provider entry to
+`providers.yml`.
 
 ### Adding New Models
 

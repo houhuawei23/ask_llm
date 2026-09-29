@@ -18,7 +18,8 @@ never-closed HTTP clients):
   underlying HTTP client; an ``atexit`` hook releases whatever is still
   cached when the process exits.
 
-Engine access goes through ``ask_llm.utils.engine_facade`` (P4.6); the
+Adapter creation goes through ``ask_llm.utils.engine_facade`` (P4.6); the
+adapters are the litellm-backed ``LiteLLMProviderAdapter`` (since 2.27).
 """
 
 from __future__ import annotations
@@ -59,14 +60,13 @@ def _drain() -> list[LLMProviderProtocol]:
 
 
 def _close_adapter(adapter: LLMProviderProtocol) -> None:
-    """Best-effort release of *adapter*'s underlying HTTP client.
+    """Best-effort release of *adapter*'s underlying resources.
 
-    llm_engine's ``ProviderAdapter`` has no ``close()`` (yet); its
-    OpenAI-compatible provider keeps the SDK client at ``_provider._client``.
-    Only raw attributes are probed — the provider's ``client`` property
-    lazily *creates* a client when missing, which at shutdown would build a
-    connection nobody uses. Every failure is swallowed: closing is hygiene,
-    never an error at eviction or interpreter exit.
+    The litellm-backed adapter exposes a real (no-op) ``close()``, which the
+    first probe branch picks up. The legacy fallbacks below (``_provider``,
+    ``_provider._client``) remain for old adapter shapes; only raw attributes
+    are probed. Every failure is swallowed: closing is hygiene, never an error
+    at eviction or interpreter exit.
     """
     candidates: list[Any] = [adapter]
     inner = getattr(adapter, "_provider", None)
@@ -131,7 +131,7 @@ def _cache_key(config: ProviderConfig, *, default_model: str, generation: int) -
 
 
 class ProviderAdapterCache:
-    """Process-wide cache for llm-engine provider adapters.
+    """Process-wide cache for litellm-backed provider adapters.
 
     Example:
         adapter = ProviderAdapterCache.get(provider_config, default_model="gpt-4")

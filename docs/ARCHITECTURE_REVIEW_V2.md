@@ -698,3 +698,19 @@ format 与 batch 走同一引擎的 grep 不变量；增量 checkpoint 中断回
 - `AGENTS.md`：架构约定，**需刷新**（R4）。
 - `CHANGELOG.md`：v2.16–v2.19 重构脉络。
 - `docs/implementation_status.md`、`docs/REFACTOR_PLAN.md`：**过时，建议归档/删除**（R4）。
+
+## 12. 附注：2026-09 litellm 迁移（v2.27.0）
+
+本文多处陈述的 P4.6 接缝不变量——"全代码库唯一 `import llm_engine` 在
+`utils/engine_facade.py`"——自 v2.27.0 起被取代：外部包 `llm-api-engine` 已彻底
+移除。新不变量为：
+
+- `import litellm` 全库唯一出现在 `core/provider_adapter.py::_litellm()`（懒导入，
+  导入前设 `LITELLM_LOCAL_MODEL_COST_MAP=True`，litellm 导入 ~2.6s 且默认联网拉取
+  cost map，不得进入 CLI 启动路径）；
+- `utils/engine_facade.py` 保持门面（`create_engine_adapter` /
+  `load_engine_providers_config`），是 `LiteLLMProviderAdapter` 的唯一消费者；
+- 错误消息片段（`API authentication failed.` 等 5 种）与旧引擎逐字一致，
+  `core/error_keywords.py` 的关键词分类无需任何改动。
+
+详见 `CHANGELOG.md` 2.27.0。

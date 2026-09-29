@@ -1,5 +1,56 @@
 # Changelog
 
+## 2.27.0 (2026-09-29)
+
+移除对个人包 `llm-api-engine`（导入名 `llm_engine`）的依赖，LLM 调用改由
+litellm（`>=1.63.0,<2.0.0`）+ 自研适配器 `ask_llm.core.provider_adapter` 承担。
+上游 llm-engine 仓库 HEAD 已是 v0.3.0 破坏性重写（公开 API 全变），任何新的源码
+安装都会装坏本项目——本次迁移同时拆掉了 CI 源码安装这颗定时炸弹。788 测试全绿。
+
+### 行为变更（脚本/CI 需关注）
+
+- **依赖**：`llm-api-engine` 与直接声明 `openai` 均从 pyproject 移除（src 零直接
+  openai 导入，litellm 自带）；CI 删除三处 llm-engine 源码安装步骤与
+  `LLM_ENGINE_REF` 钉子，`pip install -e ".[dev]"` 即可。
+- **错误消息片段逐字保留**：`API authentication failed.` / `API rate limit
+  exceeded.` / `API error: …  (model=…, max_tokens=…)` / `API call failed: …` /
+  流中 `Stream failed: …`——`error_keywords.py` 分类零改动。
+- **DeepSeek 门控不变**：目录 `reasoning: false` ⇒ `extra_body thinking:disabled`
+  （litellm 会丢弃顶层 disabled thinking，必须走 extra_body，已实证）；
+  `functions.json_output` + 提示词嗅探 ⇒ `response_format json_object`。门控仍在
+  适配器构造时按默认模型冻结。
+- **Ollama 走 OpenAI 兼容端点**（`openai/` 前缀 + 原 api_base，含 `/v1`），与此前
+  线上行为精确一致；litellm 原生 `ollama/` 前缀路由到 `/api/generate`，不采用。
+- **llm 调用重试仍归 BoundedRetryRunner**：litellm 侧固定 `num_retries=0`。
+- **`engine_facade.EngineConfigView` 删除**（SecretStr 解包移入适配器内部）；facade
+  公开 API（`create_engine_adapter` / `load_engine_providers_config`）签名不变。
+- base_url 目录回退改走 ask_llm 自有 providers.yml 读取器（仅运行时路径，排除
+  cwd——该回退会携带已解析的 API key）。
+
+### Added
+
+- **真实 token usage 优先**：非流式响应带 usage 时，`RequestMetadata` 的
+  input/output token 数直接采用 API 上报值（含 DeepSeek cache-hit 计数），无
+  usage 时回退本地估算；流式路径维持估算（stream_options 兼容性不齐，不在本次范围）。
+- 适配器不再按调用变异共享配置（修复旧引擎按 call 改写 provider config 的线程
+  安全隐患），并提供真实 `close()`（适配器缓存回收走第一分支）。
+
+### 内部
+
+- **并发流式修复（litellm#14852 类竞态）**：litellm 1.82.6 的共享缓存 httpx 客户端
+  在多线程同步流式冷启动时竞态——首波并发流的 socket 被同伴的清理逻辑关闭，
+  `httpcore read` 报 `[Errno 9] Bad file descriptor`（实测 7 并发仅 1/7 成功，重试后
+  全过但浪费输入计费与 40-110s）。适配器改为**每次调用传独立 `HTTPHandler`**
+  （`client=` 参数透传到 custom_httpx 路径），无共享连接池可竞态——实测 7/7 成功；
+  流结束/中止/异常时关闭，litellm 内部结构变动时优雅回退其默认客户端。
+  每次调用多一次 TCP+TLS 握手（~0.2s，相对秒级 LLM 调用可忽略）。
+- litellm 懒导入：`core/provider_adapter.py::_litellm` 是全库唯一 `import litellm`
+  处，导入前设 `LITELLM_LOCAL_MODEL_COST_MAP=True` 避免联网拉取 cost map（实测
+  litellm 导入 ~2.6s，不能进 CLI 启动路径）；`suppress_debug_info` 静默升级提示。
+- 新增 `tests/unit/test_provider_adapter.py`（模型串映射、参数组装、reasoning
+  流/非流提取、usage、门控真值表、错误片段、懒加载、per-call client 生命周期等
+  ~70 例）；`test_engine_facade.py` 重写（清除对 `llm_engine.config_loader` 的活引用）。
+
 ## 2.25.0 (2026-09-23)
 
 三路并行深度审计（核心管线 / 服务+CLI / 配置+测试+项目健康度）后的系统性修复

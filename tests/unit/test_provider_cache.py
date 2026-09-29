@@ -134,7 +134,7 @@ class TestAudit34Lifecycle:
         """Engine adapters without close() still release _provider._client."""
         import ask_llm.utils.provider_cache as pc_mod
 
-        inner = MagicMock()  # llm_engine provider: no close(), holds _client
+        inner = MagicMock()  # legacy adapter shape: no close(), holds _client
         inner.close = None  # explicit None: MagicMock auto-creation ignores del
         adapter = MagicMock()
         adapter.close = None

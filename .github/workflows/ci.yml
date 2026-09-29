@@ -10,12 +10,6 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# llm-api-engine >=0.2.2 (required by pyproject.toml) is not published on PyPI
-# yet; install it from the llm-engine repo. Pinned to a commit for reproducible
-# CI. Once 0.2.2 is on PyPI, remove this step and the pre-install in each job.
-env:
-  LLM_ENGINE_REF: 9394c0c
-
 jobs:
   lint:
     name: Lint & type-check
@@ -26,8 +20,6 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - name: Install llm-api-engine from source (not on PyPI)
-        run: pip install "llm-api-engine @ git+https://github.com/houhuawei23/llm-engine.git@${LLM_ENGINE_REF}"
       - name: Install package with dev extras
         run: pip install -e ".[dev]"
       - name: Ruff check
@@ -50,8 +42,6 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
-      - name: Install llm-api-engine from source (not on PyPI)
-        run: pip install "llm-api-engine @ git+https://github.com/houhuawei23/llm-engine.git@${LLM_ENGINE_REF}"
       - name: Install package with dev extras
         run: pip install -e ".[dev]"
       - name: Run unit tests with coverage gate
@@ -68,8 +58,6 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - name: Install llm-api-engine from source (not on PyPI)
-        run: pip install "llm-api-engine @ git+https://github.com/houhuawei23/llm-engine.git@${LLM_ENGINE_REF}"
       - name: Install package with dev extras
         run: pip install -e ".[dev]"
       - name: Bandit
