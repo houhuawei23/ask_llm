@@ -96,6 +96,7 @@ ask_llm/
 │       ├── path_resolver.py            # resolve_trans_input_paths / is_directory_output / resolve_translation_output_path
 │       ├── prompt_resolver.py          # Prompt loading (@ prefix) + expand_prompt ({content} replace semantics)
 │       ├── md_path_discovery.py        # Markdown path discovery for format
+│       ├── preflight.py                # Pre-run API health probes (shared by batch validation + CLI gate)
 │       └── interactive_config.py       # Interactive provider/key configuration
 ├── tests/                  # Tests
 │   ├── unit/               # Unit tests
@@ -498,4 +499,5 @@ Providers are handled externally by `llm-api-engine`. Update configuration in `p
   2.21.0 bug fixes & consolidation with assistance from **ZCode** (agent) and **GLM-5.3** (model). \
   2.22.0 correctness & dead-code sweep with assistance from **ZCode** (agent) and **GLM-5.3** (model). \
   2.23.0 full-audit repair (3C+10H+~20M), test-chain backfill and repo hygiene with assistance from **Claude Code** (agent). \
-  2.24.0 six-phase deep audit (security, paid-work protection, retry/concurrency, parsing/cost/export, dry-run & config & chat enhancements) with assistance from **Claude Code** (agent).
+  2.24.0 six-phase deep audit (security, paid-work protection, retry/concurrency, parsing/cost/export, dry-run & config & chat enhancements) with assistance from **Claude Code** (agent). \
+  2.25.0 API preflight gate + retry visibility (shared utils/preflight.py, interactive continue/exit gate, retry-aware progress labels, resume hints) with assistance from **Claude Code** (agent).

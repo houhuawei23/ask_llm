@@ -22,17 +22,14 @@ from ask_llm.core.batch_models import BatchResult, BatchStatistics, BatchTask, M
 from ask_llm.core.command_runner import compute_checkpoint_digest, run_with_checkpoint
 from ask_llm.core.execution_report import ExecutionReport, build_report_from_batch_results
 from ask_llm.core.models import AppConfig
-from ask_llm.utils.api_key_gate import (
-    api_key_is_missing_or_unresolved,
-    ensure_resolved_provider_keys,
-)
+from ask_llm.utils.api_key_gate import ensure_resolved_provider_keys
 from ask_llm.utils.batch_exporter import BatchResultExporter
 from ask_llm.utils.batch_loader import BatchConfigLoader
 from ask_llm.utils.console import console
 from ask_llm.utils.fallback_chain import build_fallback_chain
 from ask_llm.utils.interactive_config import InteractiveConfigHelper
+from ask_llm.utils.preflight import check_provider_pair
 from ask_llm.utils.pricing import format_cost_estimate
-from ask_llm.utils.provider_cache import ProviderAdapterCache
 
 PricingMap = dict[tuple[str, str], dict[str, float]]
 
@@ -62,7 +59,6 @@ class _ValidationResult:
 
 def _validate_models(
     provider_models: list[ModelConfig],
-    app_config: AppConfig,
     config_manager: ConfigManager,
     *,
     max_workers: int = 8,
@@ -73,62 +69,25 @@ def _validate_models(
     dead endpoint no longer stalls the whole validation stage for its full
     timeout. Results (and console lines) preserve the input order.
 
-    Builds each overridden provider view on a detached ``model_copy`` — the
-    loop must never ``set_provider`` / ``apply_overrides`` on the *shared*
-    manager (audit 2.5): it used to return with the manager left pointing at
-    the last validated model, its sampling overrides installed and the
-    run-level model override polluted.
+    Probing lives in :mod:`ask_llm.utils.preflight` (shared with the trans /
+    paper / format pre-run gate); this wrapper only renders the per-model
+    console lines. Provider views resolve through
+    ``config_manager.get_provider_config`` — the single source of truth, so
+    the manager is the only config authority here (audit 2.5: the manager is
+    never mutated).
     """
     result = _ValidationResult()
 
     def _check(index: int, model_config: ModelConfig) -> tuple[int, str, bool, str]:
         """Run the checks for one model; returns (index, key, ok, note)."""
         model_key = f"{model_config.provider}/{model_config.model}"
-
-        if model_config.provider not in app_config.providers:
-            return index, model_key, False, "Provider not found"
-
-        provider_config = app_config.providers[model_config.provider]
-
-        if api_key_is_missing_or_unresolved(provider_config.api_key):
-            return index, model_key, False, "API key not configured"
-
-        if provider_config.models and model_config.model not in provider_config.models:
-            return (
-                index,
-                model_key,
-                False,
-                f"Model not available. Available: {', '.join(provider_config.models)}",
-            )
-
-        overrides: dict[str, Any] = {}
-        if model_config.temperature is not None:
-            overrides["api_temperature"] = model_config.temperature
-        if model_config.top_p is not None:
-            overrides["api_top_p"] = model_config.top_p
-        if model_config.max_tokens is not None:
-            overrides["max_tokens"] = model_config.max_tokens
-        provider_config_with_overrides = (
-            provider_config.model_copy(update=overrides) if overrides else provider_config
+        outcome = check_provider_pair(
+            config_manager,
+            model_config.provider,
+            model_config.model,
+            sampling_overrides=model_config,
         )
-
-        default_model = model_config.model or (
-            provider_config.models[0] if provider_config.models else ""
-        )
-        if not default_model:
-            return index, model_key, False, "No model available for this provider"
-
-        try:
-            test_provider = ProviderAdapterCache.get(
-                provider_config_with_overrides, default_model=default_model
-            )
-        except Exception as e:
-            return index, model_key, False, f"Failed to create provider adapter: {e}"
-
-        success, message, latency = test_provider.test_connection()
-        if not success:
-            return index, model_key, False, f"Connection test failed: {message}"
-        return index, model_key, True, f"{latency:.2f}s"
+        return index, model_key, outcome.ok, outcome.message
 
     workers = max(1, min(max_workers, len(provider_models)))
     ordered: list[tuple[int, str, bool, str] | None] = [None] * len(provider_models)
@@ -240,7 +199,6 @@ def run_batch_from_config(
         console.print("[bold]Validating models and testing connections...[/bold]")
         validation = _validate_models(
             provider_models,
-            app_config,
             config_manager,
         )
 

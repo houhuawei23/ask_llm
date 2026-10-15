@@ -11,10 +11,13 @@ from ask_llm.cli.errors import cli_errors
 from ask_llm.config.cli_session import (
     bootstrap_command,
     gate_api_key_or_exit,
+    preflight_or_exit,
     resolve_and_prepare,
 )
+from ask_llm.config.unified_config import PaperConfig
 from ask_llm.services.paper_service import PaperExplainOptions, PaperService
 from ask_llm.utils.console import console
+from ask_llm.utils.fallback_chain import model_config_with_fallback
 
 try:
     from ask_llm.utils import (
@@ -135,6 +138,13 @@ def paper(
             help="Enable fallback to alternate providers/models on failure",
         ),
     ] = True,
+    no_preflight: Annotated[
+        bool,
+        typer.Option(
+            "--no-preflight",
+            help="Skip the pre-run API health check (also general.preflight_check)",
+        ),
+    ] = False,
     report: Annotated[
         str | None,
         typer.Option(
@@ -188,6 +198,27 @@ def paper(
             skip_api_key_check=skip_api_key_check or dry_run,
         )
         paper_cfg = load_result.unified_config.paper
+        if not dry_run:
+            # Pre-run API health gate: probes the primary chain, plus the
+            # full-paper model when --run full/all will use a second model.
+            primary, fallbacks = model_config_with_fallback(
+                final_provider,
+                final_model,
+                temperature=temperature,
+                max_tokens=None,
+                app_config=load_result.app_config,
+                use_fallback=fallback,
+            )
+            pairs = [(primary.provider, primary.model)] + [(f.provider, f.model) for f in fallbacks]
+            if run_mode in ("full", "all"):
+                # Mirror PaperService's resolution exactly: an unset
+                # paper.full_model falls back to the PaperConfig default
+                # (deepseek-reasoner) — probing only the section model would
+                # pass preflight while the full run dies on a dead reasoner.
+                full_model = (paper_cfg.full_model or "").strip() or PaperConfig().full_model
+                if full_model:
+                    pairs.append((final_provider, full_model))
+            preflight_or_exit(config_manager, pairs, command="paper", skip=no_preflight)
         workers = concurrency if concurrency is not None else paper_cfg.concurrency
         if workers < 1 or workers > 64:
             console.print_error("--concurrency / paper.concurrency must be between 1 and 64")

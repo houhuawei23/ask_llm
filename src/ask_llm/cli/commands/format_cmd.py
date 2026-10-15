@@ -11,6 +11,7 @@ from ask_llm.cli.errors import cli_errors
 from ask_llm.config.cli_session import (
     gate_api_key_or_exit,
     load_cli_session,
+    preflight_or_exit,
     resolve_and_prepare,
 )
 from ask_llm.core.processor import RequestProcessor
@@ -205,6 +206,13 @@ def format_cmd(
             help="从 checkpoint 文件恢复未完成的格式化",
         ),
     ] = None,
+    no_preflight: Annotated[
+        bool,
+        typer.Option(
+            "--no-preflight",
+            help="跳过运行前 API 预检(亦可用 general.preflight_check 配置)",
+        ),
+    ] = False,
 ) -> None:
     """
     使用 LLM 格式化 Markdown 文档。
@@ -246,6 +254,23 @@ def format_cmd(
         )
         gate_api_key_or_exit(config_manager, _final_provider)
 
+        # 便宜的本地校验先行:路径/通配写错时不应先付出预检的网络等待
+        # (乃至交互询问),才被告知没有可格式化的文件。
+        resolved_paths = discover_markdown_files(files, recursive=recursive, max_depth=max_depth)
+        resolved_files: list[str] = [str(p) for p in resolved_paths]
+
+        if not resolved_files:
+            console.print_error("未找到可格式化的 Markdown 文件")
+            raise typer.Exit(1)
+
+        # 运行前 API 预检(resume 重跑失败 chunk 同样受益)。
+        preflight_or_exit(
+            config_manager,
+            [(_final_provider, final_model)],
+            command="format",
+            skip=no_preflight,
+        )
+
         provider_config = config_manager.get_provider_config()
 
         llm_provider = create_engine_adapter(provider_config, default_model=final_model)
@@ -265,13 +290,6 @@ def format_cmd(
             if not outcome.ok:
                 raise typer.Exit(1)
             raise typer.Exit(0)
-
-        resolved_paths = discover_markdown_files(files, recursive=recursive, max_depth=max_depth)
-        resolved_files: list[str] = [str(p) for p in resolved_paths]
-
-        if not resolved_files:
-            console.print_error("未找到可格式化的 Markdown 文件")
-            raise typer.Exit(1)
 
         _validate_batch_output(output, len(resolved_files), inplace)
 

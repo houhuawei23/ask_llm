@@ -23,6 +23,12 @@ class GeneralConfig(BaseModel):
         default=True,
         description="Default streaming mode for ask command",
     )
+    preflight_check: bool = Field(
+        default=True,
+        description="Probe each provider/model with a tiny API call before batch/trans/"
+        "paper/format runs; failures prompt continue/exit (interactive) or warn "
+        "(non-interactive). Disable here or via --no-preflight.",
+    )
 
 
 class TranslationConfig(BaseModel):

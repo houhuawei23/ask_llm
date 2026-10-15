@@ -24,6 +24,7 @@ from ask_llm.core.batch_models import BatchResult, BatchTask, ModelConfig, TaskS
 from ask_llm.core.models import RequestMetadata
 from ask_llm.core.processor import RequestProcessor
 from ask_llm.core.protocols import LLMProviderProtocol
+from ask_llm.core.retry_policy import DEFAULT_RETRY_POLICY
 from ask_llm.core.stream_collector import stream_and_collect
 from ask_llm.core.telemetry import (
     ErrorCategory,
@@ -31,8 +32,12 @@ from ask_llm.core.telemetry import (
     bind_context,
     classify_error,
 )
+from ask_llm.utils.preflight import shorten_message
 from ask_llm.utils.rate_limiter import get_global_rate_limiter
 from ask_llm.utils.token_counter import TokenCounter
+
+# One-line failure reason bound for progress-bar labels.
+_FAILED_REASON_CHARS = 40
 
 
 def paper_request_timeout_seconds() -> float:
@@ -61,22 +66,47 @@ def _update_global_task_progress_failed(
     model_key: str,
     task_id: int,
     progress_tokens: str,
+    *,
+    retry_count: int,
+    max_retries: int,
+    error_msg: str,
+    category: ErrorCategory,
 ) -> None:
-    """Mark a global task as failed in the progress bar (no-op if no progress)."""
-    if progress and progress_task_id is not None:
-        progress.update(
-            progress_task_id,
-            description=(f"{model_key} Task {task_id} ({progress_tokens} tokens): ✗ Failed"),
-            completed=100,
+    """Mark a global task as failed in the progress bar (no-op if no progress).
+
+    A failure that still has retry budget and is retryable under the same
+    :class:`RetryPolicy` the runner gates retries with is labeled retry-pending
+    (``↻ 第k/N次失败, 将重试``) rather than a dead ``✗ Failed`` — during the
+    backoff window the old label made a healthy retry loop look like the run
+    had died. The predicate MUST mirror the runner's actual gate (keyword
+    match on the message, not the error category): a billing/model-error
+    failure is non-terminal for fallback yet never retried, and promising a
+    retry the runner will not make is the exact misleading-label bug this
+    helper exists to prevent.
+    """
+    if not (progress and progress_task_id is not None):
+        return
+    reason = shorten_message(error_msg or category.value, max_chars=_FAILED_REASON_CHARS)
+    retry_pending = retry_count < max_retries and DEFAULT_RETRY_POLICY.is_retryable(error_msg)
+    if retry_pending:
+        description = (
+            f"{model_key} Task {task_id} ({progress_tokens} tokens): "
+            f"↻ 第{retry_count + 1}/{max_retries + 1}次失败, 将重试: {reason}"
         )
+    else:
+        description = f"{model_key} Task {task_id} ({progress_tokens} tokens): ✗ Failed: {reason}"
+    progress.update(progress_task_id, description=description, completed=100)
 
 
 class TaskExecutor:
     """Execute a single provider/model attempt for a batch task."""
 
-    def __init__(self, *, verbose: bool = False, stream_api: bool = True) -> None:
+    def __init__(
+        self, *, verbose: bool = False, stream_api: bool = True, max_retries: int = 3
+    ) -> None:
         self.verbose = verbose
         self.stream_api = stream_api
+        self.max_retries = max(0, max_retries)
         self._auth_error_lock = threading.Lock()
         # M3: dedupe per provider/model — a single executor-level flag let the
         # first failing provider silence every *other* provider's auth errors.
@@ -181,10 +211,12 @@ class TaskExecutor:
         progress_tokens = f"paper≈{display_input_tokens} tok"
 
         if progress and progress_task_id is not None:
+            attempt_note = f"(第{result.retry_count + 1}次尝试)" if result.retry_count > 0 else ""
             progress.update(
                 progress_task_id,
                 description=(
-                    f"{model_key} paper task {task.task_id} ({progress_tokens} tokens): 0 out"
+                    f"{model_key} paper task {task.task_id} ({progress_tokens} tokens): "
+                    f"0 out{attempt_note}"
                 ),
             )
 
@@ -280,9 +312,13 @@ class TaskExecutor:
             )
 
         if progress and progress_task_id is not None:
+            attempt_note = f"(第{result.retry_count + 1}次尝试)" if result.retry_count > 0 else ""
             progress.update(
                 progress_task_id,
-                description=f"{model_key} Task {task.task_id} ({progress_tokens} tokens): Processing...",
+                description=(
+                    f"{model_key} Task {task.task_id} ({progress_tokens} tokens): "
+                    f"Processing...{attempt_note}"
+                ),
             )
         elif progress is None:
             bind_context(ctx).info(f"Translation chunk start ({model_key}, {progress_tokens})")
@@ -443,7 +479,15 @@ class TaskExecutor:
             result.throttled = True
 
             _update_global_task_progress_failed(
-                progress, progress_task_id, model_key, task.task_id, progress_tokens
+                progress,
+                progress_task_id,
+                model_key,
+                task.task_id,
+                progress_tokens,
+                retry_count=retry_count,
+                max_retries=self.max_retries,
+                error_msg=error_msg,
+                category=ErrorCategory.RATE_LIMIT,
             )
             return result
 
@@ -465,6 +509,14 @@ class TaskExecutor:
             result.error_category = category
 
             _update_global_task_progress_failed(
-                progress, progress_task_id, model_key, task.task_id, progress_tokens
+                progress,
+                progress_task_id,
+                model_key,
+                task.task_id,
+                progress_tokens,
+                retry_count=retry_count,
+                max_retries=self.max_retries,
+                error_msg=error_msg,
+                category=category,
             )
             return result

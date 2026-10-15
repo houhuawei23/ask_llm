@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from ask_llm.core.batch_models import BatchTask, ModelConfig, TaskStatus
@@ -108,3 +109,117 @@ def test_auth_error_dedup_is_per_provider():
     # Both keys are recorded; a repeat of either one is deduped.
     assert executor._auth_error_logged_keys == {"p/a", "p/b"}
     assert executor.auth_error_logged is True
+
+
+# --- retry-aware progress labels ---------------------------------------------
+
+
+class _FakeProvider:
+    name = "p"
+
+    def __init__(self, chunks=("hello ", "world"), error: str | None = None):
+        # ``config`` mirrors the real provider attribute (lowercase by protocol).
+        self.config = SimpleNamespace(api_temperature=0.7)
+        self._chunks = chunks
+        self._error = error
+
+    def call(self, **kwargs):
+        if self._error:
+            raise RuntimeError(self._error)
+        return iter(self._chunks)
+
+
+def _run(executor, provider, retry_count=0, progress=None):
+    with (
+        patch(
+            "ask_llm.core.task_executor.get_global_rate_limiter",
+            return_value=MagicMock(acquire_timeout=lambda *a: 1.0, acquire=lambda *a, **k: True),
+        ),
+        _patch_tokens(),
+    ):
+        return executor.try_run_with_config(
+            _task(),
+            ModelConfig(provider="p", model="m"),
+            {"p/m": provider},
+            retry_count,
+            progress,
+            0 if progress is not None else None,
+            100,
+        )
+
+
+def test_transient_failure_label_is_retry_pending():
+    """A budget-left transient failure must read as retry-pending, not dead."""
+    executor = TaskExecutor(max_retries=3)
+    progress = MagicMock()
+    result = _run(
+        executor,
+        _FakeProvider(error="Error code: 503 - Service is too busy"),
+        retry_count=0,
+        progress=progress,
+    )
+
+    assert result.status == TaskStatus.FAILED
+    description = progress.update.call_args.kwargs["description"]
+    assert "↻" in description
+    assert "第1/4次失败" in description
+
+
+def test_terminal_failure_label_is_dead():
+    executor = TaskExecutor(max_retries=3)
+    progress = MagicMock()
+    result = _run(
+        executor,
+        _FakeProvider(error="401 Unauthorized: invalid api key"),
+        retry_count=0,
+        progress=progress,
+    )
+
+    assert result.status == TaskStatus.FAILED
+    description = progress.update.call_args.kwargs["description"]
+    assert "✗ Failed" in description
+    assert "↻" not in description
+
+
+def test_exhausted_budget_label_is_dead():
+    executor = TaskExecutor(max_retries=3)
+    progress = MagicMock()
+    result = _run(
+        executor,
+        _FakeProvider(error="Error code: 503 - Service is too busy"),
+        retry_count=3,
+        progress=progress,
+    )
+
+    assert result.status == TaskStatus.FAILED
+    description = progress.update.call_args.kwargs["description"]
+    assert "✗ Failed" in description
+
+
+def test_retry_attempt_start_label_shows_attempt_number():
+    """Attempt k+1 (retry_count=k) relabels the bar with 第k+1次尝试."""
+    executor = TaskExecutor(max_retries=3)
+    progress = MagicMock()
+    result = _run(executor, _FakeProvider(), retry_count=2, progress=progress)
+
+    assert result.status == TaskStatus.SUCCESS
+    first_call = progress.update.call_args_list[0]
+    assert "第3次尝试" in first_call.kwargs["description"]
+
+
+def test_non_retryable_non_terminal_failure_label_is_dead():
+    """billing/model-error failures are non-terminal for fallback yet never
+    retried — the label must NOT promise a retry the runner will not make."""
+    executor = TaskExecutor(max_retries=3)
+    progress = MagicMock()
+    result = _run(
+        executor,
+        _FakeProvider(error="Error code: 400 - bad request: invalid_request_error"),
+        retry_count=0,
+        progress=progress,
+    )
+
+    assert result.status == TaskStatus.FAILED
+    description = progress.update.call_args.kwargs["description"]
+    assert "✗ Failed" in description
+    assert "将重试" not in description

@@ -48,6 +48,7 @@ ENV_TO_CONFIG: dict[str, tuple[str, ...]] = {
     "ASK_LLM_BATCH_RETRIES": ("batch", "retries"),
     "ASK_LLM_BATCH_RETRY_DELAY": ("batch", "retry_delay"),
     "ASK_LLM_BATCH_RETRY_DELAY_MAX": ("batch", "retry_delay_max"),
+    "ASK_LLM_GENERAL_PREFLIGHT_CHECK": ("general", "preflight_check"),
 }
 
 
@@ -72,6 +73,7 @@ def _parse_env_value(value: str, key_path: tuple[str, ...]) -> Any:
         or "include_original" in last_key
         or "recursive" in last_key
         or "balance_translation_chunks" in last_key
+        or "preflight_check" in last_key
     ):
         return value.lower() in ("true", "1", "yes")
     return value

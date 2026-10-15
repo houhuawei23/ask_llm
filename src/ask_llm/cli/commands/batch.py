@@ -154,6 +154,12 @@ def batch(
         with cli_errors("batch"):
             load_result, config_manager = load_cli_session(config_path)
             batch_cfg = load_result.unified_config.batch
+            preflight_enabled = bool(load_result.unified_config.general.preflight_check)
+            if not preflight_enabled and not skip_validation:
+                console.print_info(
+                    "模型预检已禁用 (general.preflight_check: false): 本次不对 "
+                    "provider/model 做连接预检; 删除该配置项可恢复。"
+                )
 
             if dry_run:
                 from ask_llm.services.dry_run import estimate_batch_run
@@ -229,7 +235,9 @@ def batch(
                 verbose=verbose,
                 resume_checkpoint_path=resume,
                 use_fallback=fallback,
-                skip_validation=skip_validation,
+                # Batch's model-validation stage IS its preflight; the config
+                # toggle rides the existing --skip-validation escape hatch.
+                skip_validation=skip_validation or not preflight_enabled,
             )
 
             service = BatchService(

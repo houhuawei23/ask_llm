@@ -37,9 +37,14 @@ from ask_llm.core.telemetry import (
     classify_error,
     should_fallback_for_error,
 )
+from ask_llm.utils.preflight import shorten_message
 from ask_llm.utils.prompt_resolver import expand_prompt
 from ask_llm.utils.rate_limiter import get_global_rate_limiter
 from ask_llm.utils.token_counter import TokenCounter
+
+# Retry-warning log lines carry a bounded reason snippet so one provider's
+# HTML error dump cannot flood the console.
+_RETRY_REASON_CHARS = 120
 
 
 def estimate_output_tokens(task_kind: str, input_tokens: int) -> int:
@@ -106,7 +111,9 @@ class GlobalBatchProcessor:
         self.retry_delay = retry_delay
         self.retry_delay_max = retry_delay_max
         self.rate_limit_config = rate_limit_config
-        self._task_executor = TaskExecutor(verbose=verbose, stream_api=stream_api)
+        self._task_executor = TaskExecutor(
+            verbose=verbose, stream_api=stream_api, max_retries=max_retries
+        )
         self.last_metrics: RunMetrics | None = None
 
     @property
@@ -333,9 +340,19 @@ class GlobalBatchProcessor:
         if install_handler:
             signal.signal(signal.SIGINT, _request_stop)
 
-        def _on_retry_scheduled(task: BatchTask, failed_result: BatchResult) -> None:
-            bind_context(LogContext(task_id=task.task_id, phase="global_batch")).debug(
-                f"Task will be retried (attempt {failed_result.retry_count + 1}/{self.max_retries})"
+        def _on_retry_scheduled(task: BatchTask, failed_result: BatchResult, delay: float) -> None:
+            # Visible at the default log level: a silent retry looked like the
+            # whole run had died (frozen "Processing..." bar + nothing logged).
+            category = (
+                failed_result.error_category.value
+                if failed_result.error_category is not None
+                else "unknown"
+            )
+            reason = shorten_message(failed_result.error or category, max_chars=_RETRY_REASON_CHARS)
+            bind_context(LogContext(task_id=task.task_id, phase="global_batch")).warning(
+                f"Task {task.task_id} attempt {failed_result.retry_count + 1}/"
+                f"{self.max_retries + 1} failed ({category}: {reason}); "
+                f"retry {failed_result.retry_count + 2}/{self.max_retries + 1} in {delay:.1f}s"
             )
 
         def _on_worker_exception(task: BatchTask, exc: BaseException) -> BatchResult:

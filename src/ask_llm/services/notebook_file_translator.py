@@ -120,6 +120,12 @@ class NotebookFileTranslator:
         console.print(f"  Successful: {successful}/{total}")
         if failed > 0:
             console.print_warning(f"  Failed: {failed}/{total}")
+            # Notebook translation has no checkpoint/--resume: failed cells keep
+            # their original text and a retry means re-running the whole file.
+            console.print_warning(
+                "notebook 翻译暂不支持 --resume: 失败 cell 按原文导出, 如需重试请重新运行本文件;"
+                "频繁 503/限流时可调高 translation.retries。"
+            )
         console.print(
             format_cost_estimate(
                 self.provider,

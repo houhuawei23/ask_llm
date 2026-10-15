@@ -24,6 +24,7 @@ from ask_llm.cli.errors import cli_errors
 from ask_llm.config.cli_session import (
     bootstrap_command,
     gate_api_key_or_exit,
+    preflight_or_exit,
     resolve_and_prepare,
 )
 from ask_llm.services.translation_service import (
@@ -31,6 +32,8 @@ from ask_llm.services.translation_service import (
     TranslationService,
 )
 from ask_llm.utils.console import console
+from ask_llm.utils.fallback_chain import model_config_with_fallback
+from ask_llm.utils.path_resolver import resolve_trans_input_paths
 
 
 def trans(
@@ -218,6 +221,13 @@ def trans(
             help="Enable fallback to alternate providers/models on failure",
         ),
     ] = True,
+    no_preflight: Annotated[
+        bool,
+        typer.Option(
+            "--no-preflight",
+            help="Skip the pre-run API health check (also general.preflight_check)",
+        ),
+    ] = False,
     report: Annotated[
         str | None,
         typer.Option(
@@ -271,7 +281,6 @@ def trans(
 
             if dry_run:
                 from ask_llm.services.dry_run import estimate_translation_run
-                from ask_llm.utils.path_resolver import resolve_trans_input_paths
 
                 input_paths = resolve_trans_input_paths(
                     files,
@@ -302,6 +311,33 @@ def trans(
                 for line in dry_report.render(pricing_source=pricing_source):
                     console.print(line)
                 return
+
+            # Cheap local validation before the network gate (review): a
+            # typo'd path/glob must fail before the preflight probe (and any
+            # interactive continue/exit prompt), not after.
+            if not resolve_trans_input_paths(
+                files, trans_cfg.translatable_extensions, trans_cfg.recursive_dir
+            ):
+                console.print_error("No input files matched.")
+                raise typer.Exit(1)
+
+            # Pre-run API health gate (after dry-run: estimation never touches
+            # the network). Probes the resolved provider/model plus the whole
+            # fallback chain so a dead fallback surfaces before it is needed.
+            primary, fallbacks = model_config_with_fallback(
+                final_provider,
+                final_model,
+                temperature=trans_cfg.temperature,
+                max_tokens=trans_cfg.max_output_tokens,
+                app_config=load_result.app_config,
+                use_fallback=fallback,
+            )
+            preflight_or_exit(
+                config_manager,
+                [(primary.provider, primary.model)] + [(f.provider, f.model) for f in fallbacks],
+                command="trans",
+                skip=no_preflight,
+            )
 
             options = TranslationOptions(
                 target_language=target_lang or trans_cfg.target_language,

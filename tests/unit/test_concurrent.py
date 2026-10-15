@@ -583,3 +583,27 @@ class TestAudit33ThrottleAndStopEvent:
         seen_ids = {r.task_id for r in results}
         assert seen_ids == {0, 1}  # abandoned task 1 explicitly reported
         assert metrics.abandoned == 1
+
+
+def test_on_retry_scheduled_receives_backoff_delay():
+    """The retry callback gets (task, failed_result, delay) for user reporting."""
+    scheduled: list[tuple[int, int, float]] = []
+    failures = {0: 1}
+    results = run_bounded_with_retries(
+        list(range(2)),
+        _make_worker(failures),
+        max_workers=2,
+        max_retries=3,
+        retry_delay=0.5,
+        retry_delay_max=1.0,
+        is_failed=lambda r: r.value == -1,
+        error_message=lambda r: r.error,
+        retry_count_from_result=lambda r: r.retry_count,
+        on_retry_scheduled=lambda task, result, delay: scheduled.append(
+            (task, result.retry_count, delay)
+        ),
+        order_key=lambda r: r.task_id,
+    )
+    assert [r.value for r in results] == [0, 10]
+    assert scheduled == [(0, 0, scheduled[0][2])]  # task 0, first failure
+    assert 0.0 <= scheduled[0][2] <= 0.5  # full-jitter: uniform(0, initial)

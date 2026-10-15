@@ -101,3 +101,24 @@ class TestPaperConfig:
         }
         config = UnifiedConfig.model_validate(data)
         assert config.project_root_markers == ["custom.txt", "my.config"]
+
+
+class TestPreflightCheckDefault:
+    """general.preflight_check defaults True and survives old user YAMLs."""
+
+    def test_default_is_true(self):
+        config = UnifiedConfig()
+        assert config.general.preflight_check is True
+
+    def test_missing_field_in_user_yaml_falls_back_to_default(self):
+        data = {
+            "general": {"stream_default": False},
+            "translation": {"target_language": "en"},
+        }
+        config = UnifiedConfig.model_validate(data)
+        assert config.general.stream_default is False
+        assert config.general.preflight_check is True
+
+    def test_explicit_false_is_honored(self):
+        config = UnifiedConfig.model_validate({"general": {"preflight_check": False}})
+        assert config.general.preflight_check is False

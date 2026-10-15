@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import getpass
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 
 import typer
+from loguru import logger
 
 from ask_llm.config.context import set_config
 from ask_llm.config.loader import ConfigLoader, LoadResult
@@ -20,6 +22,7 @@ from ask_llm.utils.api_key_gate import (
 )
 from ask_llm.utils.console import console
 from ask_llm.utils.interactive_config import apply_interactive_key
+from ask_llm.utils.preflight import check_provider_pairs
 
 
 def load_cli_session(
@@ -92,6 +95,10 @@ def resolve_and_prepare(
         raise typer.Exit(1)
 
     config_manager.apply_overrides(model=model, temperature=temperature)
+    # Make the effective pair visible: a stale ~/.config/ask_llm/providers.yml
+    # silently changes the default model, and users could previously only see
+    # it indirectly (e.g. via the preflight table).
+    logger.info(f"Resolved provider/model: {provider}/{model}")
     return provider, model
 
 
@@ -185,6 +192,74 @@ def gate_api_key_or_exit(
         except UnresolvedAPIKeyError as e:
             console.print_error(str(e))
             raise typer.Exit(1) from e
+
+
+def preflight_or_exit(
+    config_manager: ConfigManager,
+    pairs: Sequence[tuple[str, str]],
+    *,
+    command: str,
+    skip: bool = False,
+) -> None:
+    """Pre-run API health gate shared by trans / paper / format.
+
+    Probes each (provider, model) pair with a tiny real API call
+    (:func:`ask_llm.utils.preflight.check_provider_pairs`). On failure:
+
+    - interactive TTY (not --quiet): ask continue/exit (default exit);
+    - non-interactive or --quiet: warn and continue, so unattended scripts
+      keep their retry-driven behavior.
+
+    Skippable via the ``--no-preflight`` flag or ``general.preflight_check:
+    false``. This is CLI-layer code: the only exits are ``typer.Exit`` here.
+
+    Args:
+        config_manager: Active config manager.
+        pairs: (provider, model) pairs about to be used by the run.
+        command: Command name for the log/table header.
+        skip: True when the caller passed ``--no-preflight``.
+    """
+    if skip:
+        logger.debug(f"[{command}] Preflight skipped (--no-preflight).")
+        return
+    unified = config_manager.unified_config
+    if unified is not None and not unified.general.preflight_check:
+        console.print_info(f"[{command}] API 预检已禁用 (general.preflight_check: false)。")
+        return
+    if not pairs:
+        return
+
+    console.print_info(f"[{command}] API 预检: 探测 {len(pairs)} 个 provider/model ...")
+    outcomes = check_provider_pairs(config_manager, pairs)
+    console.print_table(
+        headers=["Provider", "Model", "状态", "延迟", "备注"],
+        rows=[
+            [
+                o.provider,
+                o.model,
+                "✓" if o.ok else "✗",
+                f"{o.latency:.2f}s" if o.ok and o.latency is not None else "-",
+                o.message,
+            ]
+            for o in outcomes
+        ],
+    )
+
+    failed = [o for o in outcomes if not o.ok]
+    if not failed:
+        return
+
+    summary = "; ".join(f"{o.provider}/{o.model}: {o.message}" for o in failed)
+    if sys.stdin.isatty() and not console.quiet:
+        console.print_warning(f"API 预检发现 {len(failed)} 个异常端点。")
+        if not console.confirm("API 预检失败, 仍要继续执行吗?", default=False):
+            raise typer.Exit(1)
+        console.print_warning("已选择继续: 运行中可能再次失败, 失败任务将自动重试并汇报。")
+    else:
+        console.print_warning(
+            f"API 预检失败(非交互环境, 警告后继续): {summary} "
+            f"(可加 --no-preflight 跳过预检, 或调高 translation.retries 增强重试。)"
+        )
 
 
 def load_pricing_with_hint(

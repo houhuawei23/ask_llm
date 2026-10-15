@@ -111,12 +111,16 @@ class BoundedRetryRunner(Generic[TTask, TResult]):
         is_retryable_error: Callable[[str], bool] | None = None,
         is_throttled: Callable[[TResult], bool] | None = None,
         on_worker_exception: Callable[[TTask, BaseException], TResult] | None = None,
-        on_retry_scheduled: Callable[[TTask, TResult], None] | None = None,
+        on_retry_scheduled: Callable[[TTask, TResult, float], None] | None = None,
         on_result: Callable[[TResult], None] | None = None,
         order_key: Callable[[TResult], Any] = lambda r: getattr(r, "task_id", 0),
         make_interrupted_result: Callable[[TTask], TResult] | None = None,
     ) -> tuple[list[TResult], RunMetrics]:
         """Run all tasks and return (sorted results, run metrics).
+
+        ``on_retry_scheduled`` fires when a failed task is queued for retry,
+        receiving ``(task, failed_result, backoff_seconds)`` so callers can
+        surface the retry to the user (why it failed, when it re-runs).
 
         ``on_result`` (D6) fires on the runner's main thread after each result
         is appended, so callers can persist incremental progress and survive a
@@ -210,7 +214,7 @@ class BoundedRetryRunner(Generic[TTask, TResult]):
                     )
                     if on_retry_scheduled is not None:
                         try:
-                            on_retry_scheduled(task, result)
+                            on_retry_scheduled(task, result, delay)
                         except BaseException as exc:
                             logger.warning(f"on_retry_scheduled raised: {exc}")
                     heapq.heappush(
@@ -350,7 +354,7 @@ class BoundedRetryRunner(Generic[TTask, TResult]):
         is_retryable_error: Callable[[str], bool] | None = None,
         is_throttled: Callable[[TResult], bool] | None = None,
         on_worker_exception: Callable[[TTask, BaseException], TResult] | None = None,
-        on_retry_scheduled: Callable[[TTask, TResult], None] | None = None,
+        on_retry_scheduled: Callable[[TTask, TResult, float], None] | None = None,
         on_result: Callable[[TResult], None] | None = None,
         order_key: Callable[[TResult], Any] = lambda r: getattr(r, "task_id", 0),
         make_interrupted_result: Callable[[TTask], TResult] | None = None,
@@ -387,7 +391,7 @@ def run_bounded_with_retries(
     is_retryable_error: Callable[[str], bool] | None = None,
     is_throttled: Callable[[TResult], bool] | None = None,
     on_worker_exception: Callable[[TTask, BaseException], TResult] | None = None,
-    on_retry_scheduled: Callable[[TTask, TResult], None] | None = None,
+    on_retry_scheduled: Callable[[TTask, TResult, float], None] | None = None,
     on_result: Callable[[TResult], None] | None = None,
     order_key: Callable[[TResult], Any] = lambda r: getattr(r, "task_id", 0),
     make_interrupted_result: Callable[[TTask], TResult] | None = None,

@@ -309,6 +309,11 @@ class Console:
         return response in ("y", "yes")
 
     @property
+    def quiet(self) -> bool:
+        """Whether non-error output is suppressed (--quiet)."""
+        return self._quiet
+
+    @property
     def width(self) -> int:
         """Get console width."""
         return self._console.width

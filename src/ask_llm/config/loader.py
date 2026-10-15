@@ -136,6 +136,15 @@ class ConfigLoader:
             # providers already defined in default_config.yml.
             data = _deep_merge(providers_yml_data, data)
             record_leaves(providers_yml_data, f"providers.yml ({providers_yml_path})", provenance)
+            # The search order (env > ~/.config > packaged) means a stale user
+            # copy can silently shadow the repo/packaged catalog — and its
+            # default_model decides which model runs. The pricing line logs a
+            # DIFFERENT path (its search still includes cwd), so without this
+            # line users cannot tell which file actually drives provider/model
+            # resolution.
+            logger.info(
+                f"Provider runtime config (providers.yml) loaded from: {providers_yml_path}"
+            )
         if user_path != pkg_path:
             record_leaves(user_data, str(user_path), provenance)
 

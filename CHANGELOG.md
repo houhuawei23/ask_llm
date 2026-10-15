@@ -1,5 +1,46 @@
 # Changelog
 
+## 2.25.0 (2026-10-15)
+
+API 预检 + 重试全程可见：修复"单个 chunk 撞上 503 后进度条冻结数分钟、看似
+整个运行死掉"的问题（503 本来就在重试，但重试调度只记 DEBUG 日志，且退避期
+间进度条挂着假的 "✗ Failed" 标签）。
+
+### Added
+
+- **运行前 API 预检**：trans / paper / format 在花费任何 token 之前，对每个
+  (provider, model)（含 fallback 链；paper 含 full 模型）做一次微型真实调用
+  （~10 tokens，探测超时 10s）并打印结果表。失败时交互 TTY 询问继续/退出
+  （默认退出）；非交互/--quiet 警告后继续。可用 `--no-preflight` 或
+  `general.preflight_check: false`（env: `ASK_LLM_GENERAL_PREFLIGHT_CHECK`）
+  关闭。batch 沿用既有 `--skip-validation`（现同样受该配置开关控制），并修复
+  其误杀 ollama 等免 key provider 的问题。探测逻辑抽取为共享模块
+  `utils/preflight.py`（batch 校验与 CLI 预检共用一份实现）。
+- **重试实时汇报**：重试调度日志 DEBUG → WARNING，含任务号、第几次尝试、
+  失败类别/原因（截断 120 字符）与退避秒数；worker 进度条在重试期间显示
+  `↻ 第k/N次失败, 将重试: <原因>`，重发后显示 `Processing...(第k次尝试)`，
+  不再出现误导性的 "✗ Failed 100%" 冻结标签。
+- **部分失败 resume 提示**：trans 部分 chunk 失败（非中断）时明确打印
+  checkpoint 路径与 `--resume` 用法；notebook 失败时如实说明暂不支持
+  --resume。
+- **配置来源可见性**：新增两条 INFO 日志——`Provider runtime config
+  (providers.yml) loaded from: <路径>`（运行时 provider/model 目录的实际来源；
+  `~/.config/ask_llm/providers.yml` 的旧文件会静默遮蔽仓库/打包副本，导致
+  默认模型漂移）与 `Resolved provider/model: <provider>/<model>`（最终生效
+  组合）。pricing 与 runtime 配置走不同搜索链，此前只有 pricing 打印路径，
+  极易误导。
+
+### 行为变更（脚本/CI 需关注）
+
+- **batch 模型校验默认改为可被配置关闭**：`general.preflight_check: false`
+  等价于 batch 的 `--skip-validation`；其余命令的预检可用
+  `--no-preflight` 逐次跳过。
+- **免 key provider（ollama）在 batch 校验中改为真实探测**（此前直接以
+  "API key not configured" 拒绝）。
+- `BoundedRetryRunner` 的 `on_retry_scheduled` 回调签名从
+  `(task, result)` 扩为 `(task, result, backoff_seconds)`（内部 API，
+  全仓唯一调用方已同步）。
+
 ## 2.24.1 (2026-09-26)
 
 ### Changed

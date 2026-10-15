@@ -269,6 +269,13 @@ class TextFileTranslator:
 
         if outcome.interrupted:
             console.print_warning(f"翻译中断: 已保存进度到 {checkpoint_path}，使用 --resume 继续。")
+        elif failed_count > 0:
+            # Checkpoint is guaranteed present here (run_with_checkpoint only
+            # unlinks on a zero-failure run), so --resume re-runs just these.
+            console.print_warning(
+                f"部分分块失败({failed_count} 个): 进度已保存到 {checkpoint_path}，"
+                f"使用 --resume 可只重试失败分块；频繁 503/限流时可调高 translation.retries。"
+            )
 
         job_result = self.export_text_file(
             job,

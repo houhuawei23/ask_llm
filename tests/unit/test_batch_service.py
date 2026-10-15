@@ -360,7 +360,7 @@ class TestValidationAndSplit:
                 return True, "", 0.01
 
         with patch.object(ProviderAdapterCache, "get", return_value=_FakeAdapter()):
-            result = _validate_models(models, app_config, manager)
+            result = _validate_models(models, manager)
 
         assert len(result.validated) == 2
         # The shared manager must be untouched: no current-provider switch, no
@@ -454,7 +454,7 @@ class TestAudit56Validation:
         from ask_llm.services.batch_service import _validate_models
         from ask_llm.utils.provider_cache import ProviderAdapterCache
 
-        manager, app_config = self._app_config()
+        manager, _app_config = self._app_config()
         models = [
             ModelConfig(provider="openai", model="gpt-4"),
             ModelConfig(provider="openai", model="gpt-4o"),
@@ -471,7 +471,7 @@ class TestAudit56Validation:
                 return True, "", 0.01
 
         with patch.object(ProviderAdapterCache, "get", return_value=_FakeAdapter()):
-            result = _validate_models(models, app_config, manager)
+            result = _validate_models(models, manager)
 
         # First two models share the valid provider; the third hits "Provider
         # not found"? No — broken IS configured; all three validate.
@@ -485,7 +485,7 @@ class TestAudit56Validation:
         from ask_llm.services.batch_service import _validate_models
         from ask_llm.utils.provider_cache import ProviderAdapterCache
 
-        manager, app_config = self._app_config()
+        manager, _app_config = self._app_config()
         models = [ModelConfig(provider="broken", model="bm")]
 
         class _DeadAdapter:
@@ -493,7 +493,7 @@ class TestAudit56Validation:
                 return False, "connection refused", 5.0
 
         with patch.object(ProviderAdapterCache, "get", return_value=_DeadAdapter()):
-            result = _validate_models(models, app_config, manager)
+            result = _validate_models(models, manager)
 
         assert result.validated == []
         assert result.skipped == ["broken/bm"]
@@ -505,3 +505,35 @@ class TestAudit56Validation:
         validation = _ValidationResult(validated=[ModelConfig(provider="p", model="m")])
         assert validation.validated
         assert validation.skipped == []
+
+
+def test_validate_models_probes_keyless_provider():
+    """ollama-style keyless providers are probed, not rejected for the key."""
+    from ask_llm.config.manager import ConfigManager
+    from ask_llm.core.models import AppConfig, ProviderConfig
+    from ask_llm.services.batch_service import _validate_models
+    from ask_llm.utils.provider_cache import ProviderAdapterCache
+
+    app_config = AppConfig(
+        default_provider="ollama",
+        providers={
+            "ollama": ProviderConfig(
+                api_provider="ollama",
+                api_key="",
+                api_base="http://localhost:11434/v1",
+                models=["llama3"],
+            ),
+        },
+    )
+    manager = ConfigManager(app_config)
+    models = [ModelConfig(provider="ollama", model="llama3")]
+
+    class _FakeAdapter:
+        def test_connection(self):
+            return True, "", 0.01
+
+    with patch.object(ProviderAdapterCache, "get", return_value=_FakeAdapter()):
+        result = _validate_models(models, manager)
+
+    assert len(result.validated) == 1
+    assert result.skipped == []
