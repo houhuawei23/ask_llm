@@ -19,13 +19,23 @@ EXTENSION_TO_FORMAT: dict[str, str] = {
 }
 
 
-def detect_export_format(output_path: str, *, default: str = "json") -> str:
+def detect_export_format(output_path: str, *, default: str = "json", strict: bool = False) -> str:
     """Detect output format from file extension.
 
     Args:
         output_path: Output file path.
         default: Format returned when the extension is unknown/absent
             (batch uses ``"json"``; translation uses ``"text"``).
+
+    Raises:
+        ValueError: When ``strict`` is set and the extension (if any) is not a
+            known export extension (batch auto-detection behavior, audit 4.5).
     """
     suffix = Path(output_path).suffix.lower()
-    return EXTENSION_TO_FORMAT.get(suffix, default)
+    fmt = EXTENSION_TO_FORMAT.get(suffix, default)
+    if strict and suffix and EXTENSION_TO_FORMAT.get(suffix) is None:
+        raise ValueError(
+            f"Cannot infer output format from extension '{suffix}' of "
+            f"'{output_path}'. Pass --format explicitly."
+        )
+    return fmt

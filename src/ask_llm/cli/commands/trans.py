@@ -8,31 +8,15 @@ from typing import Annotated
 import typer
 from loguru import logger
 
-try:
-    from ask_llm.utils import (
-        engine_facade as _engine_facade,  # noqa: F401 — fail fast if engine missing
-    )
-except ImportError:
-    from ask_llm.utils.console import console
-
-    console.print_error(
-        "llm_engine is required but not installed. Please install it with: pip install llm-engine"
-    )
-    raise
-
+from ask_llm.cli.common import paid_command_prelude
 from ask_llm.cli.errors import cli_errors
-from ask_llm.config.cli_session import (
-    bootstrap_command,
-    gate_api_key_or_exit,
-    preflight_or_exit,
-    resolve_and_prepare,
-)
+from ask_llm.config.cli_session import preflight_or_exit
+from ask_llm.core.constants import MAX_CONCURRENCY
 from ask_llm.services.translation_service import (
     TranslationOptions,
     TranslationService,
 )
 from ask_llm.utils.console import console
-from ask_llm.utils.fallback_chain import model_config_with_fallback
 from ask_llm.utils.path_resolver import resolve_trans_input_paths
 
 
@@ -62,7 +46,9 @@ def trans(
         typer.Option(
             "--target-lang",
             "-t",
-            help="Target language code (from default_config.yml if not set)",
+            help="Target language code (from default_config.yml if not set). "
+            "Note: in trans, -t/-T/-s mean target-lang/threads/source-lang — "
+            "other commands use them for temperature/type/system.",
         ),
     ] = None,
     source_lang: Annotated[
@@ -80,7 +66,7 @@ def trans(
             "-T",
             help="Max concurrent API calls per file (from default_config.yml if not set)",
             min=1,
-            max=100,
+            max=MAX_CONCURRENCY,
         ),
     ] = None,
     max_parallel_files: Annotated[
@@ -89,7 +75,7 @@ def trans(
             "--max-parallel-files",
             help="Max files to translate in parallel (default: 3)",
             min=1,
-            max=50,
+            max=MAX_CONCURRENCY,
         ),
     ] = None,
     retries: Annotated[
@@ -160,7 +146,7 @@ def trans(
         typer.Option(
             "--providers-pricing",
             help="Path to providers.yml (pricing_per_million_tokens). "
-            "Default search: ASK_LLM_PROVIDERS_YML, ./providers.yml, package root, ~/.config/ask_llm/providers.yml",
+            "Default search: ASK_LLM_PROVIDERS_YML, package root, ~/.config/ask_llm/providers.yml",
         ),
     ] = None,
     no_balance_chunks: Annotated[
@@ -176,6 +162,20 @@ def trans(
             "--max-chunk-tokens",
             help="Max estimated body tokens per chunk after rebalance (default: config)",
             min=256,
+        ),
+    ] = None,
+    temperature: Annotated[
+        float | None,
+        typer.Option(
+            "--temperature",
+            help="Sampling temperature override (E4/2.25; default: config translation.temperature)",
+        ),
+    ] = None,
+    include_original: Annotated[
+        bool | None,
+        typer.Option(
+            "--include-original/--no-include-original",
+            help="Keep the original text next to each translated chunk (E4/2.25; default: config)",
         ),
     ] = None,
     skip_api_key_check: Annotated[
@@ -201,26 +201,26 @@ def trans(
         ),
     ] = None,
     resume: Annotated[
-        bool,
+        str | None,
         typer.Option(
-            "--resume/--no-resume",
-            help="Resume translation from per-file checkpoints (default: False)",
+            "--resume",
+            is_flag=False,
+            flag_value="",
+            help=(
+                "Resume translation from per-file checkpoints. Takes no value "
+                "here (checkpoints live next to each output file); only "
+                "batch/format accept an explicit --resume PATH."
+            ),
         ),
-    ] = False,
+    ] = None,
     dry_run: Annotated[
         bool,
         typer.Option(
             "--dry-run",
+            "-n",
             help="Estimate chunks, tokens and cost without any API call",
         ),
     ] = False,
-    fallback: Annotated[
-        bool,
-        typer.Option(
-            "--fallback/--no-fallback",
-            help="Enable fallback to alternate providers/models on failure",
-        ),
-    ] = True,
     no_preflight: Annotated[
         bool,
         typer.Option(
@@ -256,30 +256,26 @@ def trans(
     _t0 = time.perf_counter()
     try:
         with cli_errors("trans"):
-            (
-                load_result,
-                config_manager,
-                pricing_map,
-                pricing_source,
-            ) = bootstrap_command(
+            prelude = paid_command_prelude(
                 config,
+                provider=provider,
+                model=model,
+                temperature=lambda lr: lr.unified_config.translation.temperature,
                 pricing_path=providers_pricing,
+                skip_api_key_check=skip_api_key_check or dry_run,
             )
-            trans_cfg = load_result.unified_config.translation
+            trans_cfg = prelude.load_result.unified_config.translation
 
-            final_provider, final_model = resolve_and_prepare(
-                config_manager,
-                cli_provider=provider,
-                cli_model=model,
-                temperature=trans_cfg.temperature,
-            )
-            gate_api_key_or_exit(
-                config_manager,
-                final_provider,
-                skip_api_key_check=skip_api_key_check,
-            )
+            if resume:
+                console.print_error(
+                    "--resume for trans takes no value (per-file checkpoints "
+                    "are auto-named next to each output file)."
+                )
+                raise typer.Exit(2)
+            resume_enabled = resume is not None
 
             if dry_run:
+                from ask_llm.core.translator import Translator
                 from ask_llm.services.dry_run import estimate_translation_run
 
                 input_paths = resolve_trans_input_paths(
@@ -290,25 +286,30 @@ def trans(
                 if not input_paths:
                     console.print_error("No input files matched.")
                     raise typer.Exit(1)
+                # M10/2.25: the glossary widens the prompt and shrinks the
+                # chunk budget — the dry run must size chunks the same way the
+                # paid run does.
+                glossary_pairs = Translator.load_glossary(glossary) if glossary else []
                 dry_report = estimate_translation_run(
                     input_paths,
-                    final_model,
-                    final_provider,
+                    prelude.model,
+                    prelude.provider,
                     target_language=target_lang or trans_cfg.target_language,
                     source_language=trans_cfg.source_language
                     if source_lang is None
                     else source_lang,
                     style=trans_cfg.style,
                     prompt_file=prompt_file,
+                    glossary_pairs=glossary_pairs,
                     max_chunk_tokens=(
                         max_chunk_tokens
                         if max_chunk_tokens is not None
                         else trans_cfg.max_chunk_tokens
                     ),
                     balance_chunks=trans_cfg.balance_translation_chunks and not no_balance_chunks,
-                    pricing_map=pricing_map,
+                    pricing_map=prelude.pricing_map,
                 )
-                for line in dry_report.render(pricing_source=pricing_source):
+                for line in dry_report.render(pricing_source=prelude.pricing_source):
                     console.print(line)
                 return
 
@@ -322,19 +323,10 @@ def trans(
                 raise typer.Exit(1)
 
             # Pre-run API health gate (after dry-run: estimation never touches
-            # the network). Probes the resolved provider/model plus the whole
-            # fallback chain so a dead fallback surfaces before it is needed.
-            primary, fallbacks = model_config_with_fallback(
-                final_provider,
-                final_model,
-                temperature=trans_cfg.temperature,
-                max_tokens=trans_cfg.max_output_tokens,
-                app_config=load_result.app_config,
-                use_fallback=fallback,
-            )
+            # the network).
             preflight_or_exit(
-                config_manager,
-                [(primary.provider, primary.model)] + [(f.provider, f.model) for f in fallbacks],
+                prelude.config_manager,
+                [(prelude.provider, prelude.model)],
                 command="trans",
                 skip=no_preflight,
             )
@@ -357,23 +349,23 @@ def trans(
                 ),
                 max_output_tokens=trans_cfg.max_output_tokens,
                 preserve_format=preserve_format,
-                include_original=trans_cfg.include_original,
-                temperature=trans_cfg.temperature,
+                include_original=(
+                    include_original if include_original is not None else trans_cfg.include_original
+                ),
+                temperature=temperature if temperature is not None else trans_cfg.temperature,
                 translatable_extensions=trans_cfg.translatable_extensions,
                 recursive_dir=trans_cfg.recursive_dir,
                 prompt_file=prompt_file,
-                resume=resume,
-                use_fallback=fallback,
+                resume=resume_enabled,
             )
 
             service = TranslationService(
-                config_manager=config_manager,
-                unified_config=load_result.unified_config,
-                provider=final_provider,
-                model=final_model,
-                pricing_map=pricing_map,
-                pricing_source=pricing_source,
-                app_config=load_result.app_config,
+                config_manager=prelude.config_manager,
+                unified_config=prelude.load_result.unified_config,
+                provider=prelude.provider,
+                model=prelude.model,
+                pricing_map=prelude.pricing_map,
+                pricing_source=prelude.pricing_source,
             )
 
             session_result = service.translate_files(

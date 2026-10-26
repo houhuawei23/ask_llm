@@ -1,71 +1,220 @@
 # Changelog
 
-## 2.25.1 (unreleased)
+## 2.28.0 (unreleased)
 
-修复"在仓库目录外运行 `ask-llm trans` 就卡死、在仓库目录内却正常"的问题：根因不在
-翻译逻辑，而在 `llm_engine` 按**当前工作目录**查找 `providers.yml`。在仓库目录内运行时
-`./providers.yml` 恰好存在，`reasoning: false` 生效（DeepSeek thinking 模型收到
-`thinking: {"type": "disabled"}`，正文 2 秒内开始流式返回）；换到别的目录后该文件
-找不到，逐模型元数据（`reasoning` / `token_per_character` / `functions.json_output`）
-全部静默丢失，thinking 保持开启，模型先吐 30–170s+ 的 `reasoning_content`。翻译/格式化
-流水线不消费 reasoning，进度条便停在 "Processing... 0%" 看似死锁（极端情况还会烧光
-`max_tokens`、返回空正文）。
-
-### Fixed
-
-- **模型元数据不再随工作目录漂移**：新增
-  `engine_facade.bind_engine_providers_yml()`，在创建 provider adapter 之前把
-  `llm_engine.config_loader.load_providers_config` 的默认路径固定为 ask_llm 已解析的
-  **运行时** providers.yml（`ASK_LLM_PROVIDERS_YML` > `~/.config/ask_llm/providers.yml`
-  > 打包副本；cwd 从不参与）。显式传 `config_path` 的调用不受影响；绑定幂等，找不到
-  运行时目录时退回引擎原有搜索并打印 WARNING。`ask` / `chat` / `format` / `paper` /
-  `trans` 与预检走同一个 adapter 入口，因此一并修复。
-- **`config.providers_catalog.resolved_runtime_providers_yml()`**：暴露"最终生效的
-  运行时 providers.yml 路径"，作为上述绑定与诊断的单一来源。
-- 回归测试：`tests/unit/test_engine_catalog_binding.py`（cwd 中放一份相冲突的
-  providers.yml，断言引擎仍读到运行时目录的 `reasoning: false`，且请求 payload 带上
-  `thinking: disabled`）。
-
-## 2.25.0 (2026-10-15)
-
-API 预检 + 重试全程可见：修复"单个 chunk 撞上 503 后进度条冻结数分钟、看似
-整个运行死掉"的问题（503 本来就在重试，但重试调度只记 DEBUG 日志，且退避期
-间进度条挂着假的 "✗ Failed" 标签）。
+合并 upstream 的 2.26.0（架构重构、fallback 栈删除）与 2.27.0（litellm 迁移）
+之后，把 2.25.0 的"运行前 API 预检 + 重试全程可见"重新落到重构后的四管线骨架
+之上；DeepSeek 门控元数据改读运行时 `providers.yml`，彻底消除"换个目录运行
+`ask-llm trans` 就卡死"的工作目录依赖。
 
 ### Added
 
-- **运行前 API 预检**：trans / paper / format 在花费任何 token 之前，对每个
-  (provider, model)（含 fallback 链；paper 含 full 模型）做一次微型真实调用
-  （~10 tokens，探测超时 10s）并打印结果表。失败时交互 TTY 询问继续/退出
-  （默认退出）；非交互/--quiet 警告后继续。可用 `--no-preflight` 或
-  `general.preflight_check: false`（env: `ASK_LLM_GENERAL_PREFLIGHT_CHECK`）
-  关闭。batch 沿用既有 `--skip-validation`（现同样受该配置开关控制），并修复
-  其误杀 ollama 等免 key provider 的问题。探测逻辑抽取为共享模块
-  `utils/preflight.py`（batch 校验与 CLI 预检共用一份实现）。
-- **重试实时汇报**：重试调度日志 DEBUG → WARNING，含任务号、第几次尝试、
-  失败类别/原因（截断 120 字符）与退避秒数；worker 进度条在重试期间显示
+- **运行前 API 预检**：trans / paper / format 在花费任何 token 之前，对实际会
+  用到的 (provider, model) 做一次微型真实调用（~10 tokens，探测超时 10s）并
+  打印结果表。失败时交互 TTY 询问继续/退出（默认退出）；非交互 / `--quiet`
+  警告后继续。可用 `--no-preflight` 或 `general.preflight_check: false`
+  （env: `ASK_LLM_GENERAL_PREFLIGHT_CHECK`）关闭。batch 沿用既有
+  `--skip-validation`（现同样受该配置开关控制），并修复其误杀 ollama 等免 key
+  provider 的问题。探测逻辑在 `utils/preflight.py`（batch 校验与 CLI 预检共用）。
+- **重试实时汇报**：重试调度日志 DEBUG → WARNING，含任务号、第几次尝试、失败
+  类别/原因（截断 120 字符）与退避秒数；worker 进度条在重试期间显示
   `↻ 第k/N次失败, 将重试: <原因>`，重发后显示 `Processing...(第k次尝试)`，
   不再出现误导性的 "✗ Failed 100%" 冻结标签。
 - **部分失败 resume 提示**：trans 部分 chunk 失败（非中断）时明确打印
-  checkpoint 路径与 `--resume` 用法；notebook 失败时如实说明暂不支持
-  --resume。
+  checkpoint 路径与 `--resume` 用法；notebook 失败时如实说明暂不支持 --resume。
 - **配置来源可见性**：新增两条 INFO 日志——`Provider runtime config
-  (providers.yml) loaded from: <路径>`（运行时 provider/model 目录的实际来源；
-  `~/.config/ask_llm/providers.yml` 的旧文件会静默遮蔽仓库/打包副本，导致
-  默认模型漂移）与 `Resolved provider/model: <provider>/<model>`（最终生效
-  组合）。pricing 与 runtime 配置走不同搜索链，此前只有 pricing 打印路径，
-  极易误导。
+  (providers.yml) loaded from: <路径>` 与 `Resolved provider/model:
+  <provider>/<model>`。pricing 与 runtime 配置走不同搜索链，此前只有 pricing
+  打印路径，极易误导。
+
+### Changed
+
+- **预检只探测实际使用的端点**：2.26 删除了 fallback 栈与 `--fallback` 标记，
+  预检随之去掉了 fallback 链探测；paper 在 `--run full/all` 时仍追加
+  `full_model`（未配置则回退 `PaperConfig().full_model`，与 PaperService 的解析
+  完全一致）。
+- **batch 校验与 CLI 预检同一实现**：`batch_service._validate_models` 改为调用
+  `utils/preflight.check_provider_pair`（`config_manager` 为唯一配置来源，仍不做
+  任何 manager 变更）。
+- **DeepSeek 门控读运行时目录**：`provider_adapter._deepseek_model_entry` 改用
+  `runtime_providers_yml_paths()`（排除 cwd）——cwd 里一份不相干的
+  `providers.yml` 不能再把 `reasoning: false` 挡住、重新打开 thinking。
+- **`TaskExecutor`** 同时接受注入的 `rate_limiter`（2.26 的显式注入）与
+  `max_retries`（2.25 的重试感知进度标签）；进度条的重试判定改用
+  `error_keywords.is_retryable_error`（`retry_policy` 已随重构删除）。
+- **2.25.1 的 `llm_engine` 绑定补丁作废**：2.27.0 已移除 `llm-api-engine`，
+  "引擎按 cwd 找 providers.yml" 这个根因不复存在，`bind_engine_providers_yml`
+  与 `config.providers_catalog.resolved_runtime_providers_yml` 及其回归测试随
+  本次合并删除。
 
 ### 行为变更（脚本/CI 需关注）
 
 - **batch 模型校验默认改为可被配置关闭**：`general.preflight_check: false`
-  等价于 batch 的 `--skip-validation`；其余命令的预检可用
-  `--no-preflight` 逐次跳过。
+  等价于 batch 的 `--skip-validation`；其余命令的预检可用 `--no-preflight`
+  逐次跳过。
 - **免 key provider（ollama）在 batch 校验中改为真实探测**（此前直接以
   "API key not configured" 拒绝）。
-- `BoundedRetryRunner` 的 `on_retry_scheduled` 回调签名从
-  `(task, result)` 扩为 `(task, result, backoff_seconds)`（内部 API，
-  全仓唯一调用方已同步）。
+- `BoundedRetryRunner` 的 `on_retry_scheduled` 回调签名从 `(task, result)`
+  扩为 `(task, result, backoff_seconds)`。
+- `--fallback/--no-fallback` 标记随 fallback 栈删除，trans/paper/batch 不再接受。
+
+## 2.27.0 (2026-09-29)
+
+移除对个人包 `llm-api-engine`（导入名 `llm_engine`）的依赖，LLM 调用改由
+litellm（`>=1.63.0,<2.0.0`）+ 自研适配器 `ask_llm.core.provider_adapter` 承担。
+上游 llm-engine 仓库 HEAD 已是 v0.3.0 破坏性重写（公开 API 全变），任何新的源码
+安装都会装坏本项目——本次迁移同时拆掉了 CI 源码安装这颗定时炸弹。788 测试全绿。
+
+### 行为变更（脚本/CI 需关注）
+
+- **依赖**：`llm-api-engine` 与直接声明 `openai` 均从 pyproject 移除（src 零直接
+  openai 导入，litellm 自带）；CI 删除三处 llm-engine 源码安装步骤与
+  `LLM_ENGINE_REF` 钉子，`pip install -e ".[dev]"` 即可。
+- **错误消息片段逐字保留**：`API authentication failed.` / `API rate limit
+  exceeded.` / `API error: …  (model=…, max_tokens=…)` / `API call failed: …` /
+  流中 `Stream failed: …`——`error_keywords.py` 分类零改动。
+- **DeepSeek 门控不变**：目录 `reasoning: false` ⇒ `extra_body thinking:disabled`
+  （litellm 会丢弃顶层 disabled thinking，必须走 extra_body，已实证）；
+  `functions.json_output` + 提示词嗅探 ⇒ `response_format json_object`。门控仍在
+  适配器构造时按默认模型冻结。
+- **Ollama 走 OpenAI 兼容端点**（`openai/` 前缀 + 原 api_base，含 `/v1`），与此前
+  线上行为精确一致；litellm 原生 `ollama/` 前缀路由到 `/api/generate`，不采用。
+- **llm 调用重试仍归 BoundedRetryRunner**：litellm 侧固定 `num_retries=0`。
+- **`engine_facade.EngineConfigView` 删除**（SecretStr 解包移入适配器内部）；facade
+  公开 API（`create_engine_adapter` / `load_engine_providers_config`）签名不变。
+- base_url 目录回退改走 ask_llm 自有 providers.yml 读取器（仅运行时路径，排除
+  cwd——该回退会携带已解析的 API key）。
+
+### Added
+
+- **真实 token usage 优先**：非流式响应带 usage 时，`RequestMetadata` 的
+  input/output token 数直接采用 API 上报值（含 DeepSeek cache-hit 计数），无
+  usage 时回退本地估算；流式路径维持估算（stream_options 兼容性不齐，不在本次范围）。
+- 适配器不再按调用变异共享配置（修复旧引擎按 call 改写 provider config 的线程
+  安全隐患），并提供真实 `close()`（适配器缓存回收走第一分支）。
+
+### 内部
+
+- **并发流式修复（litellm#14852 类竞态）**：litellm 1.82.6 的共享缓存 httpx 客户端
+  在多线程同步流式冷启动时竞态——首波并发流的 socket 被同伴的清理逻辑关闭，
+  `httpcore read` 报 `[Errno 9] Bad file descriptor`（实测 7 并发仅 1/7 成功，重试后
+  全过但浪费输入计费与 40-110s）。适配器改为**每次调用传独立 `HTTPHandler`**
+  （`client=` 参数透传到 custom_httpx 路径），无共享连接池可竞态——实测 7/7 成功；
+  流结束/中止/异常时关闭，litellm 内部结构变动时优雅回退其默认客户端。
+  每次调用多一次 TCP+TLS 握手（~0.2s，相对秒级 LLM 调用可忽略）。
+- litellm 懒导入：`core/provider_adapter.py::_litellm` 是全库唯一 `import litellm`
+  处，导入前设 `LITELLM_LOCAL_MODEL_COST_MAP=True` 避免联网拉取 cost map（实测
+  litellm 导入 ~2.6s，不能进 CLI 启动路径）；`suppress_debug_info` 静默升级提示。
+- 新增 `tests/unit/test_provider_adapter.py`（模型串映射、参数组装、reasoning
+  流/非流提取、usage、门控真值表、错误片段、懒加载、per-call client 生命周期等
+  ~70 例）；`test_engine_facade.py` 重写（清除对 `llm_engine.config_loader` 的活引用）。
+- **litellm 1.103.0 兼容性实测通过**（隔离 venv + 主环境双验）：异常层级
+  （`lit.openai.APIError`、伪 key 仍为 BadRequestError——与 1.82.6 一致）、
+  `llms.custom_httpx.HTTPHandler` 内部路径、`client=` 透传、reasoning_content 流式、
+  真实 usage、7 并发冷启动（1.103 共享客户端本身已不复现该竞态，per-call client
+  保留作为跨版本防护）。全量 794 测试通过，CLI 启动 0.22s 不受影响。
+
+## 2.25.0 (2026-09-23)
+
+三路并行深度审计（核心管线 / 服务+CLI / 配置+测试+项目健康度）后的系统性修复
+与增强，分 6 个阶段落地。753 测试全绿。
+
+### 行为变更（脚本/CI 需关注）
+
+- **checkpoint digest 纳入采样参数**（L2）：temperature/top_p/max_tokens 变更
+  后旧 checkpoint 会拒绝 resume（digest 不匹配，提示删除后重跑）——这是安全
+  失败，避免换参数后静默沿用旧结果。
+
+### Added
+
+- **ask `--max-tokens`**（E1）：单次请求可显式限制补全 token 数。
+- **ask `-o` 输出包含 reasoning**（E2）：`--include-reasoning` 时文件输出附加
+  reasoning 段落（此前仅控制台显示，文件模式静默丢失）。
+- **format `--dry-run`**（E3）：复用真实分块/标题批次逻辑估算 chunk、请求数与
+  成本，零网络调用；trans/batch 的 `--dry-run` 补充 `-n` 短别名（E7）。
+- **trans `--temperature` / `--include-original`**（E4）：原配置项提升为 CLI
+  旗标，可覆盖配置。
+- **batch `--providers-pricing`**（E5）：与 trans/paper 一致的定价目录覆盖。
+- **diagnose 成本估算**（E6）：按 provider/model 显示执行报告的预估成本。
+- **format --resume 忽略位置参数时给出警告**（E8）。
+- **paper 失败消息带 section 名并提示重试命令**（E9/E11）；paper dry-run 采用
+  `OUTPUT_TOKEN_MULTIPLIERS` 输出倍率，full 作业按 full_model 计价。
+- **paper --resume 索引错位检测**（E10）：输出存在但编号全不匹配时警告流水线
+  或过滤条件已变更。
+- **`config init --yes`**（L12）：非交互环境可覆盖已有模板，不再死于 Abort。
+
+### 次要修复与清理
+
+- 格式化标题 docstring 默认值更正（160/8，L7）；trans 会话计数去冗余（L8）。
+- **appendix 输出文件名保留数字序号前缀**（L9）：与其它作业类型的文档顺序
+  命名契约一致，排序与按索引 resume 不再被打乱。
+- **trans 输入扩展名分级**（L10）：显式传入已知二进制文件（.png/.pdf/.zip 等）
+  现在明确跳过并提示；未知类文本扩展名警告后保留（宽松契约不变）。
+- 流式延迟计时改用 `time.perf_counter()`（L4），不受系统时钟跳变影响。
+- 文档同步（L11）：README 命令表补 `format` 与 2.24/2.25 特性；paper 并发
+  默认值三处漂移收敛；providers.yml 搜索顺序说明更正（2.23 起无 cwd）；
+  pyproject 移除从未使用的依赖（litellm、prompt-toolkit、pydantic-settings）
+  与过时 mypy override。
+
+### Fixed
+
+- **配置错误可见性**（M17）：YAML 根非映射时不再静默当空配置（改为警告）；
+  未设置的 `${VAR}` 占位符从 DEBUG 提升为警告；空 providers 表给出明确错误
+  而非裸 StopIteration；`config get` 区分"键不存在"与"值为 None"，且
+  translation/format 等 unified 段的键现在可查询。
+- **全局 default_model 从 default_provider 推导**（M18）：`default_provider:
+  ollama` 的用户不再拿到字典序首个 provider（deepseek）的模型名。
+- **format --resume 摘要检查覆盖当前参数**（M7）：此前 digest 由 checkpoint 自身
+  存储的 model/prompt/预算重算，只能检出源文件变更——换了 `--model` 或 prompt
+  后恢复会静默用新设置重试失败块。现在用当前运行的参数计算，不匹配即拒绝。
+- **format 顺序路径单文件错误不再中止整个运行**（M9）：与并行路径一致，单文件
+  异常计入失败并继续处理剩余文件。
+- **标题截断改为取尾部**（M8）：模型在真实标题前输出注释/回显时，非上下文批次
+  从头部截断会丢弃真实标题、保留噪声；现在与上下文批次一致取最后 N 个。
+- **ask -o 与 chat -i 的 `~` 展开**（M12/L5）：`ask -i '~/x.md' -o out.md` 不再
+  在 cwd 创建字面 `./~/` 目录；`chat -i '~/ctx.md'` 不再报文件不存在。
+- **chat 首条回复失败回写模板化消息**（M14）：回退写入的用户消息与成功路径的
+  种子消息一致（此前写入未模板化的原始上下文）。
+- **chat 流式回复容忍纯字符串返回**（M15）：provider 返回 `str` 时不再逐字符
+  打印。
+- **`!!` 不再重复刚被拒绝的命令**（M16）：shell 命令仅在元字符校验通过后记录。
+- **RuntimeError 错误前缀不再误导**（L6）：仅 API 来源的错误加 "API error:"
+  前缀，服务层的恢复拒绝/写入失败等直接显示原始消息。
+- **chunk span 不再漂移**（M2）：句子组分句先 strip 内容却按未 strip 长度记
+  span；预算强制阶段又从内容长度累加重建所有位置——两者都让 FormatCheckpoint
+  持久化的 span 偏离真实文本。现在未超限 chunk 透传原 span，hard-split 片段在
+  父内容内精确定位（`locate_pieces` 从 chunk_balance 上移共享），不变量
+  `original[start:end] == content` 对所有切分路径成立。
+- **JSON payload 转义跟踪**（M4）：`\\"`（转义反斜杠+真闭引号）曾被误判为转义
+  引号，导致后续转义修复全错；现在按前导反斜杠计数判断。字符串内的任意 C0
+  控制字符（不再只有 \n\r\t）都会替换为 JSON 转义。
+- **证书/代理配置错误不再无限重试**（M6）："connection failed: invalid SSL
+  certificate" 曾因宽泛的 "connection" 瞬态关键词被反复重试；终态关键词
+  （ssl/certificate/proxy 等）现在对重试判定具有优先权。
+- **trans --dry-run 支持 notebook 与 glossary**（M10）：.ipynb 此前被静默跳过
+  （报告 0 文件 0 token 直接 exit 0），glossary 也未参与估算——现在 dry-run
+  走与付费运行相同的 notebook 分块管线（`plan_notebook_translation` 共享
+  helper）并计入 glossary。
+- **notebook 翻译尊重 glossary**（M11）：`--glossary` 此前对 .ipynb 静默失效。
+- **trans --resume 导出不再误报冲突**（H1）：resume 运行合法覆盖上一次的部分
+  导出——此前预检豁免了 resume，但导出时的存在性检查没有豁免，导致补完剩余
+  chunk 后死于 "Output file already exists"。
+- **batch 多 lane 运行 checkpoint 竞态**（H2）：`on_result` 会被多个 lane 工作
+  线程并发调用，merge/计数/保存之间无锁，可能丢失结果甚至序列化崩溃；现已用
+  锁将 merge + save 原子化。
+- **checkpoint merge 幂等 + O(n) 查重**（M1）：`completed_task_ids` 改为 set，
+  重复 merge 不再复制 result 条目（此前只去重 id、result 无条件 append）。
+- **大任务 checkpoint 保存成本**（M3）：增量保存间隔随 checkpoint 大小增长
+  （[10, 50] 有界），千 chunk 级翻译不再每 10 条全量重写大 JSON。
+- **翻译导出与执行报告原子写**（M13）：text/markdown/JSON 导出与
+  `--report` JSON 均改为 tmp+fsync+rename 原子写；报告写入自动创建父目录。
+- **worker 异常不再丢弃已完成结果**（L1）：异常传播时已收集的部分结果挂在
+  `exc.partial_results` 上，调用方可汇报已完成部分。
+- **批处理排序逻辑单一来源**（M5）：删除 `batch_models` 中已漂移的死排序函数，
+  抽出 `estimate_batch_task_tokens` 供排序与进度元数据共享（每任务仅 tokenize
+  一次）。
+- **ask 输入路径校验错误逃逸错误处理**（H3）：`validate_input_source` 移入
+  `cli_errors` 块内，不存在的输入文件现在输出干净的 CLI 错误而非裸 traceback。
 
 ## 2.24.1 (2026-09-26)
 

@@ -6,8 +6,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from ask_llm.core.error_keywords import ErrorCategory
 from ask_llm.core.models import RequestMetadata
-from ask_llm.core.telemetry import ErrorCategory
 from ask_llm.utils.prompt_resolver import expand_prompt
 from ask_llm.utils.token_counter import TokenCounter
 
@@ -30,6 +30,22 @@ class ModelConfig(BaseModel):
     top_p: float | None = Field(default=None, ge=0.0, le=1.0)
     max_tokens: int | None = Field(default=None, gt=0)
 
+    def provider_overrides(self) -> dict[str, Any]:
+        """Return the ProviderConfig field overrides this config implies.
+
+        Single definition of the ModelConfig → ProviderConfig override
+        mapping (adapter caches, validation probes and config tests all use
+        it), so the fields can never drift apart again.
+        """
+        overrides: dict[str, Any] = {}
+        if self.temperature is not None:
+            overrides["api_temperature"] = self.temperature
+        if self.max_tokens is not None:
+            overrides["max_tokens"] = self.max_tokens
+        if self.top_p is not None:
+            overrides["api_top_p"] = self.top_p
+        return overrides
+
 
 class BatchTask(BaseModel):
     """A single batch processing task."""
@@ -39,23 +55,24 @@ class BatchTask(BaseModel):
     content: str
     output_filename: str | None = None  # Optional output filename for split mode
     model_settings: ModelConfig | None = None  # Optional per-task model configuration
-    fallback_model_configs: list[ModelConfig] = Field(
-        default_factory=list,
-        description="Ordered list of fallback provider/model configs to try on failure",
-    )
-    task_kind: Literal["translation_chunk", "paper_explain"] = "translation_chunk"
+    # Value set MUST stay aligned with TaskKind in constants.py so
+    # estimate_output_tokens can look up multipliers without error fallbacks.
+    task_kind: Literal["translation", "paper_explain"] = "translation"
     return_reasoning: bool = False
 
 
-def sort_batch_tasks_by_estimated_input(
+def estimate_batch_task_tokens(
     tasks: list[BatchTask],
     default_model: str,
-) -> list[BatchTask]:
-    """
-    Sort tasks by descending estimated full prompt tokens.
+) -> list[tuple[BatchTask, int]]:
+    """Estimate each task's full prompt tokens, tokenizing each task once.
 
-    When concurrent workers are fewer than tasks, heavy requests start earlier and reduce
-    wall-clock tail latency.
+    M5/2.25: single source of truth for longest-first batch ordering — the
+    previously dead ``sort_batch_tasks_by_estimated_input`` duplicated the
+    inline estimate-and-sort in ``batch_processor.process_global_tasks`` and
+    had already drifted (it re-encoded per call instead of tokenizing once,
+    M11). Callers sort the returned pairs themselves and may reuse the
+    estimates for progress metadata.
     """
 
     def _estimate(t: BatchTask) -> int:
@@ -63,7 +80,7 @@ def sort_batch_tasks_by_estimated_input(
         full = expand_prompt(t.prompt, t.content)
         return int(TokenCounter.estimate_tokens(full, model)["token_count"])
 
-    return sorted(tasks, key=_estimate, reverse=True)
+    return [(t, _estimate(t)) for t in tasks]
 
 
 class AttemptRecord(BaseModel):
@@ -133,9 +150,9 @@ class BatchResult(BaseModel):
     attempt_history: list[AttemptRecord] = Field(
         default_factory=list,
         description=(
-            "Preceding attempts for this task (e.g. earlier configs in a fallback "
-            "chain). Flat AttemptRecords, never the final result itself, so the "
-            "object graph stays acyclic."
+            "Preceding attempts for this task (retry history). Flat "
+            "AttemptRecords, never the final result itself, so the object "
+            "graph stays acyclic."
         ),
     )
     timestamp: datetime = Field(default_factory=datetime.now)
@@ -159,8 +176,25 @@ class BatchResult(BaseModel):
                 "top_p": self.model_settings.top_p,
             },
             "response": self.response,
+            "reasoning": self.reasoning,
             "status": self.status.value,
             "error": self.error,
+            "error_category": self.error_category.value if self.error_category else None,
+            "throttled": self.throttled,
+            "attempt_history": [
+                {
+                    "provider": a.provider,
+                    "model": a.model,
+                    "status": a.status.value,
+                    "error": a.error,
+                    "error_category": a.error_category.value if a.error_category else None,
+                    "latency": a.latency,
+                    "input_tokens": a.input_tokens,
+                    "output_tokens": a.output_tokens,
+                    "timestamp": a.timestamp.isoformat(),
+                }
+                for a in self.attempt_history
+            ],
             "metadata": {
                 "provider": self.metadata.provider,
                 "model": self.metadata.model,

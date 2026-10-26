@@ -1,7 +1,7 @@
 """Unit tests for ask_llm.utils.engine_facade.
 
-EngineConfigView SecretStr unwrapping / repr masking, and parameter routing of
-``create_engine_adapter`` (the underlying llm_engine call is mocked).
+Facade delegation to the litellm-backed adapter, and the providers.yml
+catalog fallback (success / failure paths). The adapter itself is mocked.
 """
 
 from __future__ import annotations
@@ -12,7 +12,6 @@ from pydantic import SecretStr
 
 from ask_llm.core.models import ProviderConfig
 from ask_llm.utils.engine_facade import (
-    EngineConfigView,
     create_engine_adapter,
     load_engine_providers_config,
 )
@@ -33,77 +32,55 @@ def make_provider_config() -> ProviderConfig:
     )
 
 
-class TestEngineConfigView:
-    def test_unwraps_secret_str_exactly_once(self):
-        view = EngineConfigView(make_provider_config())
-
-        # Plain string at the HTTP boundary, not a SecretStr.
-        assert type(view.api_key) is str
-        assert view.api_key == _SECRET
-        assert view.api_provider == "openai"
-        # Trailing slash already stripped by ProviderConfig's validator.
-        assert view.api_base == "https://api.openai.com/v1"
-        assert view.models == ["gpt-4o", "gpt-4o-mini"]
-        assert (view.api_temperature, view.api_top_p, view.max_tokens, view.timeout) == (
-            0.2,
-            0.9,
-            1024,
-            30.0,
-        )
-
-    def test_repr_and_str_mask_the_key(self):
-        view = EngineConfigView(make_provider_config())
-
-        for text in (repr(view), str(view)):
-            assert _SECRET not in text
-            assert "***" in text
-        assert "openai" in repr(view)
-
-    def test_models_list_is_copied(self):
-        pc = make_provider_config()
-        view = EngineConfigView(pc)
-
-        view.models.append("mutated")
-
-        assert pc.models == ["gpt-4o", "gpt-4o-mini"]
-        assert view.models == ["gpt-4o", "gpt-4o-mini", "mutated"]
-
-
 class TestCreateEngineAdapter:
-    def test_wraps_provider_config_and_routes_default_model(self):
+    def test_delegates_to_litellm_adapter_with_default_model(self):
         pc = make_provider_config()
         adapter = MagicMock()
-        with patch("ask_llm.utils.engine_facade._create_provider_adapter") as mock_create:
-            mock_create.return_value = adapter
-
+        with patch(
+            "ask_llm.utils.engine_facade.LiteLLMProviderAdapter", return_value=adapter
+        ) as mock_cls:
             result = create_engine_adapter(pc, default_model="gpt-4o")
 
         assert result is adapter
-        mock_create.assert_called_once()
-        args, kwargs = mock_create.call_args
-        (view,) = args
-        assert isinstance(view, EngineConfigView)
-        assert view.api_key == _SECRET  # unwrapped for the engine boundary
-        assert kwargs == {"default_model": "gpt-4o"}
+        mock_cls.assert_called_once_with(pc, default_model="gpt-4o")
 
-    def test_prebuilt_view_is_passed_through_unwrapped(self):
-        view = EngineConfigView(make_provider_config())
-        with patch("ask_llm.utils.engine_facade._create_provider_adapter") as mock_create:
-            create_engine_adapter(view)
+    def test_default_model_is_none_when_not_given(self):
+        pc = make_provider_config()
+        with patch("ask_llm.utils.engine_facade.LiteLLMProviderAdapter") as mock_cls:
+            create_engine_adapter(pc)
 
-        # The exact same object is forwarded (no double wrapping).
-        assert mock_create.call_args.args == (view,)
+        mock_cls.assert_called_once_with(pc, default_model=None)
+
+    def test_no_engine_config_view_exported(self):
+        # The SecretStr-unwrapping view died with the llm-engine boundary;
+        # the litellm adapter takes the ProviderConfig directly.
+        import ask_llm.utils.engine_facade as facade
+
+        assert not hasattr(facade, "EngineConfigView")
 
 
 class TestLoadEngineProvidersConfig:
-    def test_returns_engine_catalog(self):
-        catalog = {"deepseek": {"base_url": "https://api.deepseek.com"}}
-        with patch("llm_engine.config_loader.load_providers_config", return_value=catalog):
+    def test_returns_providers_catalog(self):
+        catalog = {"providers": {"deepseek": {"base_url": "https://api.deepseek.com/v1"}}}
+        with patch(
+            "ask_llm.utils.engine_facade.load_first_providers_yml",
+            return_value=(catalog, "/tmp/providers.yml"),
+        ) as mock_load:
             assert load_engine_providers_config() == catalog
+
+        # Runtime paths only: the fallback feeds credentials to base_url.
+        assert mock_load.call_args.kwargs.get("paths") is not None
+
+    def test_returns_empty_dict_when_no_catalog(self):
+        with patch(
+            "ask_llm.utils.engine_facade.load_first_providers_yml",
+            return_value=(None, None),
+        ):
+            assert load_engine_providers_config() == {}
 
     def test_returns_empty_dict_on_loader_failure(self):
         with patch(
-            "llm_engine.config_loader.load_providers_config",
+            "ask_llm.utils.engine_facade.load_first_providers_yml",
             side_effect=RuntimeError("boom"),
         ):
             assert load_engine_providers_config() == {}

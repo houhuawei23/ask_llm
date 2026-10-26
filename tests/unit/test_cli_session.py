@@ -7,11 +7,12 @@ import typer
 
 from ask_llm.config.cli_session import gate_api_key_or_exit, resolve_and_prepare
 from ask_llm.config.manager import ConfigManager
-from ask_llm.core.models import AppConfig, ProviderConfig
+from ask_llm.config.unified_config import UnifiedConfig
+from ask_llm.core.models import ProviderConfig
 
 
 def _make_config_manager(default_provider: str = "deepseek") -> ConfigManager:
-    app_config = AppConfig(
+    unified_config = UnifiedConfig(
         default_provider=default_provider,
         providers={
             default_provider: ProviderConfig(
@@ -28,7 +29,7 @@ def _make_config_manager(default_provider: str = "deepseek") -> ConfigManager:
             ),
         },
     )
-    return ConfigManager(app_config)
+    return ConfigManager(unified_config)
 
 
 def test_resolve_and_prepare_uses_cli_args() -> None:
@@ -52,7 +53,7 @@ def test_resolve_and_prepare_applies_temperature_and_default_model() -> None:
 
 
 def test_resolve_and_prepare_exits_without_provider() -> None:
-    app_config = AppConfig(
+    unified_config = UnifiedConfig(
         default_provider="",
         providers={
             "deepseek": ProviderConfig(
@@ -63,13 +64,13 @@ def test_resolve_and_prepare_exits_without_provider() -> None:
             ),
         },
     )
-    cm = ConfigManager(app_config)
+    cm = ConfigManager(unified_config)
     with pytest.raises(typer.Exit):
         resolve_and_prepare(cm)
 
 
 def test_resolve_and_prepare_exits_without_model() -> None:
-    app_config = AppConfig(
+    unified_config = UnifiedConfig(
         default_provider="deepseek",
         providers={
             "deepseek": ProviderConfig(
@@ -80,7 +81,7 @@ def test_resolve_and_prepare_exits_without_model() -> None:
             ),
         },
     )
-    cm = ConfigManager(app_config)
+    cm = ConfigManager(unified_config)
     with pytest.raises(typer.Exit):
         resolve_and_prepare(cm)
 
@@ -92,7 +93,7 @@ def test_resolve_and_prepare_exits_for_unknown_provider() -> None:
 
 
 def test_config_manager_falls_back_when_default_provider_invalid() -> None:
-    app_config = AppConfig(
+    unified_config = UnifiedConfig(
         default_provider="ghost",
         providers={
             "deepseek": ProviderConfig(
@@ -103,7 +104,7 @@ def test_config_manager_falls_back_when_default_provider_invalid() -> None:
             ),
         },
     )
-    cm = ConfigManager(app_config)
+    cm = ConfigManager(unified_config)
     assert cm.current_provider_name == "deepseek"
 
 
@@ -116,7 +117,7 @@ def test_gate_api_key_or_exit_exits_non_interactive_without_key(monkeypatch) -> 
     import typer
 
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)
-    app_config = AppConfig(
+    unified_config = UnifiedConfig(
         default_provider="deepseek",
         providers={
             "deepseek": ProviderConfig(
@@ -127,7 +128,7 @@ def test_gate_api_key_or_exit_exits_non_interactive_without_key(monkeypatch) -> 
             ),
         },
     )
-    cm = ConfigManager(app_config)
+    cm = ConfigManager(unified_config)
     with pytest.raises(typer.Exit) as excinfo:
         gate_api_key_or_exit(cm, "deepseek")
     assert excinfo.value.exit_code == 1
@@ -138,20 +139,21 @@ def test_gate_api_key_or_exit_exits_non_interactive_without_key(monkeypatch) -> 
 
 def _preflight_cm() -> ConfigManager:
     """Config manager whose provider passes the key gate (probe patched below)."""
-    app_config = AppConfig(
-        default_provider="deepseek",
-        providers={
-            "deepseek": ProviderConfig(
-                api_provider="deepseek",
-                api_key="test-key",
-                api_base="https://api.example.com",
-                models=["deepseek-chat"],
-            ),
-        },
-    )
     from ask_llm.config.unified_config import UnifiedConfig
 
-    return ConfigManager(app_config, UnifiedConfig())
+    return ConfigManager(
+        UnifiedConfig(
+            default_provider="deepseek",
+            providers={
+                "deepseek": ProviderConfig(
+                    api_provider="deepseek",
+                    api_key="test-key",
+                    api_base="https://api.example.com",
+                    models=["deepseek-chat"],
+                ),
+            },
+        )
+    )
 
 
 def _outcome(provider: str, model: str, ok: bool, message: str = "x"):

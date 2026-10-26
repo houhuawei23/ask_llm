@@ -27,9 +27,10 @@ def _make_batch_config(tmp_path: Path) -> Path:
 
 
 def _make_app_config():
-    from ask_llm.core.models import AppConfig, ProviderConfig
+    from ask_llm.config.unified_config import UnifiedConfig
+    from ask_llm.core.models import ProviderConfig
 
-    return AppConfig(
+    return UnifiedConfig(
         default_provider="openai",
         providers={
             "openai": ProviderConfig(
@@ -44,12 +45,12 @@ def _make_app_config():
 
 def test_batch_run_creates_checkpoint_for_failed_task(tmp_path):
     config_path = _make_batch_config(tmp_path)
-    app_config = _make_app_config()
+    unified_config = _make_app_config()
     config_manager = MagicMock()
-    config_manager.config = app_config
+    config_manager.unified_config = unified_config
     config_manager.current_provider_name = "openai"
     config_manager.get_default_model.return_value = "gpt-4"
-    config_manager.get_provider_config.return_value = app_config.providers["openai"]
+    config_manager.get_provider_config.return_value = unified_config.providers["openai"]
 
     result = BatchResult(
         task_id=0,
@@ -69,10 +70,9 @@ def test_batch_run_creates_checkpoint_for_failed_task(tmp_path):
             mock_adapter.return_value = mock_provider
             run_batch_from_config(
                 str(config_path),
-                app_config,
+                unified_config,
                 config_manager,
                 MagicMock(mode="prompt-content-pairs", threads=1, retries=0),
-                output_format="json",
                 threads=1,
                 retries=0,
                 retry_delay=0.0,
@@ -82,7 +82,7 @@ def test_batch_run_creates_checkpoint_for_failed_task(tmp_path):
     checkpoint_path = tmp_path / "batch.yml.checkpoint.json"
     assert checkpoint_path.exists()
     loaded = BatchCheckpoint.load(checkpoint_path)
-    assert loaded.completed_task_ids == []
+    assert loaded.completed_task_ids == set()
     assert len(loaded.failed_tasks) == 1
 
 
@@ -102,12 +102,12 @@ def test_batch_resume_skips_completed_tasks(tmp_path):
         encoding="utf-8",
     )
     checkpoint_path = tmp_path / "batch.yml.checkpoint.json"
-    app_config = _make_app_config()
+    unified_config = _make_app_config()
     config_manager = MagicMock()
-    config_manager.config = app_config
+    config_manager.unified_config = unified_config
     config_manager.current_provider_name = "openai"
     config_manager.get_default_model.return_value = "gpt-4"
-    config_manager.get_provider_config.return_value = app_config.providers["openai"]
+    config_manager.get_provider_config.return_value = unified_config.providers["openai"]
 
     def _result(task_id: int, status: TaskStatus) -> BatchResult:
         return BatchResult(
@@ -141,10 +141,9 @@ def test_batch_resume_skips_completed_tasks(tmp_path):
             mock_adapter.return_value = mock_provider
             run_batch_from_config(
                 str(config_path),
-                app_config,
+                unified_config,
                 config_manager,
                 MagicMock(mode="prompt-content-pairs", threads=1, retries=0),
-                output_format="json",
                 threads=1,
                 retries=0,
                 retry_delay=0.0,
@@ -158,7 +157,7 @@ def test_batch_resume_skips_completed_tasks(tmp_path):
         _run()
     assert checkpoint_path.exists()
     loaded = BatchCheckpoint.load(checkpoint_path)
-    assert loaded.completed_task_ids == [0]
+    assert loaded.completed_task_ids == {0}
 
     # Phase B: resume -> only task 1 is executed; clean success unlinks.
     queued_results = [[_result(1, TaskStatus.SUCCESS)]]

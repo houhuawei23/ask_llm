@@ -124,9 +124,11 @@ def test_explain_output_filename():
     assert (
         explain_output_filename(2, "extra:model-architecture") == "2-model-architecture.explain.md"
     )
+    # L9/2.25: appendix outputs keep the document-order numeric prefix like
+    # every other job type.
     assert (
         explain_output_filename(99, "appendices:h2:proof-of-theorem-1")
-        == "d-appendices-proof-of-theorem-1.explain.md"
+        == "99-d-appendices-proof-of-theorem-1.explain.md"
     )
 
 

@@ -81,16 +81,6 @@ class ChatHistory(BaseModel):
         }
 
 
-class FallbackConfig(BaseModel):
-    """Fallback provider/model configuration."""
-
-    provider: str = Field(..., description="Fallback provider name")
-    model: str = Field(..., description="Fallback model name")
-    temperature: float | None = Field(default=None, ge=0.0, le=2.0)
-    top_p: float | None = Field(default=None, ge=0.0, le=1.0)
-    max_tokens: int | None = Field(default=None, gt=0)
-
-
 class ProviderConfig(BaseModel):
     """Configuration for an LLM provider."""
 
@@ -107,9 +97,6 @@ class ProviderConfig(BaseModel):
     )
     max_tokens: int | None = Field(default=None, gt=0, description="Maximum tokens to generate")
     timeout: float = Field(default=60.0, gt=0, description="API timeout in seconds")
-    fallback_to: list[FallbackConfig] = Field(
-        default_factory=list, description="Ordered fallback provider/model chain"
-    )
 
     @field_validator("api_key")
     @classmethod
@@ -126,17 +113,21 @@ class ProviderConfig(BaseModel):
         """
         provider_name = info.data.get("api_provider", "unknown")
         key = v.get_secret_value()
+        # Conventional env var (must match api_key_gate.provider_env_var_name):
+        # deepseek -> DEEPSEEK_API_KEY. Inlined to keep core.models free of a
+        # utils import.
+        env_var = f"{provider_name.upper().replace('-', '_')}_API_KEY"
         if "${" in key and "}" in key:
             logger.warning(
                 f"Provider '{provider_name}' API key has unresolved ${{...}} "
-                f"placeholder. Set ASK_LLM_{provider_name.upper()}_API_KEY "
+                f"placeholder. Set {env_var} "
                 f"(or the referenced variable) before running; the API-key gate "
                 f"will block calls until it resolves."
             )
         elif not key.strip():
             logger.warning(
                 f"Provider '{provider_name}' has empty API key. "
-                f"Set ASK_LLM_{provider_name.upper()}_API_KEY environment variable "
+                f"Set {env_var} environment variable "
                 f"or configure in default_config.yml"
             )
         return v
@@ -156,30 +147,6 @@ class ProviderConfig(BaseModel):
         if not v.startswith(("http://", "https://")):
             raise ValueError("API base URL must start with http:// or https://")
         return v.rstrip("/")
-
-
-class AppConfig(BaseModel):
-    """Application configuration."""
-
-    default_provider: str = Field(..., description="Default provider name")
-    default_model: str | None = Field(default=None, description="Default model name")
-    providers: dict[str, ProviderConfig] = Field(..., description="Provider configurations")
-
-    @field_validator("providers")
-    @classmethod
-    def validate_providers(cls, v: dict[str, ProviderConfig]) -> dict[str, ProviderConfig]:
-        """Validate providers dictionary is not empty."""
-        if not v:
-            raise ValueError("At least one provider must be configured")
-        return v
-
-    def get_provider_config(self, name: str | None = None) -> ProviderConfig:
-        """Get configuration for a provider."""
-        provider_name = name or self.default_provider
-        if provider_name not in self.providers:
-            available = ", ".join(self.providers.keys())
-            raise ValueError(f"Provider '{provider_name}' not found. Available: {available}")
-        return self.providers[provider_name]
 
 
 class RequestMetadata(BaseModel):

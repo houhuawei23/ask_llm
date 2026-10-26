@@ -9,10 +9,12 @@ from typing import Annotated
 import typer
 from loguru import logger
 
+from ask_llm.cli.common import bootstrap_command
 from ask_llm.cli.errors import cli_errors
-from ask_llm.config.cli_session import load_cli_session, load_pricing_with_hint
+from ask_llm.core.constants import MAX_CONCURRENCY
 from ask_llm.services.batch_service import BatchService, run_batch_from_config
 from ask_llm.utils.console import console
+from ask_llm.utils.export_formats import detect_export_format
 
 
 def batch(
@@ -43,7 +45,7 @@ def batch(
             "-t",
             help="Number of concurrent threads (from default_config.yml if not set)",
             min=1,
-            max=50,
+            max=MAX_CONCURRENCY,
         ),
     ] = None,
     retries: Annotated[
@@ -89,10 +91,19 @@ def batch(
         bool,
         typer.Option(
             "--dry-run",
+            "-n",
             help="Estimate requests, tokens and cost without any API call "
             "(requires models in the batch YAML; skips connection tests)",
         ),
     ] = False,
+    providers_pricing: Annotated[
+        str | None,
+        typer.Option(
+            "--providers-pricing",
+            help="Path to providers.yml (pricing_per_million_tokens). "
+            "Default search: ASK_LLM_PROVIDERS_YML, package root, ~/.config/ask_llm/providers.yml",
+        ),
+    ] = None,
     skip_validation: Annotated[
         bool,
         typer.Option(
@@ -122,13 +133,6 @@ def batch(
             help="Resume from a checkpoint file (auto-generated if omitted)",
         ),
     ] = None,
-    fallback: Annotated[
-        bool,
-        typer.Option(
-            "--fallback/--no-fallback",
-            help="Enable fallback to alternate providers/models on failure",
-        ),
-    ] = True,
     report: Annotated[
         str | None,
         typer.Option(
@@ -152,7 +156,13 @@ def batch(
     _t0 = time.perf_counter()
     try:
         with cli_errors("batch"):
-            load_result, config_manager = load_cli_session(config_path)
+            # Standard bootstrap: config + pricing loaded once for both the
+            # dry-run and the paid path (batch resolves providers from the YAML,
+            # so key-gating stays inside run_batch_from_config).
+            load_result, config_manager, pricing_map, pricing_source = bootstrap_command(
+                config_path,
+                pricing_path=providers_pricing,
+            )
             batch_cfg = load_result.unified_config.batch
             preflight_enabled = bool(load_result.unified_config.general.preflight_check)
             if not preflight_enabled and not skip_validation:
@@ -175,7 +185,6 @@ def batch(
                     )
                     raise typer.Exit(1)
 
-                pricing_map, pricing_source = load_pricing_with_hint(None)
                 for model_config in provider_models:
                     dry_report = estimate_batch_run(
                         [(t.prompt, t.content) for t in tasks],
@@ -186,31 +195,18 @@ def batch(
                     for line in dry_report.render(pricing_source=pricing_source):
                         console.print(line)
                 return
-            pricing_map, _pricing_source = load_pricing_with_hint(None)
             effective_threads = threads if threads is not None else batch_cfg.threads
             effective_retries = retries if retries is not None else batch_cfg.retries
 
             if output_format is None and output:
-                output_path_obj = Path(output)
-                suffix = output_path_obj.suffix.lower()
-                extension_to_format = {
-                    ".json": "json",
-                    ".yaml": "yaml",
-                    ".yml": "yaml",
-                    ".csv": "csv",
-                    ".md": "markdown",
-                    ".markdown": "markdown",
-                }
-                detected = extension_to_format.get(suffix)
-                if suffix and detected is None:
+                suffix = Path(output).suffix.lower()
+                try:
+                    output_format = detect_export_format(output, default="", strict=True)
+                except ValueError as e:
                     # Audit 4.5: an unknown extension no longer silently
                     # exports JSON into e.g. a .txt target.
-                    raise typer.BadParameter(
-                        f"Cannot infer output format from extension '{suffix}' of "
-                        f"'{output}'. Pass --format explicitly."
-                    )
-                output_format = detected
-                if output_format is not None:
+                    raise typer.BadParameter(str(e)) from e
+                if output_format:
                     logger.debug(
                         f"Auto-detected output format '{output_format}' "
                         f"from file extension '{suffix}'"
@@ -223,10 +219,9 @@ def batch(
 
             run_result = run_batch_from_config(
                 config_file,
-                load_result.app_config,
+                load_result.unified_config,
                 config_manager,
                 batch_cfg,
-                output_format=output_format,
                 threads=effective_threads,
                 retries=effective_retries,
                 retry_delay=batch_cfg.retry_delay,
@@ -234,7 +229,6 @@ def batch(
                 skip_api_key_check=skip_api_key_check,
                 verbose=verbose,
                 resume_checkpoint_path=resume,
-                use_fallback=fallback,
                 # Batch's model-validation stage IS its preflight; the config
                 # toggle rides the existing --skip-validation escape hatch.
                 skip_validation=skip_validation or not preflight_enabled,

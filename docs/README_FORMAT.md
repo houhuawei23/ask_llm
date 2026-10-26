@@ -197,7 +197,7 @@ ask-llm format doc.md -p @prompts/custom-heading-format.md
 ### 依赖
 
 - `loguru`：日志记录
-- `llm_engine`：LLM API 调用
+- `litellm`：LLM API 调用（经 ask_llm 自有适配器 `core/provider_adapter.py`）
 - `typer`：CLI 框架
 - `rich`：控制台输出
 

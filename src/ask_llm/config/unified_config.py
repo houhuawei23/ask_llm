@@ -3,7 +3,7 @@
 from typing import Any
 
 from loguru import logger
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
 from ask_llm.core.models import ProviderConfig
 
@@ -260,7 +260,7 @@ class FormatBodyConfig(BaseModel):
         ge=256,
         le=128000,
         description="Completion max_tokens per body chunk API call. Must cover reasoning "
-        "models whose reasoning_tokens count against max_tokens; the llm_engine "
+        "models whose reasoning_tokens count against max_tokens; the previous engine's "
         "default of 2000 truncates reasoning_content and yields empty output.",
     )
     concurrency: int = Field(
@@ -300,6 +300,12 @@ class PaperConfig(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
+    temperature: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=2.0,
+        description="Sampling temperature for paper explain (null uses provider default)",
+    )
     default_run: str = Field(
         default="all",
         description="Default --run: sections, full, or all",
@@ -386,6 +392,7 @@ class RateLimitConfig(BaseModel):
         default_factory=ProviderRateLimitConfig,
         description="Default limits when no provider-specific entry matches",
     )
+    _limits_cache: dict[str, ProviderRateLimitConfig] = PrivateAttr(default_factory=dict)
 
     def get_limits(self, provider: str, model: str | None = None) -> ProviderRateLimitConfig:
         """Return the most specific limits available for provider/model.
@@ -394,16 +401,33 @@ class RateLimitConfig(BaseModel):
         1. ``provider/model`` (e.g. ``deepseek/deepseek-reasoner``)
         2. ``provider``
         3. ``default_limits``
+
+        Key matching is case-insensitive on both sides (YAML authors write
+        ``DeepSeek:`` as often as ``deepseek:``). Validated entries are cached
+        so the hot per-request path does not re-run Pydantic validation.
         """
         provider = provider.lower()
+        key = f"{provider}/{model.lower()}" if model else provider
+        cached = self._limits_cache.get(key)
+        if cached is not None:
+            return cached
+
         extras = self.model_extra or {}
+        # Index extras by lowercased key once so lookups match either case.
+        lowered: dict[str, object] = {k.lower(): v for k, v in extras.items()}
+        limits: ProviderRateLimitConfig | None = None
         if model:
-            key = f"{provider}/{model.lower()}"
-            if key in extras:
-                return ProviderRateLimitConfig.model_validate(extras[key])
-        if provider in extras:
-            return ProviderRateLimitConfig.model_validate(extras[provider])
-        return self.default_limits
+            entry = lowered.get(key)
+            if entry is not None:
+                limits = ProviderRateLimitConfig.model_validate(entry)
+        if limits is None:
+            entry = lowered.get(provider)
+            if entry is not None:
+                limits = ProviderRateLimitConfig.model_validate(entry)
+        if limits is None:
+            limits = self.default_limits
+        self._limits_cache[key] = limits
+        return limits
 
 
 class UnifiedConfig(BaseModel):
@@ -411,8 +435,8 @@ class UnifiedConfig(BaseModel):
 
     Single configuration object for the whole application: provider runtime
     settings (``providers`` / ``default_provider`` / ``default_model``) plus all
-    non-provider feature sections. ``AppConfig`` is derived from this as a
-    provider-facing view (see ``ConfigLoader.load``).
+    non-provider feature sections. This is the ONLY config object; there is
+    no separate provider-facing projection.
     """
 
     default_provider: str = Field(default="", description="Global default provider name")
@@ -433,3 +457,20 @@ class UnifiedConfig(BaseModel):
         default_factory=lambda: ["pyproject.toml", "setup.py", ".git", "default_config.yml"],
         description="Markers to detect project root for @ path resolution",
     )
+
+    def get_provider_config(self, name: str | None = None) -> ProviderConfig:
+        """Return the config for *name* (or the default provider).
+
+        Falls back to the first configured provider when no default is set,
+        so a config file that only declares one provider works as-is.
+
+        Raises:
+            ValueError: If the provider is unknown (message lists what exists).
+        """
+        provider_name = name or self.default_provider
+        if not provider_name:
+            provider_name = next(iter(self.providers))
+        if provider_name not in self.providers:
+            available = ", ".join(self.providers.keys())
+            raise ValueError(f"Provider '{provider_name}' not found. Available: {available}")
+        return self.providers[provider_name]

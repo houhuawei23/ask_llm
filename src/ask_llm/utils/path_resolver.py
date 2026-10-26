@@ -47,6 +47,56 @@ def validate_multi_input_output(output: str | None, file_count: int, *, inplace:
         )
 
 
+# L10/2.25: explicitly-passed files whose extension is not in the
+# translatable list used to be appended unconditionally, so the "supports
+# .txt/.md/.ipynb" contract was unenforced and a stray binary failed later
+# with a confusing UnicodeDecodeError. Known binaries are blocked; unknown
+# text-like extensions are warned about but kept (permissive contract).
+_KNOWN_BINARY_EXTENSIONS = {
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".bmp",
+    ".webp",
+    ".ico",
+    ".svgz",
+    ".pdf",
+    ".zip",
+    ".gz",
+    ".tgz",
+    ".bz2",
+    ".xz",
+    ".rar",
+    ".7z",
+    ".mp3",
+    ".mp4",
+    ".avi",
+    ".mov",
+    ".mkv",
+    ".wav",
+    ".flac",
+    ".exe",
+    ".dll",
+    ".so",
+    ".dylib",
+    ".bin",
+    ".iso",
+    ".woff",
+    ".woff2",
+    ".ttf",
+    ".otf",
+    ".eot",
+    ".docx",
+    ".xlsx",
+    ".pptx",
+    ".sqlite",
+    ".db",
+    ".parquet",
+    ".pkl",
+}
+
+
 def resolve_trans_input_paths(
     files: list[str],
     translatable_extensions: list[str],
@@ -71,7 +121,22 @@ def resolve_trans_input_paths(
                 else:
                     resolved.extend(str(f.resolve()) for f in p.glob(f"*{ext_clean}"))
         elif p.exists() and p.is_file():
-            resolved.append(str(p.resolve()))
+            suffix = p.suffix.lower()
+            ext_clean_set = {
+                ext if ext.startswith(".") else f".{ext}" for ext in translatable_extensions
+            }
+            if suffix in ext_clean_set:
+                resolved.append(str(p.resolve()))
+            elif suffix in _KNOWN_BINARY_EXTENSIONS:
+                console.print_warning(
+                    f"Skipped binary/unsupported file: {pattern} ({suffix or 'no extension'})"
+                )
+            else:
+                console.print_warning(
+                    f"{pattern}: extension '{suffix or '(none)'}' is not in the translatable "
+                    f"list ({', '.join(translatable_extensions)}); including it as plain text."
+                )
+                resolved.append(str(p.resolve()))
         else:
             matched = glob.glob(str(p))
             if matched:

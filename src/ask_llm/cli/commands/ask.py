@@ -7,12 +7,9 @@ from typing import Annotated
 
 import typer
 
+from ask_llm.cli.common import paid_command_prelude
 from ask_llm.cli.errors import cli_errors
-from ask_llm.config.cli_session import (
-    gate_api_key_or_exit,
-    load_cli_session,
-    resolve_and_prepare,
-)
+from ask_llm.core.models import RequestMetadata
 from ask_llm.core.processor import RequestProcessor
 from ask_llm.core.protocols import ReasoningChunk
 from ask_llm.services.ask_service import AskService, validate_input_source
@@ -130,6 +127,13 @@ def ask(
             help="Include reasoning content from reasoner models (e.g., DeepSeek)",
         ),
     ] = False,
+    max_tokens: Annotated[
+        int | None,
+        typer.Option(
+            "--max-tokens",
+            help="Completion token cap (E1/2.25; omit for the provider default)",
+        ),
+    ] = None,
     dry_run: Annotated[
         bool,
         typer.Option(
@@ -153,19 +157,27 @@ def ask(
         console.print_error("No input provided. Use positional argument or -i/--input")
         raise typer.Exit(1)
 
-    # Fail fast before config load or prompt build: a path-looking source that
-    # does not exist must not be billed as literal prompt text (audit 1.4).
-    validate_input_source(source, from_input_option=input_source is None and input_file is not None)
-
     with cli_errors("ask"):
-        load_result, config_manager = load_cli_session(config_path)
-
-        final_provider, final_model = resolve_and_prepare(
-            config_manager,
-            cli_provider=provider,
-            cli_model=model,
-            temperature=temperature,
+        # Fail fast before config load or prompt build: a path-looking source
+        # that does not exist must not be billed as literal prompt text
+        # (audit 1.4). Inside cli_errors so its FileNotFoundError renders as a
+        # clean CLI error instead of a raw traceback (H3/2.25).
+        validate_input_source(
+            source, from_input_option=input_source is None and input_file is not None
         )
+
+        # Single paid-command preamble: load + resolve + gate. Dry-run skips
+        # the gate (no API call happens); the service is built afterwards.
+        prelude = paid_command_prelude(
+            config_path,
+            provider=provider,
+            model=model,
+            temperature=temperature,
+            skip_api_key_check=skip_api_key_check or dry_run,
+        )
+        load_result = prelude.load_result
+        config_manager = prelude.config_manager
+        final_model = prelude.model
 
         service = AskService(
             config_manager=config_manager,
@@ -200,12 +212,6 @@ def ask(
             )
             raise typer.Exit(0)
 
-        gate_api_key_or_exit(
-            config_manager,
-            final_provider,
-            skip_api_key_check=skip_api_key_check,
-        )
-
         provider_config = config_manager.get_provider_config()
         llm_provider = create_engine_adapter(provider_config, default_model=final_model)
         processor = RequestProcessor(llm_provider)
@@ -228,6 +234,7 @@ def ask(
                 system_prompt=system,
                 include_metadata=metadata,
                 return_reasoning=include_reasoning,
+                max_tokens=max_tokens,
             )
             service.write_output(output_path, result.output_content, force=force)
             console.print_success(f"Output saved to: {output_path}")
@@ -235,6 +242,7 @@ def ask(
                 console.print(result.metadata.format())
         else:
             if stream:
+                metadata_out: list[RequestMetadata] = []
                 _print_stream(
                     service,
                     content,
@@ -242,13 +250,17 @@ def ask(
                     system_prompt=system,
                     include_reasoning=include_reasoning,
                     temperature=temperature,
+                    metadata_out=metadata_out if metadata else None,
                 )
+                if metadata and metadata_out:
+                    console.print(metadata_out[0].format())
             else:
                 processing_result = service.process(
                     content,
                     prompt_template=prompt_template,
                     system_prompt=system,
                     return_reasoning=include_reasoning,
+                    max_tokens=max_tokens,
                 )
                 if processing_result.reasoning:
                     console.print("[bold yellow]Reasoning:[/bold yellow]")
@@ -267,6 +279,7 @@ def _print_stream(
     system_prompt: str | None,
     include_reasoning: bool,
     temperature: float | None,
+    metadata_out: list[RequestMetadata] | None = None,
 ) -> None:
     """Presentation-only streaming loop: content flows live, reasoning prints after."""
     console.print("[bold blue]Response:[/bold blue] ", end="")
@@ -277,6 +290,7 @@ def _print_stream(
         system_prompt=system_prompt,
         include_reasoning=include_reasoning,
         temperature=temperature,
+        metadata_out=metadata_out,
     ):
         if isinstance(chunk, ReasoningChunk):
             reasoning_parts.append(chunk.reasoning)

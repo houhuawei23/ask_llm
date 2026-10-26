@@ -1,11 +1,13 @@
-"""Single error-keyword rule table (P4.8).
+"""Single error-semantics authority (P4.8, unified in 2.25 refactor).
 
-One canonical mapping ``keyword -> (ErrorCategory, transient)`` consumed by:
+One canonical rule table ``keyword -> (ErrorCategory, transient)``.
+Every retry decision in the codebase derives from this table:
 
-- ``telemetry.classify_error`` — first matching rule (in table order) wins,
+- ``classify_error_message`` — first matching rule (in table order) wins,
   producing the error category used in logs/reports.
-- ``retry_policy.DEFAULT_TRANSIENT_KEYWORDS`` — derived as the keywords of all
-  transient rules, driving retry decisions in the bounded runner.
+- ``is_retryable_error`` — derives from the ``transient`` column; drives the
+  bounded runner's retry decisions (a terminal keyword match wins over any
+  transient match).
 
 Rule order matters: authentication is checked first, then rate limits and the
 transient server-error signatures (500/502/503/overloaded/...), with the wide
@@ -13,9 +15,9 @@ validation keywords (``invalid``/``required``/``missing``) at the very end.
 
 The server-vs-validation order is the M2 fix: first-match-wins substring
 matching used to classify e.g. ``"502: invalid upstream response"`` as
-VALIDATION_ERROR (terminal — never retried, never fell back) because
-``"invalid"`` matched before ``"502"``. Status-prefixed transient errors must
-win over the wide words.
+VALIDATION_ERROR (terminal — never retried) because ``"invalid"`` matched
+before ``"502"``. Status-prefixed transient errors must win over the wide
+words.
 
 Numeric status keywords (``"401"``, ``"500"``, ...) match on word boundaries
 only (audit 3.1): a bare ``"500"`` substring used to hijack messages like
@@ -46,11 +48,17 @@ class ErrorCategory(str, Enum):
 
 @dataclass(frozen=True)
 class KeywordRule:
-    """One error-signature keyword and its semantics."""
+    """One error-signature keyword and its semantics.
 
-    keyword: str  # lowercase substring matched against the error message
+    Attributes:
+        keyword: Lowercase substring matched against the error message.
+        category: High-level failure category.
+        transient: Retrying the same config may succeed (drives retries).
+    """
+
+    keyword: str
     category: ErrorCategory
-    transient: bool  # retrying the same call may succeed
+    transient: bool
 
 
 def _rules() -> tuple[KeywordRule, ...]:
@@ -64,7 +72,7 @@ def _rules() -> tuple[KeywordRule, ...]:
     v = ErrorCategory.VALIDATION_ERROR
     u = ErrorCategory.UNKNOWN
     return (
-        # Authentication — terminal (retrying with the same key never helps).
+        # Authentication — terminal (no retry can fix a bad key).
         KeywordRule("401", a, False),
         KeywordRule("403", a, False),
         KeywordRule("authentication", a, False),
@@ -81,7 +89,7 @@ def _rules() -> tuple[KeywordRule, ...]:
         KeywordRule("too many requests", r, True),
         KeywordRule("throttled", r, True),
         # Quota/billing exhaustion — terminal (audit 3.1): retrying the same
-        # key never succeeds; escalation to fallback providers still applies.
+        # key never succeeds.
         KeywordRule("quota exceeded", ErrorCategory.BILLING, False),
         KeywordRule("your current quota", ErrorCategory.BILLING, False),
         KeywordRule("insufficient_quota", ErrorCategory.BILLING, False),
@@ -91,7 +99,7 @@ def _rules() -> tuple[KeywordRule, ...]:
         KeywordRule("timed out", t, True),
         KeywordRule("time out", t, True),
         KeywordRule("deadline exceeded", t, True),
-        # Content filter — terminal.
+        # Content filter — terminal, input-intrinsic (no retry helps).
         KeywordRule("content filter", c, False),
         KeywordRule("content_filter", c, False),
         KeywordRule("content policy", c, False),
@@ -110,15 +118,19 @@ def _rules() -> tuple[KeywordRule, ...]:
         KeywordRule("too long", m, False),
         KeywordRule("maximum context", m, False),
         # Network — mostly transient; TLS/proxy failures are usually config.
+        # M6/2.25: the terminal cert/proxy signatures must be checked BEFORE
+        # the wide transient words — "connection failed: invalid SSL
+        # certificate" matched "connection" first and was retried forever even
+        # though no retry can fix a bad cert or proxy config.
+        KeywordRule("ssl", n, False),
+        KeywordRule("certificate", n, False),
+        KeywordRule("proxy", n, False),
         KeywordRule("connection", n, True),
         KeywordRule("connect", n, True),
         KeywordRule("network", n, True),
         KeywordRule("dns", n, True),
         KeywordRule("unreachable", n, True),
         KeywordRule("refused", n, True),
-        KeywordRule("ssl", n, False),
-        KeywordRule("certificate", n, False),
-        KeywordRule("proxy", n, False),
         # Transient server/overload signatures without a more specific
         # category. Deliberately BEFORE the wide validation words (M2):
         # "502: invalid upstream response" must be treated as transient.
@@ -131,8 +143,9 @@ def _rules() -> tuple[KeywordRule, ...]:
         KeywordRule("502", u, True),
         KeywordRule("503", u, True),
         KeywordRule("504", u, True),
-        # Validation — terminal, and intentionally LAST: these single words
-        # match far too broadly to preempt the transient signatures above.
+        # Validation — terminal and request-intrinsic (no retry helps),
+        # intentionally LAST: these single words match far too broadly to
+        # preempt the transient signatures above.
         KeywordRule("validation", v, False),
         KeywordRule("invalid", v, False),
         KeywordRule("required", v, False),
@@ -142,9 +155,6 @@ def _rules() -> tuple[KeywordRule, ...]:
 
 
 ERROR_KEYWORD_RULES: tuple[KeywordRule, ...] = _rules()
-
-# Derived: retryable keywords (drives retry_policy.DEFAULT_TRANSIENT_KEYWORDS).
-TRANSIENT_KEYWORDS: tuple[str, ...] = tuple(r.keyword for r in ERROR_KEYWORD_RULES if r.transient)
 
 # Numeric keywords ("401", "500", ...) match on word boundaries only, so
 # "context length is 15000" no longer trips the "500" server-error rule.
@@ -171,3 +181,25 @@ def classify_error_message(error_message: str | None) -> ErrorCategory:
         if keyword_matches(rule.keyword, text):
             return rule.category
     return ErrorCategory.UNKNOWN
+
+
+def is_retryable_error(error_message: str) -> bool:
+    """Return True if *error_message* looks transient/retryable.
+
+    Empty messages are treated as transient-by-default (audit 3.1): a blank
+    ``str(e)`` (several SDK connection errors carry details only on
+    attributes) previously classified terminal and the task died on its first
+    attempt without a retry. A terminal keyword match wins over
+    any transient match (M6/2.25) so e.g. "connection failed: invalid SSL
+    certificate" is not retried via its "connection" word.
+    """
+    if not error_message:
+        return True
+    lower = error_message.lower()
+    if any(
+        keyword_matches(rule.keyword, lower) for rule in ERROR_KEYWORD_RULES if not rule.transient
+    ):
+        return False
+    return any(
+        keyword_matches(rule.keyword, lower) for rule in ERROR_KEYWORD_RULES if rule.transient
+    )

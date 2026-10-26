@@ -16,24 +16,13 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Protocol
 
 from loguru import logger
 
 from ask_llm.core.constants import APPROX_TOKEN_SAFETY_FACTOR
 from ask_llm.core.markdown_structure import MarkdownStructure
 from ask_llm.core.text_splitter import TextChunk
-from ask_llm.utils.token_counter import TokenCounter
-
-
-class BudgetPolicy(Protocol):
-    """Decides whether a text fits the budget and measures it."""
-
-    def fits(self, text: str) -> bool: ...
-
-    def count(self, text: str) -> int: ...
-
-    def hard_split(self, text: str) -> list[str]: ...
+from ask_llm.utils.token_counter import TokenCounter, split_hard_by_max_tokens
 
 
 @dataclass(frozen=True)
@@ -87,7 +76,79 @@ class TokenBudget:
         # Pass the raw cap; ``split_hard_by_max_tokens`` applies the safety
         # factor internally for approximate models, so the effective budget
         # matches ``content_max_tokens`` without double-applying it.
-        return TokenCounter.split_hard_by_max_tokens(text, self._raw_content_cap, self.model)
+        return split_hard_by_max_tokens(text, self._raw_content_cap, self.model)
+
+
+def create_markdown_splitter(
+    model: str, max_chunk_tokens: int, prompt_overhead_tokens: int = 0
+) -> BinarySplitter:
+    """Build the standard markdown splitter with a token budget.
+
+    Factory for the former ``MarkdownTokenSplitter`` shim: one place that
+    documents the budget semantics (max per chunk minus prompt-template
+    overhead) for translation/format callers.
+    """
+    return BinarySplitter(
+        TokenBudget(
+            model=model, max_tokens=max_chunk_tokens, prompt_overhead=prompt_overhead_tokens
+        )
+    )
+
+
+def locate_pieces(source: str, pieces: list[str]) -> list[tuple[int, int]]:
+    """Map each piece to ``(start, length)`` within *source* (M2/2.25).
+
+    Uses a monotonic find-cursor; a piece that can't be located verbatim (the
+    splitter strips or synthesizes content) falls back to the whole source
+    span rather than reporting a made-up offset. Moved here from
+    ``utils.chunk_balance`` (which now imports it) so the splitter itself can
+    use the same exact piece-location for hard-split spans.
+    """
+    spans: list[tuple[int, int]] = []
+    cursor = 0
+    for part in pieces:
+        pos = source.find(part, cursor) if part else -1
+        if pos != -1:
+            cursor = pos + len(part)
+            spans.append((pos, len(part)))
+        else:
+            spans.append((0, len(source)))
+    return spans
+
+
+_FENCE_MARKER_RE = re.compile(r"^[ \t]*(?:```|~~~)", re.MULTILINE)
+
+
+def _fence_marker_parity(paragraph: str) -> bool:
+    """True when the paragraph holds an odd number of fence-marker lines.
+
+    B3: blank lines inside a fenced block split the fence across
+    "paragraphs"; parity tracking is what lets the paragraph merger keep
+    every fenced block inside one unit.
+    """
+    return len(_FENCE_MARKER_RE.findall(paragraph)) % 2 == 1
+
+
+def _stripped_span_chunk(raw: str, chunk_id: int, raw_start: int, type_name: str) -> TextChunk:
+    """Build a chunk whose span covers exactly its stripped content.
+
+    M2/2.25: the sentence-group path strips content before emitting it but
+    used to span the unstripped raw region (``end_pos`` off by the stripped
+    whitespace), so persisted spans drifted from the real text. The strip
+    offset is now subtracted from the raw start; leftover whitespace between
+    chunks appears as inter-span gaps, which position-aware reassembly
+    understands.
+    """
+    content = raw.strip()
+    lead = len(raw) - len(raw.lstrip())
+    start = raw_start + lead
+    return TextChunk(
+        content=content,
+        chunk_id=chunk_id,
+        start_pos=start,
+        end_pos=start + len(content),
+        metadata={"type": type_name},
+    )
 
 
 class BinarySplitter:
@@ -95,7 +156,7 @@ class BinarySplitter:
 
     Structure facts (fences, frontmatter, headings) come from a single
     :class:`MarkdownStructure` parse; the budget decision is delegated to the
-    injected :class:`BudgetPolicy`.
+    injected :class:`TokenBudget`.
     """
 
     # Audit 4.1: hard recursion cap for paragraph splitting. The find-based
@@ -104,7 +165,7 @@ class BinarySplitter:
     # line of defense degrading to a forced token split.
     _MAX_PARAGRAPH_DEPTH: int = 64
 
-    def __init__(self, budget: BudgetPolicy):
+    def __init__(self, budget: TokenBudget):
         self.budget = budget
 
     def split(self, text: str) -> list[TextChunk]:
@@ -259,15 +320,21 @@ class BinarySplitter:
         if not paragraphs:
             return self._split_long_paragraph(text, start_pos, start_chunk_id)
 
-        # Merge display-math blocks ($$...$$) with their preceding paragraph so
-        # that a $$ block never starts a chunk on its own (which causes LLMs to
-        # drop or garble the equation).
+        # Merge paragraphs that must not stand alone:
+        # - a paragraph left with an unclosed fence (odd marker parity)
+        #   absorbs the following paragraphs until the fence closes (B3),
+        # - display-math blocks ($$...$$) join their preceding paragraph so
+        #   that a $$ block never starts a chunk on its own (which causes
+        #   LLMs to drop or garble the equation).
         merged_paragraphs: list[str] = []
+        inside_fence = False
         for p in paragraphs:
-            if p.startswith("$$") and merged_paragraphs:
+            parity = _fence_marker_parity(p)
+            if merged_paragraphs and (inside_fence or p.startswith("$$")):
                 merged_paragraphs[-1] = merged_paragraphs[-1] + "\n\n" + p
             else:
                 merged_paragraphs.append(p)
+            inside_fence = parity
         paragraphs = merged_paragraphs
 
         mid_idx = len(paragraphs) // 2
@@ -293,10 +360,16 @@ class BinarySplitter:
             # symmetric full-length case recursing on the whole left half).
             # Fall back to a character-offset split: both halves are strictly
             # smaller, so recursion terminates. Prefer a whitespace boundary
-            # near the midpoint so chunks don't start/end mid-word.
+            # near the midpoint so chunks don't start/end mid-word, and never
+            # inside a fenced code block or the frontmatter (fence-parity merges
+            # produce synthetic paragraphs whose find-miss previously landed
+            # the cut mid-fence).
             mid = max(1, len(text) // 2)
             lo, hi = max(1, mid - 200), min(len(text), mid + 200)
-            candidates = [i for i in range(lo, hi) if text[i].isspace()]
+            structure = MarkdownStructure.parse(text)
+            candidates = [
+                i for i in range(lo, hi) if text[i].isspace() and not structure.is_protected(i)
+            ]
             split_text_pos = min(candidates, key=lambda i: abs(i - mid)) if candidates else mid
             logger.debug("Paragraph find-miss; falling back to character-offset split.")
 
@@ -334,22 +407,24 @@ class BinarySplitter:
             return self._split_paragraph_with_fences(paragraph, start_pos, start_chunk_id)
 
         if not re.search(r"[.!?]+\s+", paragraph):
-            chunks: list[TextChunk] = []
-            chunk_id = start_chunk_id
-            current_pos = start_pos
-            for piece in self.budget.hard_split(paragraph):
-                chunks.append(
-                    TextChunk(
-                        content=piece,
-                        chunk_id=chunk_id,
-                        start_pos=current_pos,
-                        end_pos=current_pos + len(piece),
-                        metadata={"type": "character_split"},
-                    )
+            pieces = self.budget.hard_split(paragraph)
+            # hard_split strips its input first — locate each piece verbatim
+            # inside the stripped paragraph (falling back to the whole span
+            # when a piece was synthesized) so spans point at the real text
+            # instead of drifting by the stripped whitespace (B4/B5).
+            stripped = paragraph.strip()
+            lead = len(paragraph) - len(paragraph.lstrip())
+            spans = locate_pieces(stripped, pieces)
+            return [
+                TextChunk(
+                    content=piece,
+                    chunk_id=start_chunk_id + i,
+                    start_pos=start_pos + lead + s,
+                    end_pos=start_pos + lead + s + len(piece),
+                    metadata={"type": "character_split"},
                 )
-                chunk_id += 1
-                current_pos += len(piece)
-            return chunks
+                for i, (piece, (s, _length)) in enumerate(zip(pieces, spans, strict=False))
+            ]
 
         sentences = re.split(r"([.!?]+\s+)", paragraph)
         combined_sentences: list[str] = []
@@ -374,13 +449,7 @@ class BinarySplitter:
             cand = current_chunk + sentence if current_chunk else sentence
             if current_chunk and not self.budget.fits(cand):
                 chunks.append(
-                    TextChunk(
-                        content=current_chunk.strip(),
-                        chunk_id=chunk_id,
-                        start_pos=current_pos,
-                        end_pos=current_pos + len(current_chunk),
-                        metadata={"type": "sentence_group"},
-                    )
+                    _stripped_span_chunk(current_chunk, chunk_id, current_pos, "sentence_group")
                 )
                 chunk_id += 1
                 current_pos += len(current_chunk)
@@ -390,13 +459,7 @@ class BinarySplitter:
 
         if current_chunk.strip():
             chunks.append(
-                TextChunk(
-                    content=current_chunk.strip(),
-                    chunk_id=chunk_id,
-                    start_pos=current_pos,
-                    end_pos=current_pos + len(current_chunk),
-                    metadata={"type": "sentence_group"},
-                )
+                _stripped_span_chunk(current_chunk, chunk_id, current_pos, "sentence_group")
             )
 
         return self._enforce_budget_on_chunks(chunks, start_chunk_id)
@@ -461,36 +524,45 @@ class BinarySplitter:
     def _enforce_budget_on_chunks(
         self, chunks: list[TextChunk], start_chunk_id: int
     ) -> list[TextChunk]:
-        """Hard-split any chunk that still exceeds the budget (e.g. one very long sentence)."""
+        """Hard-split any chunk that still exceeds the budget (e.g. one very long sentence).
+
+        M2/2.25: spans survive this pass. Chunks that already fit keep their
+        original ``start_pos``/``end_pos`` (they may be narrower than the raw
+        source region the caller measured, e.g. stripped sentence groups), and
+        hard-split pieces are located verbatim inside the parent content so
+        each piece's span points at its true text in the original document —
+        instead of being rebuilt cumulatively from content lengths, which
+        silently drifted every subsequent span.
+        """
         if not chunks:
             return []
         out: list[TextChunk] = []
         nid = start_chunk_id
-        pos = chunks[0].start_pos
         for ch in chunks:
             if self.budget.fits(ch.content):
                 out.append(
                     TextChunk(
                         content=ch.content,
                         chunk_id=nid,
-                        start_pos=pos,
-                        end_pos=pos + len(ch.content),
+                        start_pos=ch.start_pos,
+                        end_pos=ch.end_pos,
                         metadata=ch.metadata,
                     )
                 )
                 nid += 1
-                pos += len(ch.content)
                 continue
-            for piece in self.budget.hard_split(ch.content):
+            pieces = self.budget.hard_split(ch.content)
+            for piece, (rel_start, rel_len) in zip(
+                pieces, locate_pieces(ch.content, pieces), strict=False
+            ):
                 out.append(
                     TextChunk(
                         content=piece,
                         chunk_id=nid,
-                        start_pos=pos,
-                        end_pos=pos + len(piece),
+                        start_pos=ch.start_pos + rel_start,
+                        end_pos=ch.start_pos + rel_start + rel_len,
                         metadata={**ch.metadata, "type": "hard_token_split"},
                     )
                 )
                 nid += 1
-                pos += len(piece)
         return out

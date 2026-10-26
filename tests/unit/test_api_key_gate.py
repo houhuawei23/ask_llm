@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from ask_llm.core.batch_models import BatchTask, ModelConfig
-from ask_llm.core.global_batch_runner import run_global_batch_tasks
+from ask_llm.core.command_runner import run_global_batch_tasks
 from ask_llm.utils.api_key_gate import (
     UnresolvedAPIKeyError,
     ensure_resolved_provider_keys,

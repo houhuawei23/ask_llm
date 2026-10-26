@@ -242,6 +242,7 @@ class TestFormatOneMarkdownFile:
             outcome = format_one_markdown_file(
                 str(src),
                 processor=processor,
+                model="gpt-test",
                 prompt_file_resolved="prompts/t.md",
                 heading_batch_size=42,
                 heading_concurrency=3,
@@ -285,6 +286,7 @@ class TestFormatOneMarkdownFile:
             outcome = format_one_markdown_file(
                 str(src),
                 processor=processor,
+                model="gpt-test",
                 prompt_file_resolved="p",
                 heading_batch_size=None,
                 heading_concurrency=None,
@@ -304,6 +306,7 @@ class TestFormatOneMarkdownFile:
         empty = make_md_file(tmp_path, name="empty.md", content="   \n")
         kwargs = {
             "processor": processor,
+            "model": "gpt-test",
             "prompt_file_resolved": "p",
             "heading_batch_size": None,
             "heading_concurrency": None,

@@ -5,14 +5,14 @@ Payload unwrapping lives in ``ask_llm.core.response_parser`` (P4.7);
 """
 
 import json
-from pathlib import Path
 from typing import Any
 
 from loguru import logger
 
 from ask_llm.core.batch_models import BatchResult, TaskStatus
+from ask_llm.core.checkpoint import atomic_write_stream, atomic_write_text
 from ask_llm.core.response_parser import unwrap_translation_payload
-from ask_llm.core.text_splitter import TextChunk
+from ask_llm.core.text_splitter import TextChunk, join_chunks_position_aware
 from ask_llm.utils.export_formats import detect_export_format
 
 
@@ -25,6 +25,7 @@ class TranslationExporter:
         results: list[BatchResult],
         preserve_format: bool = True,
         include_original: bool = False,
+        original_text: str | None = None,
     ):
         """
         Initialize translation exporter.
@@ -34,19 +35,19 @@ class TranslationExporter:
             results: Translation results
             preserve_format: Whether to preserve original formatting
             include_original: Whether to include original text alongside translation
+            original_text: The full source document the chunk spans refer to.
+                When provided (and ``include_original`` is off), the exporter
+                reassembles the output with the original inter-chunk separators
+                instead of forcing blank lines between chunks.
         """
         self.chunks = chunks
         self.results = results
         self.preserve_format = preserve_format
         self.include_original = include_original
+        self.original_text = original_text
 
         # Create mapping from chunk_id to result
         self.result_map = {result.task_id: result for result in results}
-
-    @staticmethod
-    def _unwrap_translation_payload(text: str) -> str:
-        """Unwrap JSON-wrapped translation payloads (delegates to response_parser)."""
-        return unwrap_translation_payload(text)
 
     def export(self, output_path: str, format_type: str | None = None) -> str:
         """
@@ -73,6 +74,32 @@ class TranslationExporter:
         """Detect output format from file extension (shared mapping, P4.7)."""
         return detect_export_format(output_path, default="text")
 
+    def _assemble(
+        self,
+        sorted_chunks: list[TextChunk],
+        parts: list[str],
+    ) -> str:
+        """Join per-chunk texts, restoring original separators when possible.
+
+        With ``original_text`` known and ``include_original`` off, the
+        position-aware joiner restores the exact inter-chunk whitespace of the
+        source (hard-split CJK sentences are not torn apart by blank lines).
+        Otherwise it falls back to the historical separator join.
+        """
+        if self.include_original or not self.original_text:
+            separator = "\n\n" if self.preserve_format else "\n"
+            return separator.join(parts)
+        joined = join_chunks_position_aware(
+            parts,
+            [(c.start_pos, c.end_pos) for c in sorted_chunks],
+            self.original_text,
+            types=[c.metadata.get("type", "") for c in sorted_chunks],
+        )
+        if joined is None:
+            separator = "\n\n" if self.preserve_format else "\n"
+            return separator.join(parts)
+        return joined
+
     def _export_text(self, output_path: str) -> str:
         """
         Export as plain text.
@@ -83,15 +110,14 @@ class TranslationExporter:
         Returns:
             Path to exported file
         """
-        content_parts = []
-
         # Sort chunks by chunk_id to maintain order
         sorted_chunks = sorted(self.chunks, key=lambda c: c.chunk_id)
+        content_parts = []
 
         for chunk in sorted_chunks:
             result = self.result_map.get(chunk.chunk_id)
             if result and result.response:
-                translated_text = self._unwrap_translation_payload(result.response).strip()
+                translated_text = unwrap_translation_payload(result.response).strip()
                 if self.include_original:
                     content_parts.append(f"{chunk.content}\n---\n{translated_text}\n")
                 else:
@@ -101,12 +127,11 @@ class TranslationExporter:
                 logger.warning(f"Translation failed for chunk {chunk.chunk_id}, using original")
                 content_parts.append(chunk.content)
 
-        # Join with appropriate separators
-        separator = "\n\n" if self.preserve_format else "\n"
-        content = separator.join(content_parts)
+        content = self._assemble(sorted_chunks, content_parts)
 
-        # Write to file
-        Path(output_path).write_text(content, encoding="utf-8")
+        # Write atomically (M13/2.25): a crash mid-export must not leave a
+        # truncated translation behind.
+        atomic_write_text(output_path, content)
         logger.info(f"Exported translation to: {output_path}")
         return output_path
 
@@ -120,35 +145,16 @@ class TranslationExporter:
         Returns:
             Path to exported file
         """
-        content_parts = []
-
         # Sort chunks by chunk_id to maintain order
         sorted_chunks = sorted(self.chunks, key=lambda c: c.chunk_id)
+        content_parts = []
 
         for chunk in sorted_chunks:
             result = self.result_map.get(chunk.chunk_id)
             if result and result.response:
-                translated_text = self._unwrap_translation_payload(result.response).strip()
+                translated_text = unwrap_translation_payload(result.response).strip()
 
-                # If chunk has heading metadata, preserve it
-                if "heading_level" in chunk.metadata:
-                    level = chunk.metadata["heading_level"]
-                    heading_prefix = "#" * level + " "
-                    # Extract heading from translated text if present
-                    # Otherwise use original heading title
-                    heading_title = chunk.metadata.get("heading_title", "")
-                    # Try to find heading in translated text
-                    lines = translated_text.split("\n")
-                    if lines and lines[0].startswith("#"):
-                        # Heading already in translated text
-                        content_parts.append(translated_text)
-                    else:
-                        # Add heading if we have title
-                        if heading_title:
-                            content_parts.append(f"{heading_prefix}{heading_title}\n")
-                        content_parts.append(translated_text)
-                else:
-                    content_parts.append(translated_text)
+                content_parts.append(translated_text)
 
                 if self.include_original:
                     content_parts.append(f"\n\n<!-- Original:\n{chunk.content}\n-->")
@@ -157,10 +163,11 @@ class TranslationExporter:
                 logger.warning(f"Translation failed for chunk {chunk.chunk_id}, using original")
                 content_parts.append(chunk.content)
 
-        content = "\n\n".join(content_parts)
+        content = self._assemble(sorted_chunks, content_parts)
 
-        # Write to file
-        Path(output_path).write_text(content, encoding="utf-8")
+        # Write atomically (M13/2.25): a crash mid-export must not leave a
+        # truncated translation behind.
+        atomic_write_text(output_path, content)
         logger.info(f"Exported translation to: {output_path}")
         return output_path
 
@@ -219,9 +226,10 @@ class TranslationExporter:
 
             export_data["chunks"].append(chunk_data)
 
-        # Write JSON file with a streaming encoder (P4.7: no giant in-memory string)
+        # Write JSON file with a streaming encoder (P4.7: no giant in-memory
+        # string), atomically (M13/2.25).
         encoder = json.JSONEncoder(indent=2, ensure_ascii=False)
-        with open(output_path, "w", encoding="utf-8") as f:
+        with atomic_write_stream(output_path) as f:
             for part in encoder.iterencode(export_data):
                 f.write(part)
         logger.info(f"Exported translation to: {output_path}")

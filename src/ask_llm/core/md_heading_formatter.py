@@ -16,10 +16,9 @@ from ask_llm.core.format_checkpoint import (
     FailedChunkInfo,
     FormatCheckpoint,
     SuccessfulChunkInfo,
+    verify_source_integrity,
 )
 from ask_llm.core.markdown_structure import (
-    CODE_FENCE_PATTERN,
-    HEADING_PATTERN,
     MarkdownStructure,
 )
 from ask_llm.core.processor import RequestProcessor
@@ -59,20 +58,6 @@ class HeadingExtractor:
     there; this class only adapts the spans to ``HeadingMatch`` objects.
     """
 
-    # Kept for backward compatibility (external references/tests); the
-    # canonical definitions live in ask_llm.core.markdown_structure.
-    HEADING_PATTERN = HEADING_PATTERN
-    CODE_FENCE_PATTERN = CODE_FENCE_PATTERN
-
-    @classmethod
-    def _find_code_block_ranges(cls, text: str) -> list[tuple[int, int]]:
-        """Find ranges of code blocks in markdown text.
-
-        Returns:
-            List of (start, end) tuples for each code block.
-        """
-        return MarkdownStructure.parse(text).fence_ranges
-
     @classmethod
     def extract(cls, text: str) -> list[HeadingMatch]:
         """
@@ -85,30 +70,17 @@ class HeadingExtractor:
         Returns:
             List of HeadingMatch objects in order of appearance
         """
-        structure = MarkdownStructure.parse(text)
-
-        headings = []
-        for match in HEADING_PATTERN.finditer(text):
-            start_pos = match.start()
-
-            # Skip headings inside code blocks / frontmatter
-            if structure.is_protected(start_pos):
-                continue
-
-            level = len(match.group(1))  # Number of # characters
-            title = match.group(2).strip()
-            raw_text = match.group(0)  # Full match including # and title
-            end_pos = match.end()
-
-            headings.append(
-                HeadingMatch(
-                    raw_text=raw_text,
-                    start_pos=start_pos,
-                    end_pos=end_pos,
-                    level=level,
-                    title=title,
-                )
+        # MarkdownStructure already filtered protected ranges — no rescan.
+        headings = [
+            HeadingMatch(
+                raw_text=text[span.start_pos : span.end_pos],
+                start_pos=span.start_pos,
+                end_pos=span.end_pos,
+                level=span.level,
+                title=span.title.strip(),
             )
+            for span in MarkdownStructure.parse(text).headings
+        ]
 
         logger.debug(f"Extracted {len(headings)} headings from text")
         return headings
@@ -126,11 +98,13 @@ class HeadingFormatResult:
 
 @dataclass
 class HeadingFormatStats:
-    """Statistics for heading formatting operation."""
+    """Statistics for heading formatting operation.
 
-    total_input_tokens: int = 0
-    total_output_tokens: int = 0
-    total_latency: float = 0.0
+    Token/latency totals are intentionally absent: batch heading calls
+    discard per-call metadata today. Add them when the worker starts
+    carrying RequestMetadata through.
+    """
+
     batches_processed: int = 0
     batches_failed: int = 0
 
@@ -181,6 +155,7 @@ class HeadingFormatter(ChunkedLLMJob):
         retries: int | None = None,
         retry_delay: float | None = None,
         retry_delay_max: float | None = None,
+        model: str = "",
     ):
         """
         Initialize heading formatter.
@@ -189,12 +164,14 @@ class HeadingFormatter(ChunkedLLMJob):
             processor: RequestProcessor instance for LLM API calls
             prompt_template: Custom prompt template (overrides default)
             prompt_file: Path to prompt template file (overrides prompt_template)
-            batch_size: Max headings per API call (default 80). Use smaller value
+            batch_size: Max headings per API call (default 160). Use smaller value
                 if LLM output is truncated.
-            concurrency: Max concurrent API calls (default 4). Set to 1 to disable.
+            concurrency: Max concurrent API calls (default 8). Set to 1 to disable.
             retries: Max retry attempts per batch (default from config)
             retry_delay: Initial retry delay in seconds (default from config)
             retry_delay_max: Max retry delay cap in seconds (default from config)
+            model: Model name recorded in checkpoints. Must match the model the
+                CLI passes on ``--resume`` so the config digest verifies.
         """
         lr = get_config_or_none()
         fh_config = lr.unified_config.format_heading if lr is not None else _DEFAULT_FORMAT_HEADING
@@ -208,6 +185,7 @@ class HeadingFormatter(ChunkedLLMJob):
             retry_delay_max=self._pick(retry_delay_max, fh_config.retry_delay_max),
         )
         self.batch_size = self._pick(batch_size, fh_config.batch_size)
+        self.model = model
         self._context_heading_count = fh_config.context_heading_count
 
     def _process_batch(
@@ -237,7 +215,6 @@ class HeadingFormatter(ChunkedLLMJob):
         return self._parse_formatted_headings(
             result.content.strip(),
             len(batch),
-            take_last_only=bool(context_headings),
         )
 
     @dataclass
@@ -289,6 +266,26 @@ class HeadingFormatter(ChunkedLLMJob):
                     context_headings=list(context_headings) if context_headings else [],
                 ),
             )
+
+    def _make_interrupted_result(
+        self, batch_item: tuple[int, list[HeadingMatch], list[str] | None]
+    ) -> "HeadingFormatter._BatchResult":
+        """Build a failed result for a batch abandoned by an interrupt."""
+        batch_idx, batch, context_headings = batch_item
+        template = self.prompt_template or ""
+        return HeadingFormatter._BatchResult(
+            batch_idx=batch_idx,
+            success=False,
+            original_headings=[h.raw_text for h in batch],
+            failed_info=FailedChunkInfo(
+                chunk_id=batch_idx,
+                content="\n".join(h.raw_text for h in batch),
+                prompt_template=template,
+                error="interrupted by user (Ctrl-C); batch was not processed",
+                retry_count=0,
+                context_headings=list(context_headings) if context_headings else [],
+            ),
+        )
 
     def format_headings(
         self,
@@ -349,13 +346,14 @@ class HeadingFormatter(ChunkedLLMJob):
                 f"(concurrency: {max_workers})"
             )
 
-        batch_results_list = self._run_units(
+        batch_results_list, _interrupted = self._run_units(
             batch_items,
             self._process_batch_worker,
             is_failed=lambda r: not r.success,
             error_message=lambda r: r.failed_info.error or "",
             retry_count_from_result=lambda r: r.retry_count,
             order_key=lambda r: r.batch_idx,
+            make_interrupted_result=self._make_interrupted_result,
         )
         batch_results: dict[int, HeadingFormatter._BatchResult] = {
             r.batch_idx: r for r in batch_results_list
@@ -403,7 +401,10 @@ class HeadingFormatter(ChunkedLLMJob):
         checkpoint_path = self._save_checkpoint(
             source_file=source_file,
             format_type="title",
-            model="",
+            # Record the real model: the resume path recomputes the digest with
+            # the current model, so saving "" made every title checkpoint
+            # unresumable through the CLI.
+            model=self.model,
             prompt_template=template,
             max_chunk_tokens=None,
             failed_chunks=failed_batches,
@@ -455,6 +456,9 @@ class HeadingFormatter(ChunkedLLMJob):
             HeadingFormatResult with complete formatted headings
         """
         checkpoint = FormatCheckpoint.load(checkpoint_path)
+        # Gate every resume entry point (not just FormatService): a source
+        # file changed after the checkpoint was written must never be spliced.
+        verify_source_integrity(checkpoint)
         formatter = cls(processor=processor, prompt_template=checkpoint.prompt_template)
 
         stats = HeadingFormatStats()
@@ -468,7 +472,7 @@ class HeadingFormatter(ChunkedLLMJob):
         # Rebuild failed batches: failed content is "\n"-joined raw heading
         # lines; chunk_id is the first heading ordinal of the batch. The
         # recorded context_headings (audit 3.5) restore the level reference
-        # and the take_last_only parse of the original batch; empty for
+        # and the tail-truncation parse of the original batch; empty for
         # pre-3.5 checkpoints (legacy behavior: no context).
         units: list[tuple[int, list[HeadingMatch], list[str] | None]] = []
         for fc in checkpoint.failed_chunks:
@@ -478,14 +482,18 @@ class HeadingFormatter(ChunkedLLMJob):
                     (fc.chunk_id, cls._lines_to_matches(lines), fc.context_headings or None)
                 )
 
-        retry_results = formatter._retry_failed_units(
-            checkpoint,
+        logger.info(
+            f"[HeadingFormat] Retrying {len(units)} checkpointed batch(es): "
+            f"successful={len(checkpoint.successful_chunks)}"
+        )
+        retry_results, _ = formatter._run_units(
             units,
             formatter._process_batch_worker,
             is_failed=lambda r: not r.success,
             error_message=lambda r: r.failed_info.error or "",
             retry_count_from_result=lambda r: r.retry_count,
             order_key=lambda r: r.batch_idx,
+            make_interrupted_result=formatter._make_interrupted_result,
         )
         for res in retry_results:
             if res.success:
@@ -536,7 +544,6 @@ class HeadingFormatter(ChunkedLLMJob):
         self,
         formatted_text: str,
         expected_count: int,
-        take_last_only: bool = False,
     ) -> list[str]:
         """
         Parse formatted headings from LLM response.
@@ -544,8 +551,6 @@ class HeadingFormatter(ChunkedLLMJob):
         Args:
             formatted_text: LLM response text
             expected_count: Expected number of headings
-            take_last_only: When True (context-aware batch), take only the last
-                expected_count headings (LLM may have output context headings too)
 
         Returns:
             List of formatted heading strings
@@ -577,14 +582,13 @@ class HeadingFormatter(ChunkedLLMJob):
             formatted_headings = [f"{hashes} {title}" for hashes, title in matches]
 
         if len(formatted_headings) > expected_count:
-            if take_last_only:
-                formatted_headings = formatted_headings[-expected_count:]
-            else:
-                # H7: the LLM emitted extra heading-looking lines (commentary,
-                # echoed input). Truncate in order instead of letting the
-                # apply-stage count check fail the whole file — by this point
-                # every batch's API cost is already sunk.
-                formatted_headings = formatted_headings[:expected_count]
+            # H7/M8: the LLM emitted extra heading-looking lines (commentary,
+            # echoed input). Commentary, when present, is prepended — echoing
+            # the requested headings — so the real headings sit at the end:
+            # take the tail, mirroring the context-batch path. Truncate instead
+            # of letting the apply-stage count check fail the whole file — by
+            # this point every batch's API cost is already sunk.
+            formatted_headings = formatted_headings[-expected_count:]
 
         # Validate count
         if len(formatted_headings) != expected_count:
@@ -636,12 +640,8 @@ class HeadingApplier:
         for original, formatted in reversed(
             list(zip(original_headings, formatted_headings, strict=False))
         ):
-            # Ensure formatted heading ends with newline if original did
-            if original.raw_text.endswith("\n") and not formatted.endswith("\n"):
-                formatted = formatted + "\n"
-            elif not original.raw_text.endswith("\n") and formatted.endswith("\n"):
-                formatted = formatted.rstrip("\n")
-
+            # HeadingMatch raw_text is a single-line regex match and never
+            # carries a trailing newline, so no newline harmonizing is needed.
             # Replace in reverse order
             before = result[: original.start_pos]
             after = result[original.end_pos :]

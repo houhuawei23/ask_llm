@@ -13,7 +13,8 @@ from pydantic import BaseModel, Field
 
 from ask_llm import __version__
 from ask_llm.core.batch_models import AttemptRecord, BatchResult, TaskStatus
-from ask_llm.core.telemetry import ErrorCategory
+from ask_llm.core.error_keywords import ErrorCategory
+from ask_llm.utils.console import console
 
 # Re-export for backward compatibility (callers imported AttemptRecord from here).
 __all__ = [
@@ -93,10 +94,19 @@ class ExecutionReport(BaseModel):
                 )
 
     def to_json_file(self, path: str) -> None:
-        """Serialize the report to a JSON file."""
+        """Serialize the report to a JSON file.
+
+        M13/2.25: atomic write + parent-dir creation, matching the rest of the
+        persistence layer (a crash mid-write must not leave a truncated report,
+        and `--report some/dir/report.json` must work without mkdir first).
+        """
         from pathlib import Path
 
-        Path(path).write_text(self.model_dump_json(indent=2), encoding="utf-8")
+        from ask_llm.core.checkpoint import atomic_write_text
+
+        p = Path(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_text(p, self.model_dump_json(indent=2))
 
     @classmethod
     def from_json_file(cls, path: str) -> ExecutionReport:
@@ -105,6 +115,24 @@ class ExecutionReport(BaseModel):
 
         data = Path(path).read_text(encoding="utf-8")
         return cls.model_validate_json(data)
+
+
+def export_execution_report(
+    report: ExecutionReport | None,
+    report_path: str | None,
+) -> str | None:
+    """Write *report* to *report_path* and announce it on the console.
+
+    Single implementation of the ``--report`` export shared by batch,
+    translation and paper (three verbatim copies existed). Returns the
+    exported path, or ``None`` when no path was requested or no report
+    is available.
+    """
+    if not report_path or report is None:
+        return None
+    report.to_json_file(report_path)
+    console.print_info(f"Execution report saved to: {report_path}")
+    return report_path
 
 
 def _batch_result_to_attempt_records(result: BatchResult) -> list[AttemptRecord]:

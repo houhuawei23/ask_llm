@@ -169,13 +169,22 @@ def resolve_env_vars(value: Any) -> Any:
 
         if matches:
             for var_name in matches:
+                # ``is not None`` (not truthiness): an explicitly empty value
+                # (``VAR=""``) is a deliberate "set to empty" and resolves,
+                # while an unset var keeps the placeholder (and warns below).
                 env_value = os.getenv(var_name)
-                if env_value:
+                if env_value is not None:
                     value = value.replace(f"${{{var_name}}}", env_value)
                 else:
                     if var_name not in _WARNED_UNSET_ENV_VARS:
                         _WARNED_UNSET_ENV_VARS.add(var_name)
-                        logger.debug(f"Environment variable {var_name} not set")
+                        # M17/2.25: an unresolved ${VAR} silently shipped the
+                        # literal placeholder into any non-key field (paths,
+                        # base_url, …). This deserves visibility, not DEBUG.
+                        logger.warning(
+                            f"Environment variable {var_name} not set; "
+                            f"placeholder ${{{var_name}}} left unresolved in config"
+                        )
 
         return value
     elif isinstance(value, dict):

@@ -1,11 +1,12 @@
 """Unit tests for data models."""
 
 import pytest
+
+from ask_llm.config.unified_config import UnifiedConfig
 from pydantic import ValidationError
 
 from ask_llm.core.models import (
     ProviderConfig,
-    AppConfig,
     ChatMessage,
     ChatHistory,
     MessageRole,
@@ -141,35 +142,6 @@ class TestProviderConfig:
                 models=["model"],
                 api_temperature=2.1,
             )
-
-
-class TestAppConfig:
-    """Test AppConfig model."""
-
-    def test_valid_config(self, app_config):
-        """Test valid app config."""
-        assert app_config.default_provider == "test"
-        assert "test" in app_config.providers
-
-    def test_empty_providers(self):
-        """Test validation rejects empty providers."""
-        with pytest.raises(ValidationError):
-            AppConfig(default_provider="test", providers={})
-
-    def test_get_provider_config(self, app_config):
-        """Test getting provider config."""
-        config = app_config.get_provider_config("test")
-        assert config.api_provider == "test"
-
-    def test_get_provider_config_default(self, app_config):
-        """Test getting default provider config."""
-        config = app_config.get_provider_config()
-        assert config.api_provider == "test"
-
-    def test_get_provider_config_missing(self, app_config):
-        """Test getting non-existent provider raises error."""
-        with pytest.raises(ValueError):
-            app_config.get_provider_config("nonexistent")
 
 
 class TestChatMessage:

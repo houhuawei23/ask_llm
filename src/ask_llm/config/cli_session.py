@@ -34,7 +34,7 @@ def load_cli_session(
     """
     load_result = ConfigLoader.load(config_path)
     set_config(load_result)
-    config_manager = ConfigManager(load_result.app_config, load_result.unified_config)
+    config_manager = ConfigManager(load_result.unified_config)
     return load_result, config_manager
 
 
@@ -69,7 +69,7 @@ def resolve_and_prepare(
     Raises:
         typer.Exit: If provider or model cannot be resolved.
     """
-    provider = cli_provider or config_manager.config.default_provider
+    provider = cli_provider or config_manager.unified_config.default_provider
     if not provider:
         console.print_error(
             "No provider specified. Use --provider or configure a default provider."
@@ -260,48 +260,3 @@ def preflight_or_exit(
             f"API 预检失败(非交互环境, 警告后继续): {summary} "
             f"(可加 --no-preflight 跳过预检, 或调高 translation.retries 增强重试。)"
         )
-
-
-def load_pricing_with_hint(
-    explicit_path: str | Path | None = None,
-) -> tuple[dict, Path | None]:
-    """Load providers.yml pricing and print the standard CLI hint (P4.4).
-
-    Single home for the previously byte-identical 6-line pricing block in
-    the batch/trans/paper commands.
-
-    Returns:
-        Tuple of (pricing_map, pricing_source_path_or_None).
-    """
-    from ask_llm.utils.pricing import load_providers_pricing
-
-    pricing_map, pricing_source = load_providers_pricing(explicit_path)
-    if pricing_source:
-        console.print_info(f"API pricing loaded from: {pricing_source}")
-    else:
-        console.print_info(
-            "No providers.yml with pricing found; token counts will still be shown, "
-            "cost estimate unavailable (add pricing_per_million_tokens or use --providers-pricing)"
-        )
-    return pricing_map, pricing_source
-
-
-def bootstrap_command(
-    config_path: str | Path | None = None,
-    *,
-    pricing_path: str | Path | None = None,
-) -> tuple[LoadResult, ConfigManager, dict, Path | None]:
-    """One-call CLI bootstrap (P4.4).
-
-    Composes :func:`load_cli_session` + :func:`load_pricing_with_hint` into the
-    standard command preamble shared by trans/paper (and future commands).
-    Provider/model resolution is NOT included: callers follow up with
-    :func:`resolve_and_prepare` once the command-specific effective temperature
-    (CLI flag or command config section) is known, then :func:`gate_api_key_or_exit`.
-
-    Returns:
-        ``(load_result, config_manager, pricing_map, pricing_source)``.
-    """
-    load_result, config_manager = load_cli_session(config_path)
-    pricing_map, pricing_source = load_pricing_with_hint(pricing_path)
-    return load_result, config_manager, pricing_map, pricing_source

@@ -4,7 +4,7 @@ import pytest
 
 from ask_llm.config.context import set_config
 from ask_llm.config.loader import ConfigLoader
-from ask_llm.utils.token_counter import TokenCounter
+from ask_llm.utils.token_counter import TokenCounter, split_hard_by_max_tokens
 from ask_llm.utils.file_handler import FileHandler
 
 
@@ -96,8 +96,8 @@ class TestTokenCounter:
         TokenCounter.clear_cache()
         # Build text large enough to require splitting under both budgets.
         text = "\n".join(f"Paragraph number {i}." for i in range(400))
-        gpt_chunks = TokenCounter.split_hard_by_max_tokens(text, 100, "gpt-4")
-        deepseek_chunks = TokenCounter.split_hard_by_max_tokens(text, 100, "deepseek-chat")
+        gpt_chunks = split_hard_by_max_tokens(text, 100, "gpt-4")
+        deepseek_chunks = split_hard_by_max_tokens(text, 100, "deepseek-chat")
         # Same text, but deepseek budget is shrunk by the safety factor -> more,
         # smaller chunks.
         assert len(deepseek_chunks) >= len(gpt_chunks)
@@ -199,12 +199,6 @@ class TestFileHandler:
         output = FileHandler.generate_output_path(input_path, custom)
         assert output == str(custom)
 
-    def test_detect_type(self):
-        """Test file type detection."""
-        assert FileHandler.detect_type("file.txt") == ".txt"
-        assert FileHandler.detect_type("file.MD") == ".md"
-        assert FileHandler.detect_type("/path/to/file.py") == ".py"
-
 
 class TestEncodingSelection:
     """Encoding-map selection must prefer the longest matching key."""
@@ -234,14 +228,14 @@ class TestAudit44WordFallbackFloor:
     """Audit 4.4: the tiktoken-free fallback must not collapse CJK to 1 'word'."""
 
     def test_cjk_text_gets_char_proportional_floor(self):
-        from ask_llm.utils.token_counter import TokenCounter
+        from ask_llm.utils.token_counter import TokenCounter, split_hard_by_max_tokens
 
         text = "这是一段没有空格的中文文本"  # 13 han chars; whitespace count == 1
         estimate = TokenCounter._word_fallback_estimate(text)
         assert estimate >= len(text)
 
     def test_latin_text_keeps_word_count(self):
-        from ask_llm.utils.token_counter import TokenCounter
+        from ask_llm.utils.token_counter import TokenCounter, split_hard_by_max_tokens
 
         text = "hello world this is a plain sentence"
         estimate = TokenCounter._word_fallback_estimate(text)
@@ -249,7 +243,7 @@ class TestAudit44WordFallbackFloor:
         assert estimate <= len(text)  # sanity: floor never exceeds char count
 
     def test_empty_text_returns_one(self):
-        from ask_llm.utils.token_counter import TokenCounter
+        from ask_llm.utils.token_counter import TokenCounter, split_hard_by_max_tokens
 
         assert TokenCounter._word_fallback_estimate("") >= 1
 
@@ -304,7 +298,7 @@ class TestAudit51HardSplitParity:
     def test_hard_split_matches_reference_on_corpus(self):
         import random
 
-        from ask_llm.utils.token_counter import TokenCounter
+        from ask_llm.utils.token_counter import TokenCounter, split_hard_by_max_tokens
 
         rng = random.Random(20260922)
         words_en = [
@@ -345,12 +339,12 @@ class TestAudit51HardSplitParity:
 
         for text in corpus:
             for budget in (32, 128, 900):
-                got = TokenCounter.split_hard_by_max_tokens(text, budget, "gpt-4")
+                got = split_hard_by_max_tokens(text, budget, "gpt-4")
                 want = self._reference_split(TokenCounter, text, budget, "gpt-4")
                 assert got == want, f"parity broken (budget={budget}) on: {text[:60]!r}"
 
     def test_token_cache_respects_byte_budget(self):
-        from ask_llm.utils.token_counter import TokenCounter
+        from ask_llm.utils.token_counter import TokenCounter, split_hard_by_max_tokens
 
         TokenCounter.clear_cache()
         original = TokenCounter._TOKEN_CACHE_MAX_BYTES

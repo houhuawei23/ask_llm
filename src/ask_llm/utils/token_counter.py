@@ -330,69 +330,70 @@ class TokenCounter:
 
         return _default_encoding()
 
-    @classmethod
-    def split_hard_by_max_tokens(
-        cls, text: str, max_tokens: int, model: str | None = None
-    ) -> list[str]:
-        """
-        Greedy split: each returned segment has at most max_tokens (tiktoken), snapping at newlines when possible.
 
-        For providers whose tokenizer is approximated (DeepSeek/Qwen), the budget
-        is reduced by :data:`APPROX_TOKEN_SAFETY_FACTOR` because cl100k_base
-        undercounts CJK and a "fitting" chunk could overflow the real context
-        window. See ARCHITECTURE_REVIEW.md bug B2.
-        """
-        text = text.strip()
-        if not text:
-            return []
-        budget = max_tokens
-        if cls.is_approximate_model(model):
-            budget = max(1, int(max_tokens * APPROX_TOKEN_SAFETY_FACTOR))
-        if cls.count_tokens(text, model) <= budget:
-            return [text]
+def split_hard_by_max_tokens(text: str, max_tokens: int, model: str | None = None) -> list[str]:
+    """Greedy split: each returned segment has at most *max_tokens* (tiktoken),
+    snapping at newlines when possible.
 
-        out: list[str] = []
-        remaining = text
-        while remaining:
-            if cls.count_tokens(remaining, model) <= budget:
-                out.append(remaining)
-                break
+    For providers whose tokenizer is approximated (DeepSeek/Qwen), the budget
+    is reduced by :data:`APPROX_TOKEN_SAFETY_FACTOR` because cl100k_base
+    undercounts CJK and a "fitting" chunk could overflow the real context
+    window. See ARCHITECTURE_REVIEW.md bug B2.
 
-            # Audit 5.1 note: this bisection is deliberately kept full-range
-            # and exact. Prefix token counts are NON-monotone (BPE merges at a
-            # cut boundary), so a windowed search seeded from token offsets
-            # converges to different cuts and breaks the byte-identical
-            # regression contract; the 5.1 optimization here is the byte-
-            # bounded token cache instead.
-            best = cls._bisect_best_cut(remaining, 1, len(remaining), budget, model) or 1
+    Lives beside :class:`TokenBudget` (its only production consumer) so the
+    whole split algorithm owns one module.
+    """
+    text = text.strip()
+    if not text:
+        return []
+    budget = max_tokens
+    if TokenCounter.is_approximate_model(model):
+        budget = max(1, int(max_tokens * APPROX_TOKEN_SAFETY_FACTOR))
+    if TokenCounter.count_tokens(text, model) <= budget:
+        return [text]
 
-            cut = remaining.rfind("\n", 0, best)
-            if cut <= 0 or cut < best // 4:
-                cut = best
-            piece = remaining[:cut].strip()
-            if not piece:
-                piece = remaining[:best].strip()
-                cut = best
-            out.append(piece)
-            remaining = remaining[cut:].lstrip()
+    out: list[str] = []
+    remaining = text
+    while remaining:
+        if TokenCounter.count_tokens(remaining, model) <= budget:
+            out.append(remaining)
+            break
 
-        return out
+        # Audit 5.1 note: this bisection is deliberately kept full-range
+        # and exact. Prefix token counts are NON-monotone (BPE merges at a
+        # cut boundary), so a windowed search seeded from token offsets
+        # converges to different cuts and breaks the byte-identical
+        # regression contract; the 5.1 optimization here is the byte-
+        # bounded token cache instead.
+        best = _bisect_best_cut(remaining, 1, len(remaining), budget, model) or 1
 
-    @classmethod
-    def _bisect_best_cut(
-        cls, remaining: str, lo: int, hi: int, budget: int, model: str | None
-    ) -> int | None:
-        """Largest cut in [lo, hi] whose prefix encodes to ≤ budget tokens.
+        cut = remaining.rfind("\n", 0, best)
+        if cut <= 0 or cut < best // 4:
+            cut = best
+        piece = remaining[:cut].strip()
+        if not piece:
+            piece = remaining[:best].strip()
+            cut = best
+        out.append(piece)
+        remaining = remaining[cut:].lstrip()
 
-        Mirrors the historical inline bisection exactly (same mid sequence), so
-        results are byte-identical to previous releases.
-        """
-        best: int | None = None
-        while lo <= hi:
-            mid = (lo + hi) // 2
-            if cls.count_tokens(remaining[:mid], model) <= budget:
-                best = mid
-                lo = mid + 1
-            else:
-                hi = mid - 1
-        return best
+    return out
+
+
+def _bisect_best_cut(
+    remaining: str, lo: int, hi: int, budget: int, model: str | None
+) -> int | None:
+    """Largest cut in [lo, hi] whose prefix encodes to ≤ budget tokens.
+
+    Mirrors the historical inline bisection exactly (same mid sequence), so
+    results are byte-identical to previous releases.
+    """
+    best: int | None = None
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        if TokenCounter.count_tokens(remaining[:mid], model) <= budget:
+            best = mid
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    return best

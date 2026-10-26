@@ -8,6 +8,7 @@ command module stays focused on argument parsing, streaming UX, and exit codes.
 from __future__ import annotations
 
 import re
+import time
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -68,17 +69,24 @@ class AskResult:
     """Result of a single ``ask`` processing request."""
 
     content: str
-    output_path: str | None = None
     metadata: RequestMetadata | None = None
     reasoning: str | None = None
     include_metadata: bool = False
 
     @property
     def output_content(self) -> str:
-        """Content formatted for file output (metadata prepended when included)."""
+        """Content formatted for file output (metadata prepended when included).
+
+        E2/2.25: reasoning captured via ``--include-reasoning`` is appended —
+        console mode prints it live, but it used to vanish in file mode.
+        """
+        parts = ""
         if self.metadata and self.include_metadata:
-            return self.metadata.format() + self.content
-        return self.content
+            parts += self.metadata.format()
+        parts += self.content
+        if self.reasoning:
+            parts += "\n\n## Reasoning\n\n" + self.reasoning
+        return parts
 
 
 @dataclass
@@ -210,6 +218,7 @@ class AskService:
         prompt_template: str | None = None,
         system_prompt: str | None = None,
         return_reasoning: bool = False,
+        max_tokens: int | None = None,
     ) -> ProcessingResult:
         """Process content non-streamingly and return a result with metadata.
 
@@ -218,6 +227,7 @@ class AskService:
             prompt_template: Prompt template with {content} placeholder.
             system_prompt: Optional system prompt.
             return_reasoning: Request reasoning content from reasoner models.
+            max_tokens: Completion token cap (E1/2.25; omit for provider default).
 
         Returns:
             Processing result with metadata.
@@ -229,6 +239,7 @@ class AskService:
             model=self.model,
             system_prompt=system_prompt,
             return_reasoning=return_reasoning,
+            max_tokens=max_tokens,
         )
 
     def iter_stream(
@@ -239,6 +250,7 @@ class AskService:
         system_prompt: str | None = None,
         include_reasoning: bool = False,
         temperature: float | None = None,
+        metadata_out: list[RequestMetadata] | None = None,
     ) -> Iterator[str | ReasoningChunk]:
         """Stream response chunks for the resolved model.
 
@@ -253,20 +265,35 @@ class AskService:
             system_prompt: Optional system prompt.
             include_reasoning: Request reasoning content from reasoner models.
             temperature: Sampling temperature.
+            metadata_out: When given a list, exactly one :class:`RequestMetadata`
+                (input/output tokens, latency) is appended after the stream
+                completes — so ``--stream --metadata`` reports usage instead of
+                silently dropping it.
 
         Yields:
             Response chunks (content fragments or ReasoningChunk pairs).
         """
         processor = self._ensure_processor()
+        start_time = time.perf_counter()
+        content_parts: list[str] = []
+        reasoning_parts: list[str] = []
         if include_reasoning:
             final_prompt = processor.format_prompt(content, prompt_template)
-            yield from processor.iter_process_raw_stream(
+            for chunk in processor.iter_process_raw_stream(
                 final_prompt,
                 temperature=temperature,
                 model=self.model,
                 return_reasoning=True,
                 system_prompt=system_prompt,
-            )
+            ):
+                if isinstance(chunk, ReasoningChunk):
+                    if chunk.content:
+                        content_parts.append(chunk.content)
+                    if chunk.reasoning:
+                        reasoning_parts.append(chunk.reasoning)
+                else:
+                    content_parts.append(chunk)
+                yield chunk
         else:
             for chunk in processor.process(
                 content=content,
@@ -276,7 +303,27 @@ class AskService:
                 stream=True,
                 system_prompt=system_prompt,
             ):
-                yield chunk.content if isinstance(chunk, ReasoningChunk) else chunk
+                text = chunk.content if isinstance(chunk, ReasoningChunk) else chunk
+                content_parts.append(text)
+                yield text
+        if metadata_out is not None:
+            output = "".join(content_parts)
+            final_prompt = processor.format_prompt(content, prompt_template)
+            if system_prompt:
+                final_prompt = f"{system_prompt}\n{final_prompt}"
+            input_stats = TokenCounter.estimate_tokens(final_prompt, self.model)
+            metadata_out.append(
+                RequestMetadata.from_execution(
+                    provider_name=processor.provider.name,
+                    model=self.model,
+                    temperature=temperature,
+                    default_temperature=processor.provider.config.api_temperature,
+                    input_stats=input_stats,
+                    output_words=TokenCounter.count_words(output),
+                    output_tokens=TokenCounter.count_tokens(output, self.model),
+                    latency=time.perf_counter() - start_time,
+                )
+            )
 
     def process_to_file(
         self,
@@ -286,6 +333,7 @@ class AskService:
         system_prompt: str | None = None,
         include_metadata: bool = False,
         return_reasoning: bool = False,
+        max_tokens: int | None = None,
     ) -> AskResult:
         """Process content and prepare file-output result.
 
@@ -304,6 +352,7 @@ class AskService:
             prompt_template=prompt_template,
             system_prompt=system_prompt,
             return_reasoning=return_reasoning,
+            max_tokens=max_tokens,
         )
         return AskResult(
             content=result.content,

@@ -8,7 +8,8 @@ import pytest
 
 from ask_llm.config.manager import ConfigManager
 from ask_llm.core.batch_models import ModelConfig
-from ask_llm.core.models import AppConfig, ProviderConfig
+from ask_llm.config.unified_config import UnifiedConfig
+from ask_llm.core.models import ProviderConfig
 from ask_llm.utils.preflight import (
     PREFLIGHT_TIMEOUT_SECONDS,
     check_provider_pair,
@@ -17,7 +18,7 @@ from ask_llm.utils.preflight import (
 
 
 def _make_config_manager(providers: dict[str, ProviderConfig]) -> ConfigManager:
-    return ConfigManager(AppConfig(default_provider=next(iter(providers)), providers=providers))
+    return ConfigManager(UnifiedConfig(default_provider=next(iter(providers)), providers=providers))
 
 
 def _manager() -> ConfigManager:

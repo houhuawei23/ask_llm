@@ -29,9 +29,11 @@ from __future__ import annotations
 import json
 import os
 from abc import ABC, abstractmethod
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Generic, TypeVar
+from typing import Any, Generic, TextIO, TypeVar
 from uuid import uuid4
 
 from loguru import logger
@@ -71,6 +73,27 @@ def atomic_write_text(path: str | Path, payload: str, *, mode: int | None = None
         raise
 
 
+@contextmanager
+def atomic_write_stream(path: str | Path) -> Iterator[TextIO]:
+    """Yield a text handle whose contents land at *path* atomically on exit.
+
+    Same tmp + fsync + ``os.replace`` discipline as :func:`atomic_write_text`,
+    for writers that stream (e.g. ``json.JSONEncoder.iterencode``) instead of
+    building one payload string (M13/2.25).
+    """
+    path = Path(path)
+    tmp_path = path.with_name(f".{path.name}.{os.getpid()}.{uuid4().hex[:8]}.tmp")
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            yield f
+            f.flush()
+            os.fsync(f.fileno())
+        tmp_path.replace(path)
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
+
+
 @dataclass
 class BaseCheckpoint(ABC, Generic[TTask, TResult]):
     """Generic checkpoint for commands that can resume after interruption.
@@ -81,7 +104,11 @@ class BaseCheckpoint(ABC, Generic[TTask, TResult]):
         created_at: ISO timestamp when the checkpoint was created.
         config_digest: Hash/digest of the relevant configuration for consistency checks.
         completed_task_ids: Task IDs that have finished successfully.
-        failed_tasks: Task contexts that failed and may be retried.
+        failed_tasks: Audit-only records of the tasks that failed in the last
+            run (via ``mark_all_failed_for_retry``). Resume does NOT read
+            these — it filters the *current* task list by
+            ``completed_task_ids`` — so treat this as diagnostics, not as a
+            retry queue.
         successful_results: Results from completed tasks.
     """
 
@@ -89,7 +116,7 @@ class BaseCheckpoint(ABC, Generic[TTask, TResult]):
     command: str
     created_at: str
     config_digest: str
-    completed_task_ids: list[int] = field(default_factory=list)
+    completed_task_ids: set[int] = field(default_factory=set)
     failed_tasks: list[TTask] = field(default_factory=list)
     successful_results: list[TResult] = field(default_factory=list)
 
@@ -120,7 +147,7 @@ class BaseCheckpoint(ABC, Generic[TTask, TResult]):
             "command": self.command,
             "created_at": self.created_at,
             "config_digest": self.config_digest,
-            "completed_task_ids": self.completed_task_ids,
+            "completed_task_ids": sorted(self.completed_task_ids),
             "failed_tasks": [self.task_to_dict(t) for t in self.failed_tasks],
             "successful_results": [self.result_to_dict(r) for r in self.successful_results],
         }
@@ -155,15 +182,23 @@ class BaseCheckpoint(ABC, Generic[TTask, TResult]):
         return task_id in self.completed_task_ids
 
     def merge(self, new_results: list[TResult]) -> None:
-        """Merge new successful results into the checkpoint."""
+        """Merge new successful results into the checkpoint.
+
+        M1/2.25: idempotent — a task already present is skipped entirely (its
+        result is not re-appended), so double merges cannot duplicate entries.
+        """
         for result in new_results:
             task_id = self.result_task_id(result)
-            if task_id not in self.completed_task_ids:
-                self.completed_task_ids.append(task_id)
+            if task_id in self.completed_task_ids:
+                continue
+            self.completed_task_ids.add(task_id)
             self.successful_results.append(result)
 
     def mark_all_failed_for_retry(self, failed_results: list[TResult]) -> None:
         """Replace the failed task list with tasks derived from failed results.
+
+        Audit-only diagnostics: resume does not consume this list (it filters
+        the current task list by ``completed_task_ids``).
 
         Subclasses must map results back to tasks via :meth:`result_to_task`.
         """

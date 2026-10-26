@@ -2,6 +2,7 @@
 
 import time
 from collections.abc import Iterator
+from typing import Any
 
 from loguru import logger
 
@@ -50,11 +51,22 @@ def _call_kwargs(
 def _iter_provider_response(
     gen: Iterator[str | ReasoningChunk] | str | ReasoningChunk,
 ) -> Iterator[str | ReasoningChunk]:
-    """Yield chunks from a provider call result (single value or iterator)."""
+    """Yield chunks from a provider call result (single value or iterator).
+
+    Normalizes ``(content, reasoning)`` tuples into :class:`ReasoningChunk` —
+    some providers yield tuples even when reasoning was not requested.
+    """
     if isinstance(gen, (str, ReasoningChunk)):
         yield gen
         return
-    yield from gen
+    # Item type is Any on purpose: adapters declare the typed shapes above but
+    # tolerate plain 2-tuples at runtime (see normalization below).
+    items: Iterator[Any] = gen
+    for item in items:
+        if isinstance(item, tuple) and len(item) == 2:
+            yield ReasoningChunk(content=item[0], reasoning=item[1])
+        else:
+            yield item
 
 
 class RequestProcessor:
@@ -173,11 +185,7 @@ class RequestProcessor:
         if isinstance(gen, (str, ReasoningChunk)):
             yield gen
             return
-        for item in gen:
-            if isinstance(item, tuple) and len(item) == 2:
-                yield ReasoningChunk(content=item[0], reasoning=item[1])
-            else:
-                yield item
+        yield from _iter_provider_response(gen)
 
     def process_with_metadata(
         self,
@@ -234,8 +242,10 @@ class RequestProcessor:
             )
         )
         reasoning: str | None = None
+        usage = None
         if isinstance(raw, ReasoningChunk):
             response, reasoning = raw.content, raw.reasoning
+            usage = raw.usage
         else:
             response = raw if isinstance(raw, str) else str(raw)
 
@@ -249,6 +259,14 @@ class RequestProcessor:
 
         resolved_model = model or self.provider.default_model
 
+        # Prefer provider-reported accounting when the API returned a usage
+        # block; fall back to the local estimates otherwise.
+        input_stats = dict(input_stats)
+        output_tokens = output_stats["token_count"]
+        if usage is not None:
+            input_stats["token_count"] = usage.input_tokens
+            output_tokens = usage.output_tokens
+
         # Create metadata
         metadata = RequestMetadata.from_execution(
             provider_name=self.provider.name,
@@ -257,7 +275,7 @@ class RequestProcessor:
             default_temperature=self.provider.config.api_temperature,
             input_stats=input_stats,
             output_words=output_stats["word_count"],
-            output_tokens=output_stats["token_count"],
+            output_tokens=output_tokens,
             latency=latency,
         )
 

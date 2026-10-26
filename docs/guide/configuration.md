@@ -59,8 +59,10 @@ Provider runtime settings (base URL, API key, model list) and per-model metadata
 - packaged copy (`ask_llm/config/providers.yml`)
 
 The working directory is deliberately **not** on this list, and the per-model
-metadata handed to the LLM engine is resolved from the same file, so `ask-llm`
-behaves identically no matter which directory it is launched from.
+gate metadata (the DeepSeek `reasoning` / `functions.json_output` flags) is read
+from the same runtime search list, so `ask-llm` behaves identically no matter
+which directory it is launched from — a stray `providers.yml` next to your files
+cannot re-enable a thinking model behind your back.
 
 Mark thinking models with `reasoning: false` when the translation/format
 pipelines use them. Without it, a thinking model can spend 30-170s streaming

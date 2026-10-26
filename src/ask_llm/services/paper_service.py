@@ -18,11 +18,13 @@ from ask_llm.core.batch_models import (
     BatchResult,
     BatchStatistics,
     BatchTask,
+    ModelConfig,
     TaskStatus,
 )
-from ask_llm.core.execution_report import build_report_from_batch_results
-from ask_llm.core.global_batch_runner import run_global_batch_tasks
-from ask_llm.core.models import AppConfig
+from ask_llm.core.binary_splitter import TokenBudget
+from ask_llm.core.command_runner import run_global_batch_tasks
+from ask_llm.core.constants import OUTPUT_TOKEN_MULTIPLIERS, TaskKind
+from ask_llm.core.execution_report import build_report_from_batch_results, export_execution_report
 from ask_llm.core.paper_explain import (
     PaperBundle,
     build_bundle_from_directory,
@@ -43,7 +45,6 @@ from ask_llm.core.paper_explain_pipeline import (
     parse_section_job_key,
 )
 from ask_llm.utils.console import console
-from ask_llm.utils.fallback_chain import model_config_with_fallback
 from ask_llm.utils.file_handler import FileHandler
 from ask_llm.utils.model_limits import (
     load_providers_model_limits,
@@ -68,7 +69,6 @@ class PaperExplainOptions:
     dry_run: bool
     resume: bool
     pipeline_path: str | None
-    use_fallback: bool = True
     retries: int | None = None
 
 
@@ -88,6 +88,8 @@ class PaperSessionResult:
     # are written to disk before the failure is reported.
     succeeded_count: int = 0
     failed_count: int = 0
+    # E9/2.25: section keys the failed jobs map to (informational).
+    sections: str | None = None
 
 
 class PaperService:
@@ -102,18 +104,16 @@ class PaperService:
         model: str,
         pricing_map: PricingMap,
         pricing_source: Path | None = None,
-        app_config: AppConfig | None = None,
     ) -> None:
         """Initialize the paper-explain service.
 
         Args:
             config_manager: Active config manager (provider/model already resolved).
-            unified_config: Loaded unified configuration.
+            unified_config: Unified configuration; required for the fallback chain.
             provider: Resolved provider name.
             model: Resolved model name.
             pricing_map: Pricing data for cost estimates.
             pricing_source: Optional path/label of the pricing source.
-            app_config: Loaded application config; required for provider fallback chain.
         """
         self.config_manager = config_manager
         self.unified_config = unified_config
@@ -121,7 +121,6 @@ class PaperService:
         self.model = model
         self.pricing_map = pricing_map
         self.pricing_source = pricing_source
-        self.app_config = app_config
         self._last_results: list[BatchResult] | None = None
 
     def explain_paper(
@@ -209,8 +208,9 @@ class PaperService:
 
         idx_to_meta: dict[int, tuple[str, str, str | None]] = {}
         paper_tasks: list[BatchTask] = []
+        task_id = 0
 
-        for orig_idx, (key, body, appendix_h2) in jobs_with_orig_idx:
+        for _orig_idx, (key, body, appendix_h2) in jobs_with_orig_idx:
             template, full_prompt = self._render_job_prompt(
                 bundle, key, body, appendix_h2, explain_pipeline, prompt_dir
             )
@@ -220,27 +220,54 @@ class PaperService:
                 f"paper job: key={key!r} model={job_model!r} max_tokens={eff_max} "
                 f"(paper.max_output_tokens={paper_max_tokens})"
             )
-            model_config, fallback_configs = model_config_with_fallback(
-                current_provider,
-                job_model,
+            model_config = ModelConfig(
+                provider=current_provider,
+                model=job_model,
                 temperature=options.temperature,
                 max_tokens=eff_max,
-                app_config=self.app_config,
-                use_fallback=options.use_fallback,
             )
-            idx_to_meta[orig_idx] = (key, template, appendix_h2)
-            paper_tasks.append(
-                BatchTask(
-                    task_id=orig_idx,
-                    prompt=full_prompt,
-                    content="",
-                    output_filename=f"paper:{key}",
-                    model_settings=model_config,
-                    task_kind="paper_explain",
-                    return_reasoning=key.startswith("full"),
-                    fallback_model_configs=fallback_configs,
+
+            # Input budget guard (A8): a section body that cannot fit the
+            # model's context window (input + reserved output) would die at the
+            # API with an opaque context-length error AFTER paying for the
+            # attempt. Split such a body into budget-fitting parts; each part
+            # becomes its own job (distinct task id → distinct output file),
+            # the section key stays the same.
+            bodies = [body]
+            limits = model_limits_map.get(job_model)
+            if limits and limits.context_length:
+                budget = TokenBudget(
+                    model=job_model,
+                    max_tokens=max(1, limits.context_length - eff_max),
+                    prompt_overhead=TokenCounter.count_tokens(template, job_model),
                 )
-            )
+                if not budget.fits(body):
+                    bodies = budget.hard_split(body)
+                    console.print_warning(
+                        f"Section '{key}' exceeds the {job_model} context window; "
+                        f"split into {len(bodies)} part(s), each explained separately"
+                    )
+
+            for part_body in bodies:
+                if len(bodies) == 1:
+                    part_prompt = full_prompt
+                else:
+                    _, part_prompt = self._render_job_prompt(
+                        bundle, key, part_body, appendix_h2, explain_pipeline, prompt_dir
+                    )
+                idx_to_meta[task_id] = (key, template, appendix_h2)
+                paper_tasks.append(
+                    BatchTask(
+                        task_id=task_id,
+                        prompt=part_prompt,
+                        content="",
+                        output_filename=f"paper:{key}",
+                        model_settings=model_config,
+                        task_kind="paper_explain",
+                        return_reasoning=key.startswith("full"),
+                    )
+                )
+                task_id += 1
 
         max_workers = max(1, min(options.concurrency, len(paper_tasks)))
         console.print_info(
@@ -283,14 +310,30 @@ class PaperService:
         self._print_usage(statistics)
 
         if failed:
+            # E9/E11/2.25: failures name the section (via idx_to_meta) and
+            # suggest the exact retry command instead of bare numeric ids.
+            sections_tried = ", ".join(
+                sorted(idx_to_meta[r.task_id][0] for r in failed if r.task_id in idx_to_meta)
+            )
             for r in failed:
-                console.print_error(f"Paper job {r.task_id} failed: {r.error or 'unknown error'}")
-            errors = "; ".join(f"job {r.task_id}: {r.error or 'unknown'}" for r in failed)
+                key = idx_to_meta.get(r.task_id, ("?", None, None))[0]
+                console.print_error(
+                    f"Paper job {r.task_id} ({key}) failed: {r.error or 'unknown error'}"
+                )
+            console.print_info(
+                "Re-run with --resume (and the same --run/--sections filters) "
+                "to retry only these failed jobs."
+            )
+            errors = "; ".join(
+                f"job {r.task_id} ({idx_to_meta.get(r.task_id, ('?',))[0]}): {r.error or 'unknown'}"
+                for r in failed
+            )
             return PaperSessionResult(
                 status="failed",
                 error=errors,
                 succeeded_count=len(results) - len(failed),
                 failed_count=len(failed),
+                sections=sections_tried or None,
             )
         return PaperSessionResult()
 
@@ -463,29 +506,66 @@ class PaperService:
         section_job_model: str,
         current_provider: str,
     ) -> None:
-        """Print a preview of planned jobs and token estimates without calling APIs."""
+        """Print a preview of planned jobs and token estimates without calling APIs.
+
+        E9/2.25: output estimates use OUTPUT_TOKEN_MULTIPLIERS (like the
+        trans/batch dry runs) and full-paper jobs are priced at their own
+        (typically pricier) full_model, not the section model.
+        """
         console.print(f"\n[bold]Dry Run — {len(jobs)} job(s) planned:[/bold]")
-        total_tokens = 0
+        output_multiplier = OUTPUT_TOKEN_MULTIPLIERS.get(
+            TaskKind.PAPER_EXPLAIN, OUTPUT_TOKEN_MULTIPLIERS[TaskKind.BATCH]
+        )
+        section_tokens = 0
+        full_tokens = 0
         for idx, (key, body, appendix_h2) in enumerate(jobs):
             _template, full_prompt = self._render_job_prompt(
                 bundle, key, body, appendix_h2, explain_pipeline, prompt_dir
             )
             job_model = full_model_name if key.startswith("full") else section_job_model
             tok = TokenCounter.count_tokens(full_prompt, job_model)
-            total_tokens += tok
+            if key.startswith("full"):
+                full_tokens += tok
+            else:
+                section_tokens += tok
             console.print(f"  [{idx:2}] {key:<30} {tok:>6} tokens")
+        total_tokens = section_tokens + full_tokens
         console.print(f"\n  Total estimated input: {total_tokens:,} tokens across {len(jobs)} jobs")
         if self.pricing_map:
-            console.print(
-                format_cost_estimate(
-                    current_provider,
-                    section_job_model,
-                    total_tokens,
-                    total_tokens * 3,
-                    self.pricing_map,
-                    pricing_source=self.pricing_source,
+            if section_tokens and full_tokens:
+                console.print(
+                    format_cost_estimate(
+                        current_provider,
+                        section_job_model,
+                        section_tokens,
+                        int(section_tokens * output_multiplier),
+                        self.pricing_map,
+                        pricing_source=self.pricing_source,
+                    )
                 )
-            )
+                console.print(
+                    format_cost_estimate(
+                        current_provider,
+                        full_model_name,
+                        full_tokens,
+                        int(full_tokens * output_multiplier),
+                        self.pricing_map,
+                        pricing_source=self.pricing_source,
+                    )
+                )
+            else:
+                in_tokens = total_tokens
+                model = full_model_name if full_tokens else section_job_model
+                console.print(
+                    format_cost_estimate(
+                        current_provider,
+                        model,
+                        in_tokens,
+                        int(in_tokens * output_multiplier),
+                        self.pricing_map,
+                        pricing_source=self.pricing_source,
+                    )
+                )
 
     def _apply_resume_or_force(
         self,
@@ -512,6 +592,17 @@ class PaperService:
             skipped = len(original_jobs) - len(filtered)
             if skipped:
                 console.print_info(f"--resume: skipping {skipped} already-completed section(s)")
+            elif any(explain_root.glob("*.explain.md")):
+                # E10/2.25: resume maps jobs to outputs by *index*. If the
+                # pipeline YAML, --run/--sections or section content changed,
+                # the numbering shifts and nothing matches — existing outputs
+                # may be stale rather than "not yet produced".
+                console.print_warning(
+                    f"--resume matched no existing outputs in {explain_root}, but output "
+                    "file(s) exist with different numbering. If the pipeline config or "
+                    "--run/--sections selection changed since the first run, indexes have "
+                    "shifted — delete stale outputs or re-run without --resume."
+                )
             return filtered, skipped
 
         for idx, (key, _, _) in enumerate(jobs):
@@ -615,15 +706,7 @@ class PaperService:
             )
 
     def export_report(self, report_path: str | None) -> str | None:
-        """Export the execution report to ``report_path`` if available.
-
-        Args:
-            report_path: Destination path for the JSON report.
-
-        Returns:
-            The exported path, or ``None`` if no report was generated or no path
-            was requested.
-        """
+        """Export the execution report to ``report_path`` if available."""
         if not report_path or self._last_results is None:
             return None
         report = build_report_from_batch_results(
@@ -631,6 +714,4 @@ class PaperService:
             self._last_results,
             metadata={"provider": self.provider, "model": self.model},
         )
-        report.to_json_file(report_path)
-        console.print_info(f"Execution report saved to: {report_path}")
-        return report_path
+        return export_execution_report(report, report_path)

@@ -42,22 +42,21 @@ def test_api_key_gate_module_does_not_import_typer():
         assert "typer" not in imported, "utils must not import typer"
 
 
+def _make_prelude():
+    prelude = mock.MagicMock()
+    prelude.load_result.unified_config.format_heading.default_prompt_file = None
+    prelude.load_result.unified_config.format_body.default_prompt_file = None
+    prelude.provider = "deepseek"
+    prelude.model = "deepseek-chat"
+    prelude.config_manager.get_provider_config.return_value = {"provider": "deepseek"}
+    return prelude
+
+
 def _patch_format_bootstrap(monkeypatch):
     from ask_llm.cli.commands import format_cmd
 
-    fake_manager = mock.MagicMock()
-    fake_manager.get_provider_config.return_value = {"provider": "deepseek"}
-
-    load_result = mock.MagicMock()
-    monkeypatch.setattr(
-        format_cmd, "load_cli_session", mock.MagicMock(return_value=(load_result, fake_manager))
-    )
-    monkeypatch.setattr(
-        format_cmd,
-        "resolve_and_prepare",
-        mock.MagicMock(return_value=("deepseek", "deepseek-chat")),
-    )
-    monkeypatch.setattr(format_cmd, "gate_api_key_or_exit", mock.MagicMock())
+    prelude = _make_prelude()
+    monkeypatch.setattr(format_cmd, "paid_command_prelude", mock.MagicMock(return_value=prelude))
     monkeypatch.setattr(format_cmd, "create_engine_adapter", mock.MagicMock())
     monkeypatch.setattr(format_cmd, "RequestProcessor", mock.MagicMock())
 
@@ -80,11 +79,10 @@ def test_format_resume_success_exits_zero(monkeypatch, tmp_path):
     assert response.exit_code == 0, response.output
     assert "API 错误" not in response.output
     resume.assert_called_once()
-    # Bootstrap must resolve through the shared entry and run the API key gate.
+    # Bootstrap must go through the shared paid-command prelude.
     from ask_llm.cli.commands import format_cmd
 
-    format_cmd.resolve_and_prepare.assert_called_once()
-    format_cmd.gate_api_key_or_exit.assert_called_once()
+    format_cmd.paid_command_prelude.assert_called_once()
 
 
 def test_format_invalid_type_reports_type_error(monkeypatch, tmp_path):
@@ -133,17 +131,8 @@ def test_cli_errors_maps_oserror_to_readable_exit_1():
 def _patch_format_run(monkeypatch):
     from ask_llm.cli.commands import format_cmd
 
-    fake_manager = mock.MagicMock()
-    load_result = mock.MagicMock()
-    monkeypatch.setattr(
-        format_cmd, "load_cli_session", mock.MagicMock(return_value=(load_result, fake_manager))
-    )
-    monkeypatch.setattr(
-        format_cmd,
-        "resolve_and_prepare",
-        mock.MagicMock(return_value=("deepseek", "deepseek-chat")),
-    )
-    monkeypatch.setattr(format_cmd, "gate_api_key_or_exit", mock.MagicMock())
+    prelude = _make_prelude()
+    monkeypatch.setattr(format_cmd, "paid_command_prelude", mock.MagicMock(return_value=prelude))
     monkeypatch.setattr(format_cmd, "create_engine_adapter", mock.MagicMock())
     monkeypatch.setattr(format_cmd, "RequestProcessor", mock.MagicMock())
     return format_cmd
@@ -278,3 +267,69 @@ def test_config_show_reports_unresolved_key_as_unconfigured(monkeypatch, tmp_pat
     assert response.exit_code == 0, response.output
     assert "✓ Configured" not in response.output
     assert "✗ Not configured" in response.output
+
+
+# ---------------------------------------------------------------------------
+# H3/2.25: ask input validation must render as a clean CLI error
+# ---------------------------------------------------------------------------
+
+
+def test_ask_missing_input_file_is_clean_cli_error():
+    """H3: a path-looking missing input must exit 1 with a readable message,
+    never escape cli_errors as a raw FileNotFoundError traceback."""
+    response = runner.invoke(app, ["ask", "definitely-missing-input-12345.md"])
+    assert response.exit_code == 1, response.output
+    assert "Input file not found" in response.output
+    assert not isinstance(response.exception, FileNotFoundError)
+
+
+def test_config_init_yes_overwrites_without_prompt(tmp_path):
+    """L12/2.25: `config init --yes` overwrites existing files without
+    prompting — non-interactive scripts must not die on typer's Abort."""
+    target = tmp_path / "default_config.yml"
+    target.write_text("existing: true", encoding="utf-8")
+
+    ok = runner.invoke(app, ["config", "init", "-o", str(target), "--yes"])
+    assert ok.exit_code == 0, ok.output
+    assert "existing: true" not in target.read_text(encoding="utf-8")
+
+
+def test_config_init_existing_target_prompts_and_aborts_cleanly(tmp_path):
+    """Without --yes an existing target still prompts (aborting in
+    non-interactive contexts) — behavior preserved for interactive use."""
+    target = tmp_path / "default_config.yml"
+    target.write_text("existing: true", encoding="utf-8")
+
+    aborted = runner.invoke(app, ["config", "init", "-o", str(target)], input="n\n")
+    assert aborted.exit_code == 0  # user declined -> clean exit, no overwrite
+    assert target.read_text(encoding="utf-8") == "existing: true"
+
+
+def test_config_get_distinguishes_missing_key_from_none(tmp_path):
+    """M17/2.25: a typo'd key errors; a nullable key that exists prints None
+    instead of a misleading 'Key not found'."""
+    import yaml
+
+    config = {
+        "default_provider": "prov_a",
+        "providers": {
+            "prov_a": {
+                "base_url": "https://a.example.com/v1",
+                "api_key": "sk-test",
+                "models": [{"name": "a-model"}],
+            },
+        },
+    }
+    config_path = tmp_path / "default_config.yml"
+    config_path.write_text(yaml.dump(config), encoding="utf-8")
+
+    missing = runner.invoke(
+        app, ["config", "get", "translation.nonexistent_key_xyz", "--config", str(config_path)]
+    )
+    assert missing.exit_code == 1
+    assert "Key not found" in missing.output
+
+    nullable = runner.invoke(
+        app, ["config", "get", "translation.default_prompt_file", "--config", str(config_path)]
+    )
+    assert nullable.exit_code == 0, nullable.output

@@ -41,8 +41,18 @@ class BatchConfigLoader:
         # Read file content
         content = FileHandler.read(config_path)
 
-        # Try to detect format
-        if content.strip().startswith("---"):
+        # Format detection by YAML structure, not a fragile textual prefix:
+        # a leading "---" routed ANY text starting with "---" (e.g. a stray
+        # horizontal rule above a comment) into the pairs parser with
+        # confusing errors. Parse the stream and count meaningful documents
+        # instead; config files are small, so the double parse is free.
+        # A stream that does not parse at all falls through to the single-
+        # document loader, which owns the canonical "Invalid YAML" error.
+        try:
+            doc_count = sum(1 for doc in yaml.safe_load_all(content) if doc is not None)
+        except yaml.YAMLError:
+            doc_count = 1
+        if doc_count > 1:
             # Multi-document format (prompt-content-pairs)
             return cls._load_prompt_content_pairs(content, config_path)
         else:

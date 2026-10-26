@@ -16,7 +16,7 @@ from unittest.mock import patch
 from ask_llm.config.cli_session import preflight_or_exit
 from ask_llm.config.manager import ConfigManager
 from ask_llm.config.unified_config import UnifiedConfig
-from ask_llm.core.models import AppConfig, ProviderConfig
+from ask_llm.core.models import ProviderConfig
 from ask_llm.utils.provider_cache import ProviderAdapterCache
 
 
@@ -34,18 +34,19 @@ class _FakeAdapter:
 
 @pytest.fixture
 def config_manager():
-    app_config = AppConfig(
-        default_provider="deepseek",
-        providers={
-            "deepseek": ProviderConfig(
-                api_provider="deepseek",
-                api_key="sk-test",
-                api_base="https://api.deepseek.com/v1",
-                models=["deepseek-chat"],
-            ),
-        },
+    return ConfigManager(
+        UnifiedConfig(
+            default_provider="deepseek",
+            providers={
+                "deepseek": ProviderConfig(
+                    api_provider="deepseek",
+                    api_key="sk-test",
+                    api_base="https://api.deepseek.com/v1",
+                    models=["deepseek-chat"],
+                ),
+            },
+        )
     )
-    return ConfigManager(app_config, UnifiedConfig())
 
 
 def test_unhealthy_endpoint_non_tty_warns_and_continues(config_manager, monkeypatch):
@@ -140,7 +141,6 @@ def test_trans_dry_run_never_probes(sample_config_file, temp_dir, monkeypatch):
                 "--config",
                 str(sample_config_file),
                 "--dry-run",
-                "--no-fallback",
             ],
         )
     assert result.exit_code == 0, result.output

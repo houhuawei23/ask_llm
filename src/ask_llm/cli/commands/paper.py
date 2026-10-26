@@ -7,27 +7,13 @@ from typing import Annotated
 
 import typer
 
+from ask_llm.cli.common import paid_command_prelude
 from ask_llm.cli.errors import cli_errors
-from ask_llm.config.cli_session import (
-    bootstrap_command,
-    gate_api_key_or_exit,
-    preflight_or_exit,
-    resolve_and_prepare,
-)
+from ask_llm.config.cli_session import preflight_or_exit
 from ask_llm.config.unified_config import PaperConfig
+from ask_llm.core.constants import MAX_CONCURRENCY
 from ask_llm.services.paper_service import PaperExplainOptions, PaperService
 from ask_llm.utils.console import console
-from ask_llm.utils.fallback_chain import model_config_with_fallback
-
-try:
-    from ask_llm.utils import (
-        engine_facade as _engine_facade,  # noqa: F401 — fail fast if engine missing
-    )
-except ImportError:
-    console.print_error(
-        "llm_engine is required but not installed. Please install it with: pip install llm-engine"
-    )
-    raise
 
 
 def paper(
@@ -131,13 +117,6 @@ def paper(
             help="Path to paper-explain-pipeline.yml (overrides paper.pipeline_config in config)",
         ),
     ] = None,
-    fallback: Annotated[
-        bool,
-        typer.Option(
-            "--fallback/--no-fallback",
-            help="Enable fallback to alternate providers/models on failure",
-        ),
-    ] = True,
     no_preflight: Annotated[
         bool,
         typer.Option(
@@ -173,43 +152,26 @@ def paper(
             console.print_error(f"Path not found: {path}")
             raise typer.Exit(1)
 
-        (
-            load_result,
-            config_manager,
-            pricing_map,
-            pricing_source,
-        ) = bootstrap_command(
+        prelude = paid_command_prelude(
             config_path,
+            provider=provider,
+            model=model,
+            temperature=lambda lr: lr.unified_config.paper.temperature,
             pricing_path=providers_pricing,
-        )
-
-        final_provider, final_model = resolve_and_prepare(
-            config_manager,
-            cli_provider=provider,
-            cli_model=model,
-            temperature=temperature,
-        )
-        gate_api_key_or_exit(
-            config_manager,
-            final_provider,
-            # M2: --dry-run never touches the network, so it must not force an
-            # interactive API-key prompt (cli_session documents gate-after-
-            # pre-network-path; ask does this, paper didn't).
             skip_api_key_check=skip_api_key_check or dry_run,
         )
-        paper_cfg = load_result.unified_config.paper
-        if not dry_run:
-            # Pre-run API health gate: probes the primary chain, plus the
-            # full-paper model when --run full/all will use a second model.
-            primary, fallbacks = model_config_with_fallback(
-                final_provider,
-                final_model,
-                temperature=temperature,
-                max_tokens=None,
-                app_config=load_result.app_config,
-                use_fallback=fallback,
+        paper_cfg = prelude.load_result.unified_config.paper
+        if resume:
+            console.print_error(
+                "--resume for paper takes no value (resume filters by existing outputs)."
             )
-            pairs = [(primary.provider, primary.model)] + [(f.provider, f.model) for f in fallbacks]
+            raise typer.Exit(2)
+        resume_enabled = resume is not None
+
+        if not dry_run:
+            # Pre-run API health gate: probe the section model, plus the
+            # full-paper model when --run full/all will use a second model.
+            pairs = [(prelude.provider, prelude.model)]
             if run_mode in ("full", "all"):
                 # Mirror PaperService's resolution exactly: an unset
                 # paper.full_model falls back to the PaperConfig default
@@ -217,11 +179,13 @@ def paper(
                 # pass preflight while the full run dies on a dead reasoner.
                 full_model = (paper_cfg.full_model or "").strip() or PaperConfig().full_model
                 if full_model:
-                    pairs.append((final_provider, full_model))
-            preflight_or_exit(config_manager, pairs, command="paper", skip=no_preflight)
+                    pairs.append((prelude.provider, full_model))
+            preflight_or_exit(prelude.config_manager, pairs, command="paper", skip=no_preflight)
         workers = concurrency if concurrency is not None else paper_cfg.concurrency
-        if workers < 1 or workers > 64:
-            console.print_error("--concurrency / paper.concurrency must be between 1 and 64")
+        if workers < 1 or workers > MAX_CONCURRENCY:
+            console.print_error(
+                f"--concurrency / paper.concurrency must be between 1 and {MAX_CONCURRENCY}"
+            )
             raise typer.Exit(1)
 
         section_filter: set[str] | None = None
@@ -236,20 +200,18 @@ def paper(
             include_metadata=metadata,
             concurrency=workers,
             dry_run=dry_run,
-            resume=resume,
+            resume=resume_enabled,
             pipeline_path=pipeline,
-            use_fallback=fallback,
             retries=retries,
         )
 
         service = PaperService(
-            config_manager=config_manager,
-            unified_config=load_result.unified_config,
-            provider=final_provider,
-            model=final_model,
-            pricing_map=pricing_map,
-            pricing_source=pricing_source,
-            app_config=load_result.app_config,
+            config_manager=prelude.config_manager,
+            unified_config=prelude.load_result.unified_config,
+            provider=prelude.provider,
+            model=prelude.model,
+            pricing_map=prelude.pricing_map,
+            pricing_source=prelude.pricing_source,
         )
 
         try:

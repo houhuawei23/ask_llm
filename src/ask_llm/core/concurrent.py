@@ -24,7 +24,7 @@ from typing import Any, Generic, TypeVar
 
 from loguru import logger
 
-from ask_llm.core.retry_policy import RetryPolicy
+from ask_llm.core.error_keywords import is_retryable_error as error_keywords_is_retryable
 
 TTask = TypeVar("TTask")
 TResult = TypeVar("TResult")
@@ -70,6 +70,20 @@ def exponential_backoff_seconds(
     return float(source.uniform(0, raw))
 
 
+def _raise_with_partial_results(exc: BaseException, results: list[Any]) -> None:
+    """Re-raise *exc* carrying the results collected before the failure.
+
+    L1/2.25: when ``on_worker_exception`` is None the first worker exception
+    aborts the run; without this, already-paid-for results were discarded with
+    the local ``results`` list. Callers can read
+    ``getattr(exc, "partial_results", [])`` to report what completed.
+    """
+    # setattr (not attribute assignment): BaseException has no such attribute,
+    # and arbitrary exception payloads can only be attached dynamically.
+    setattr(exc, "partial_results", list(results))  # noqa: B010
+    raise exc
+
+
 class BoundedRetryRunner(Generic[TTask, TResult]):
     """Run tasks with bounded concurrency, retries and exponential backoff.
 
@@ -85,20 +99,23 @@ class BoundedRetryRunner(Generic[TTask, TResult]):
         max_retries: int,
         retry_delay: float,
         retry_delay_max: float,
-        retry_policy: RetryPolicy | None = None,
         stop_event: threading.Event | None = None,
+        install_sigint_handler: bool = True,
     ) -> None:
         self.max_workers = max(1, max_workers)
         self.max_retries = max_retries
         self.retry_delay = retry_delay
         self.retry_delay_max = retry_delay_max
-        # Audit 3.1: an explicit policy (e.g. per-provider) takes precedence
-        # over the shared DEFAULT_RETRY_POLICY fallback.
-        self.retry_policy = retry_policy
         # Audit 3.3: cooperative stop for runners driven from non-main threads
         # (per-provider lanes): the SIGINT handler lives on the main thread and
         # sets this event; each lane runner treats it as its own interrupt.
         self.stop_event = stop_event
+        # When False the runner never touches SIGINT — an outer owner (e.g.
+        # GlobalBatchProcessor) installs the handler and signals ``stop_event``.
+        # Nesting two handlers on the main thread broke the "second Ctrl-C
+        # hard-kills" contract (the inner handler restored the outer one, which
+        # then only set an already-draining stop event).
+        self.install_sigint_handler = install_sigint_handler
 
     def run_with_metrics(
         self,
@@ -138,13 +155,10 @@ class BoundedRetryRunner(Generic[TTask, TResult]):
         queue with its retry budget untouched — the bucket refill is the wait,
         so the worker slot is freed instead of blocked. Bounded by
         ``max_retries + 1`` deferrals per task; beyond that the result is
-        treated as a normal failure (escalating through the fallback chain).
+        treated as a normal failure (consuming the retry budget).
         """
         if is_retryable_error is None:
-            if self.retry_policy is not None:
-                is_retryable_error = self.retry_policy.is_retryable
-            else:
-                is_retryable_error = _is_transient_error
+            is_retryable_error = error_keywords_is_retryable
 
         results: list[TResult] = []
         pending: deque[tuple[TTask, int]] = deque((t, 0) for t in tasks)
@@ -243,69 +257,89 @@ class BoundedRetryRunner(Generic[TTask, TResult]):
             if prev_handler is not None:
                 signal.signal(signal.SIGINT, prev_handler)
 
-        install_handler = threading.current_thread() is threading.main_thread()
+        install_handler = (
+            self.install_sigint_handler and threading.current_thread() is threading.main_thread()
+        )
         prev_handler = signal.getsignal(signal.SIGINT) if install_handler else None
         if install_handler:
             signal.signal(signal.SIGINT, _request_stop)
+        executor = ThreadPoolExecutor(
+            max_workers=self.max_workers,
+            thread_name_prefix="ask-llm-bounded",
+        )
+        aborted = False
         try:
-            with ThreadPoolExecutor(
-                max_workers=self.max_workers,
-                thread_name_prefix="ask-llm-bounded",
-            ) as executor:
-                while True:
-                    # Audit 3.3: cooperative stop (lane runners on non-main
-                    # threads share one main-thread SIGINT event).
-                    if not interrupted and (
-                        self.stop_event is not None and self.stop_event.is_set()
-                    ):
-                        interrupted = True
-                        if prev_handler is not None:
-                            signal.signal(signal.SIGINT, prev_handler)
+            while True:
+                # Audit 3.3: cooperative stop (lane runners on non-main
+                # threads share one main-thread SIGINT event).
+                if not interrupted and (self.stop_event is not None and self.stop_event.is_set()):
+                    interrupted = True
+                    if prev_handler is not None:
+                        signal.signal(signal.SIGINT, prev_handler)
 
-                    # Move retries whose time has come back to the pending queue.
-                    if not interrupted:
-                        now = time.monotonic()
-                        while retry_heap and retry_heap[0][0] <= now:
-                            _, _, task, retry_count = heapq.heappop(retry_heap)
-                            pending.append((task, retry_count))
+                # Move retries whose time has come back to the pending queue.
+                if not interrupted:
+                    now = time.monotonic()
+                    while retry_heap and retry_heap[0][0] <= now:
+                        _, _, task, retry_count = heapq.heappop(retry_heap)
+                        pending.append((task, retry_count))
 
-                    # Submit as many pending tasks as the pool allows.
-                    if not interrupted:
-                        while pending and len(inflight) < self.max_workers:
-                            task, retry_count = pending.popleft()
-                            _submit(task, retry_count)
+                # Submit as many pending tasks as the pool allows.
+                if not interrupted:
+                    while pending and len(inflight) < self.max_workers:
+                        task, retry_count = pending.popleft()
+                        _submit(task, retry_count)
 
-                    if exception_during_run is not None:
-                        raise exception_during_run
+                if exception_during_run is not None:
+                    _raise_with_partial_results(exception_during_run, results)
 
-                    if not inflight:
-                        if interrupted or (not pending and not retry_heap):
-                            break
-                        # Nothing in flight; wait for the next retry to become ready.
-                        if retry_heap:
-                            sleep_for = max(0.0, retry_heap[0][0] - time.monotonic())
-                            if sleep_for > 0:
-                                time.sleep(sleep_for)
-                        continue
-
-                    # Wait until either a task finishes or the next retry is due.
-                    timeout: float | None = None
+                if not inflight:
+                    if interrupted or (not pending and not retry_heap):
+                        break
+                    # Nothing in flight; wait for the next retry to become
+                    # ready. Sleep in small slices so Ctrl-C (which sets
+                    # ``interrupted`` without raising) is noticed promptly —
+                    # PEP 475 recomputes an interrupted single sleep.
                     if retry_heap:
-                        timeout = max(0.0, retry_heap[0][0] - time.monotonic())
+                        deadline = time.monotonic() + max(0.0, retry_heap[0][0] - time.monotonic())
+                        while not interrupted and not (
+                            self.stop_event is not None and self.stop_event.is_set()
+                        ):
+                            remaining = deadline - time.monotonic()
+                            if remaining <= 0:
+                                break
+                            time.sleep(min(0.2, remaining))
+                    continue
 
-                    done, _ = wait(
-                        list(inflight.keys()),
-                        return_when=FIRST_COMPLETED,
-                        timeout=timeout,
-                    )
-                    for future in done:
-                        _process_future(future)
+                # Wait until either a task finishes or the next retry is due.
+                timeout: float | None = None
+                if retry_heap:
+                    timeout = max(0.0, retry_heap[0][0] - time.monotonic())
 
-                    if exception_during_run is not None:
-                        raise exception_during_run
+                done, _ = wait(
+                    list(inflight.keys()),
+                    return_when=FIRST_COMPLETED,
+                    timeout=timeout,
+                )
+                for future in done:
+                    _process_future(future)
+
+                if exception_during_run is not None:
+                    _raise_with_partial_results(exception_during_run, results)
+        except BaseException:
+            aborted = True
+            raise
         finally:
             if install_handler and prev_handler is not None:
                 signal.signal(signal.SIGINT, prev_handler)
+            if aborted:
+                # Do not block on in-flight LLM calls (tens of seconds each)
+                # while the run is aborting: cancel work that has not started
+                # and let the exception propagate immediately. The exception
+                # carries ``partial_results`` for the caller (L1).
+                executor.shutdown(wait=False, cancel_futures=True)
+            else:
+                executor.shutdown(wait=True)
 
         abandoned_count = 0
         if interrupted:
@@ -417,15 +451,3 @@ def run_bounded_with_retries(
         order_key=order_key,
         make_interrupted_result=make_interrupted_result,
     )
-
-
-def _is_transient_error(error_message: str) -> bool:
-    """Return True if *error_message* looks transient/retryable.
-
-    Thin backward-compatible wrapper around :data:`RetryPolicy`. New code should
-    construct a :class:`~ask_llm.core.retry_policy.RetryPolicy` directly to allow
-    per-provider customization.
-    """
-    from ask_llm.core.retry_policy import DEFAULT_RETRY_POLICY
-
-    return DEFAULT_RETRY_POLICY.is_retryable(error_message)

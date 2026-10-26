@@ -1,5 +1,7 @@
 """Unit tests for BinarySplitter + TokenBudget (P3.2)."""
 
+from itertools import pairwise
+
 from ask_llm.core.binary_splitter import BinarySplitter, TokenBudget
 from ask_llm.utils.token_counter import TokenCounter
 
@@ -105,22 +107,22 @@ class TestBinarySplitter:
 
     def test_compat_wrapper_matches(self):
         """MarkdownTokenSplitter delegates to BinarySplitter identically."""
-        from ask_llm.core.markdown_token_splitter import MarkdownTokenSplitter
+        from ask_llm.core.binary_splitter import create_markdown_splitter
 
         text = "# A\n\n" + ("body " * 100) + "\n\n## B\n\n" + ("more " * 100)
-        via_wrapper = MarkdownTokenSplitter(MODEL, 50).split(text)
+        via_wrapper = create_markdown_splitter(MODEL, 50).split(text)
         via_impl = _split(text, 50)
         assert [c.content for c in via_wrapper] == [c.content for c in via_impl]
         assert [c.chunk_id for c in via_wrapper] == [c.chunk_id for c in via_impl]
 
     def test_wrapper_prompt_overhead(self):
-        from ask_llm.core.markdown_token_splitter import MarkdownTokenSplitter
+        from ask_llm.core.binary_splitter import create_markdown_splitter
 
         text = "\n\n".join(f"Paragraph {i}. " + "text " * 40 for i in range(6))
-        splitter = MarkdownTokenSplitter(MODEL, 100, prompt_overhead_tokens=60)
-        assert splitter._budget.prompt_overhead == 60
+        splitter = create_markdown_splitter(MODEL, 100, prompt_overhead_tokens=60)
+        assert splitter.budget.prompt_overhead == 60
         chunks = splitter.split(text)
-        plain = MarkdownTokenSplitter(MODEL, 100).split(text)
+        plain = create_markdown_splitter(MODEL, 100).split(text)
         assert len(chunks) >= len(plain)
 
 
@@ -233,3 +235,69 @@ class TestAudit41NoProgressFallback:
         # content equality is checked whitespace-insensitively.
         joined = "".join(c.content for c in chunks)
         assert " ".join(joined.split()) == " ".join(text.split())
+
+
+def test_spans_point_exactly_at_content_after_budget_enforcement():
+    """M2/2.25: every chunk span must satisfy original[start:end] == content —
+    stripped sentence groups and hard-split pieces used to drift."""
+    from ask_llm.core.binary_splitter import BinarySplitter, TokenBudget
+
+    budget = TokenBudget(model="gpt-4", max_tokens=40)
+    splitter = BinarySplitter(budget)
+    text = (
+        "Alpha paragraph one. Alpha paragraph two. Alpha three.\n\n"
+        "Beta paragraph one. Beta paragraph two. Beta three.\n\n"
+        "Gamma paragraph one. Gamma paragraph two. Gamma three."
+    ) * 4
+    chunks = splitter.split(text)
+    assert len(chunks) > 1
+    for c in chunks:
+        assert text[c.start_pos : c.end_pos] == c.content
+    # Spans are ordered and non-overlapping.
+    spans = [(c.start_pos, c.end_pos) for c in sorted(chunks, key=lambda c: c.chunk_id)]
+    for (_, prev_end), (next_start, _) in pairwise(spans):
+        assert prev_end <= next_start
+
+
+class TestFenceParityMerge:
+    """B3: blank lines inside a fenced block must not split the fence."""
+
+    def test_fenced_block_with_blank_lines_stays_intact(self):
+        text = (
+            "Intro paragraph with enough words to exceed the small budget.\n\n"
+            "```python\n"
+            "line_one = 1\n\n"
+            "line_two = 2\n\n"
+            "line_three = 3\n"
+            "```\n\n"
+            "Outro paragraph with enough words to exceed the small budget."
+        )
+        chunks = _split(text, 60)
+        joined = "\n\n".join(c.content for c in chunks)
+        # The fence block must appear verbatim inside exactly one chunk —
+        # never split across chunk boundaries.
+        fence_chunk = [c for c in chunks if "```python" in c.content]
+        assert len(fence_chunk) == 1
+        assert "line_three = 3\n```" in fence_chunk[0].content
+        # No content lost.
+        assert "line_one = 1" in joined and "Outro paragraph" in joined
+
+    def test_display_math_still_merges_with_preceding_paragraph(self):
+        text = (
+            "Paragraph before the equation.\n\n"
+            "$$\nE = mc^2\n$$\n\n"
+            "Paragraph after the equation with more filler words to fill budget."
+        )
+        chunks = _split(text, 60)
+        eq_chunk = [c for c in chunks if "E = mc^2" in c.content]
+        assert len(eq_chunk) == 1
+        assert eq_chunk[0].content.startswith("Paragraph before")
+
+    def test_character_split_spans_point_at_real_text(self):
+        """B4/B5: hard-split piece spans must locate the piece verbatim in the
+        source (hard_split strips its input first)."""
+        text = "   " + ("word " * 200)  # leading whitespace + no sentence punct
+        chunks = _split(text, 30)
+        assert len(chunks) > 1
+        for c in chunks:
+            assert text[c.start_pos : c.end_pos] == c.content

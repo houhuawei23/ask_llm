@@ -1,6 +1,6 @@
 """Pre-run API health probes (pure logic, no console/typer I/O).
 
-One probe per (provider, model): a tiny real API call via the llm-engine
+One probe per (provider, model): a tiny real API call via the provider
 adapter's ``test_connection()`` (~10 tokens), with a shortened timeout so a
 dead endpoint bounds the probe instead of stalling for the run timeout.
 Extracted from ``batch_service._validate_models`` so batch, and the new
@@ -89,7 +89,7 @@ def check_provider_pair(
     Returns:
         A :class:`PreflightOutcome`; never raises.
     """
-    if provider not in config_manager.config.providers:
+    if provider not in config_manager.unified_config.providers:
         return PreflightOutcome(provider, model, False, None, "Provider not found")
 
     pc = config_manager.get_provider_config(provider)

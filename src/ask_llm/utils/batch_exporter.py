@@ -10,6 +10,8 @@ import yaml
 from loguru import logger
 
 from ask_llm.core.batch_models import BatchResult, BatchStatistics, TaskStatus
+from ask_llm.core.checkpoint import atomic_write_stream
+from ask_llm.utils.export_formats import EXTENSION_TO_FORMAT
 from ask_llm.utils.file_handler import FileHandler
 
 
@@ -26,14 +28,13 @@ class BatchResultExporter:
 
     SUPPORTED_FORMATS: ClassVar[list[str]] = ["json", "yaml", "csv", "markdown"]
 
-    # Auto-detection extension map; unknown extensions are rejected instead of
-    # silently exporting JSON (audit 4.5).
-    _FORMAT_EXTENSIONS: ClassVar[dict[str, tuple[str, ...]]] = {
-        "json": (".json",),
-        "yaml": (".yaml", ".yml"),
-        "csv": (".csv",),
-        "markdown": (".md", ".markdown"),
-    }
+    # Reverse view of the shared extension table (format -> canonical ext),
+    # derived from export_formats.EXTENSION_TO_FORMAT so there is one source
+    # of truth for the extension↔format mapping.
+    _FORMAT_TO_EXTENSION: ClassVar[dict[str, str]] = {}
+    for _fmt, _ext in EXTENSION_TO_FORMAT.items():
+        _FORMAT_TO_EXTENSION.setdefault(_fmt, _ext)
+    del _fmt, _ext
 
     def __init__(
         self,
@@ -107,13 +108,7 @@ class BatchResultExporter:
 
         # Generate output path if needed (add extension if missing)
         if not output_file.suffix:
-            format_to_extension = {
-                "json": ".json",
-                "yaml": ".yaml",
-                "csv": ".csv",
-                "markdown": ".md",
-            }
-            extension = format_to_extension.get(format_type, ".json")
+            extension = self._FORMAT_TO_EXTENSION.get(format_type, ".json")
             output_file = output_file.with_suffix(extension)
 
         # Export based on format
@@ -138,18 +133,22 @@ class BatchResultExporter:
     def _detect_format_from_suffix(cls, output_file: Path) -> str:
         """Map a file extension to an export format; unknown ones are an error.
 
-        The previous behavior defaulted unknown extensions to JSON, quietly
+        Uses the shared ``export_formats`` table (P4.7 single source). The
+        previous behavior defaulted unknown extensions to JSON, quietly
         writing JSON payload into e.g. a ``.txt`` file (audit 4.5).
         """
         suffix = output_file.suffix.lower()
-        for fmt, extensions in cls._FORMAT_EXTENSIONS.items():
-            if suffix in extensions:
-                return fmt
+        fmt = EXTENSION_TO_FORMAT.get(suffix)
+        if fmt is not None and fmt in cls.SUPPORTED_FORMATS:
+            return fmt
+        supported_exts = sorted(
+            ext for ext, f in EXTENSION_TO_FORMAT.items() if f in cls.SUPPORTED_FORMATS
+        )
         shown = suffix if suffix else "(none)"
         raise ValueError(
             f"Cannot infer export format from extension '{shown}' of "
             f"'{output_file.name}'. Supported extensions: "
-            + ", ".join(ext for exts in cls._FORMAT_EXTENSIONS.values() for ext in exts)
+            + ", ".join(supported_exts)
             + " — or pass --format explicitly."
         )
 
@@ -157,9 +156,9 @@ class BatchResultExporter:
         """Export results as JSON using a streaming encoder.
 
         For large result sets this avoids materializing the entire JSON string in
-        memory before writing it to disk. Streams into a tmp file and swaps at
-        the end, matching FileHandler's atomic-write + parent-mkdir semantics
-        used by the yaml/csv/markdown exports (H10).
+        memory before writing it to disk. Streams through the shared
+        ``atomic_write_stream`` (unique tmp + fsync + rename), matching the
+        parent-mkdir semantics of the other exports (H10).
         """
         output_file = Path(output_path)
         if output_file.exists() and not force:
@@ -167,16 +166,10 @@ class BatchResultExporter:
                 f"Output file already exists: {output_path}. Use --force to overwrite."
             )
         output_file.parent.mkdir(parents=True, exist_ok=True)
-        tmp_file = output_file.with_suffix(output_file.suffix + ".tmp")
         encoder = json.JSONEncoder(indent=2, ensure_ascii=False, default=str)
-        try:
-            with open(tmp_file, "w", encoding="utf-8") as f:
-                for chunk in encoder.iterencode(self._prepare_data()):
-                    f.write(chunk)
-            tmp_file.replace(output_file)
-        except Exception:
-            tmp_file.unlink(missing_ok=True)
-            raise
+        with atomic_write_stream(output_file) as f:
+            for chunk in encoder.iterencode(self._prepare_data()):
+                f.write(chunk)
 
     def _export_yaml(self) -> str:
         """Export results as YAML."""
@@ -480,7 +473,6 @@ class BatchResultExporter:
         cls,
         results: list[BatchResult],
         output_dir: str,
-        batch_mode: str | None = None,  # noqa: ARG003
         *,
         force: bool = False,
     ) -> list[str]:
@@ -491,7 +483,6 @@ class BatchResultExporter:
         Args:
             results: List of batch results
             output_dir: Output directory path
-            batch_mode: Batch mode (not used in split mode, kept for API consistency)
             force: Overwrite existing files (audit 4.5). Filename conflicts
                 within this export still resolve via ``_N`` suffixes.
 

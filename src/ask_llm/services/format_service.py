@@ -11,7 +11,6 @@ import shutil
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 from rich.progress import (
     BarColumn,
@@ -42,62 +41,75 @@ from ask_llm.core.md_heading_formatter import (
 from ask_llm.core.processor import RequestProcessor
 from ask_llm.utils.console import console
 from ask_llm.utils.file_handler import FileHandler
+from ask_llm.utils.prompt_resolver import load_prompt_template
 
 # Built-in default matching default_config.yml so FormatService can resume
 # without an active CLI config (e.g. library / embedded use).
 _DEFAULT_FORMATTED_SUFFIX = "_formatted"
 
 
+@dataclass
+class FormatOptions:
+    """Resolved per-run format options (one object instead of 15 kwargs).
+
+    Shared by :func:`format_one`, :func:`run_format` and the CLI, so a new
+    option cannot be added to one runner and forgotten in the others.
+    """
+
+    format_type: str  # "title" | "body"
+    model: str
+    prompt_file_resolved: str
+    heading_batch_size: int | None = None
+    heading_concurrency: int | None = None
+    body_max_chunk_tokens: int | None = None
+    body_concurrency: int | None = None
+    output: str | None = None
+    inplace: bool = False
+    force: bool = False
+    retries: int | None = None
+    retry_delay: float | None = None
+    retry_delay_max: float | None = None
+
+
 def format_one(
     file_path: str,
     *,
-    format_type: str,
     processor: RequestProcessor,
-    model: str,
-    prompt_file_resolved: str,
-    heading_batch_size: int | None = None,
-    heading_concurrency: int | None = None,
-    body_max_chunk_tokens: int | None = None,
-    body_concurrency: int | None = None,
-    output: str | None = None,
-    inplace: bool = False,
-    force: bool = False,
-    retries: int | None = None,
-    retry_delay: float | None = None,
-    retry_delay_max: float | None = None,
+    options: FormatOptions,
 ) -> FormatMarkdownOutcome:
     """Single dispatcher for per-file formatting (P3.5).
 
     The title/body branch lives here exactly once; sequential and parallel
     runners both call this instead of duplicating the if/else.
     """
-    if format_type == "title":
+    if options.format_type == "title":
         return format_one_markdown_file(
             file_path,
             processor=processor,
-            prompt_file_resolved=prompt_file_resolved,
-            heading_batch_size=heading_batch_size,
-            heading_concurrency=heading_concurrency,
-            retries=retries,
-            retry_delay=retry_delay,
-            retry_delay_max=retry_delay_max,
-            output=output,
-            inplace=inplace,
-            force=force,
+            model=options.model,
+            prompt_file_resolved=options.prompt_file_resolved,
+            heading_batch_size=options.heading_batch_size,
+            heading_concurrency=options.heading_concurrency,
+            retries=options.retries,
+            retry_delay=options.retry_delay,
+            retry_delay_max=options.retry_delay_max,
+            output=options.output,
+            inplace=options.inplace,
+            force=options.force,
         )
     return format_body_markdown_file(
         file_path,
         processor=processor,
-        model=model,
-        prompt_file_resolved=prompt_file_resolved,
-        body_max_chunk_tokens=body_max_chunk_tokens,
-        body_concurrency=body_concurrency,
-        retries=retries,
-        retry_delay=retry_delay,
-        retry_delay_max=retry_delay_max,
-        output=output,
-        inplace=inplace,
-        force=force,
+        model=options.model,
+        prompt_file_resolved=options.prompt_file_resolved,
+        body_max_chunk_tokens=options.body_max_chunk_tokens,
+        body_concurrency=options.body_concurrency,
+        retries=options.retries,
+        retry_delay=options.retry_delay,
+        retry_delay_max=options.retry_delay_max,
+        output=options.output,
+        inplace=options.inplace,
+        force=options.force,
     )
 
 
@@ -161,21 +173,9 @@ class FormatRunStats:
 def run_format(
     resolved_files: list[str],
     *,
-    format_type: str,
     processor: RequestProcessor,
-    model: str,
-    prompt_file_resolved: str,
-    heading_batch_size: int | None,
-    heading_concurrency: int | None,
-    body_max_chunk_tokens: int | None,
-    body_concurrency: int | None,
-    output: str | None,
-    inplace: bool,
-    force: bool,
+    options: FormatOptions,
     max_workers: int = 1,
-    retries: int | None,
-    retry_delay: float | None,
-    retry_delay_max: float | None,
 ) -> FormatRunStats:
     """Format all files sequentially (``max_workers <= 1``) or via a thread pool.
 
@@ -193,7 +193,7 @@ def run_format(
     def _record(outcome: FormatMarkdownOutcome) -> None:
         nonlocal successful_count, failed_count, skipped_count, total_input_tokens
         nonlocal total_output_tokens
-        ok, in_toks, out_toks = _handle_outcome(outcome, format_type)
+        ok, in_toks, out_toks = _handle_outcome(outcome, options.format_type)
         if ok:
             successful_count += 1
             total_input_tokens += in_toks
@@ -203,29 +203,19 @@ def run_format(
         else:
             failed_count += 1
 
-    format_kwargs: dict[str, Any] = {
-        "format_type": format_type,
-        "processor": processor,
-        "model": model,
-        "prompt_file_resolved": prompt_file_resolved,
-        "heading_batch_size": heading_batch_size,
-        "heading_concurrency": heading_concurrency,
-        "body_max_chunk_tokens": body_max_chunk_tokens,
-        "body_concurrency": body_concurrency,
-        "output": output,
-        "inplace": inplace,
-        "force": force,
-        "retries": retries,
-        "retry_delay": retry_delay,
-        "retry_delay_max": retry_delay_max,
-    }
-
     use_parallel = len(resolved_files) > 1 and max_workers > 1
     if not use_parallel:
         for file_path in resolved_files:
             console.print()
             console.print(f"[bold]处理: {file_path}[/bold]")
-            _record(format_one(file_path, **format_kwargs))
+            # M9/2.25: mirror the parallel path's per-file guard — one
+            # unexpected error used to abort the whole sequential run with no
+            # summary for the remaining files.
+            try:
+                _record(format_one(file_path, processor=processor, options=options))
+            except Exception as exc:
+                console.print_error(f"{file_path}: {exc}")
+                failed_count += 1
     else:
         workers = min(max_workers, len(resolved_files))
         progress_columns = (
@@ -239,7 +229,8 @@ def run_format(
             task_id = progress.add_task("[cyan]格式化 Markdown[/cyan]", total=len(resolved_files))
             with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="format-md") as pool:
                 future_map = {
-                    pool.submit(format_one, fp, **format_kwargs): fp for fp in resolved_files
+                    pool.submit(format_one, fp, processor=processor, options=options): fp
+                    for fp in resolved_files
                 }
                 for fut in as_completed(future_map):
                     fp = future_map[fut]
@@ -304,6 +295,10 @@ class FormatService:
         output: str | None,
         inplace: bool,
         force: bool,
+        current_model: str | None = None,
+        current_prompt_file: str | None = None,
+        current_max_chunk_tokens: int | None = None,
+        current_format_type: str | None = None,
     ) -> FormatResumeOutcome:
         """Resume formatting from a checkpoint file.
 
@@ -312,6 +307,17 @@ class FormatService:
             output: Explicit output path.
             inplace: Overwrite the source file.
             force: Overwrite existing output file.
+            current_model: The run's model (M7/2.25) — the digest is computed
+                from the *current* run's options, not the checkpoint's own
+                stored values, so resuming with a different ``--model``/
+                ``--type``/prompt file/chunk budget is refused instead of
+                silently retrying failed chunks under new settings. ``None``
+                falls back to the checkpoint's stored value (pre-2.25
+                callers), which only detects source-file edits.
+            current_prompt_file: Resolved prompt path for the current run.
+            current_max_chunk_tokens: Explicit chunk-budget override for the
+                current run (config-default runs pass ``None``).
+            current_format_type: ``"body"``/``"title"`` for the current run.
 
         Supports both body and title checkpoints (P3.5; title resume was
         previously rejected). Refuses pre-v4 checkpoints and checkpoints whose
@@ -336,17 +342,32 @@ class FormatService:
             )
         source_file = checkpoint.source_file
         if checkpoint.config_digest:
+            # M7/2.25: prefer the current run's options; a None argument
+            # (option not explicitly set) falls back to the stored value.
+            current_template = checkpoint.prompt_template
+            if current_prompt_file:
+                current_template = load_prompt_template(current_prompt_file)
             current_digest = compute_format_digest(
                 source_file,
-                prompt_template=checkpoint.prompt_template,
-                model=checkpoint.model,
-                max_chunk_tokens=checkpoint.max_chunk_tokens,
-                format_type=checkpoint.format_type,
+                prompt_template=current_template,
+                model=current_model if current_model is not None else checkpoint.model,
+                max_chunk_tokens=(
+                    current_max_chunk_tokens
+                    if current_max_chunk_tokens is not None
+                    else checkpoint.max_chunk_tokens
+                ),
+                format_type=(
+                    current_format_type
+                    if current_format_type is not None
+                    else checkpoint.format_type
+                ),
             )
             if checkpoint.config_digest != current_digest:
                 raise RuntimeError(
-                    f"checkpoint 与当前源文件不一致（源文件在 checkpoint 创建后被修改过）：{source_file}。"
-                    "为避免把旧结果错拼到新内容上，已拒绝恢复；请删除该 checkpoint 后重新运行。"
+                    f"checkpoint 与当前运行不一致（源文件在 checkpoint 创建后被修改过，或 "
+                    f"model/prompt/chunk 预算/格式化类型发生了变化）：{source_file}。"
+                    "为避免把旧结果错拼到新内容或新设置上，已拒绝恢复；"
+                    "请删除该 checkpoint 后重新运行。"
                 )
 
         console.print_info(f"从 checkpoint 恢复: {checkpoint_path}")

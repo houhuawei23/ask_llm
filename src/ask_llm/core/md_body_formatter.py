@@ -10,22 +10,22 @@ checkpoint save/resume) lives in :class:`ChunkedLLMJob` (P3.3).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from pathlib import Path
 
 from loguru import logger
 
 from ask_llm.config.context import get_config_or_none
+from ask_llm.core.binary_splitter import create_markdown_splitter
 from ask_llm.core.chunked_llm_job import ChunkedLLMJob
 from ask_llm.core.format_checkpoint import (
     FailedChunkInfo,
     FormatCheckpoint,
     SuccessfulChunkInfo,
+    verify_source_integrity,
 )
 from ask_llm.core.markdown_structure import MarkdownStructure
-from ask_llm.core.markdown_token_splitter import MarkdownTokenSplitter
 from ask_llm.core.models import RequestMetadata
 from ask_llm.core.processor import RequestProcessor
-from ask_llm.core.text_splitter import TextChunk
+from ask_llm.core.text_splitter import TextChunk, join_chunks_position_aware
 from ask_llm.utils.token_counter import TokenCounter
 
 
@@ -174,7 +174,7 @@ class BodyFormatter(ChunkedLLMJob):
         # covers prompt + content. With a content-only budget, a large template
         # plus a near-full context window could overflow (review V2 D2).
         prompt_overhead = TokenCounter.count_tokens(template, self.model)
-        splitter = MarkdownTokenSplitter(
+        splitter = create_markdown_splitter(
             model=self.model,
             max_chunk_tokens=self.max_chunk_tokens,
             prompt_overhead_tokens=prompt_overhead,
@@ -201,13 +201,14 @@ class BodyFormatter(ChunkedLLMJob):
                 f"max_chunk_tokens={self.max_chunk_tokens})"
             )
 
-        sorted_results: list[_ChunkResult] = self._run_units(
+        sorted_results, _interrupted = self._run_units(
             chunks,
             self._process_chunk_worker,
             is_failed=lambda r: not r.success,
             error_message=lambda r: r.failed_info.error or "",
             retry_count_from_result=lambda r: r.retry_count,
             order_key=lambda r: r.chunk_id,
+            make_interrupted_result=self._make_interrupted_result,
         )
 
         # Collect results in order
@@ -252,13 +253,16 @@ class BodyFormatter(ChunkedLLMJob):
         # Reattach the untouched frontmatter (D3).
         formatted_text = frontmatter + formatted_body
 
-        # Save checkpoint if any chunks failed
+        # Save checkpoint if any chunks failed. ``chunk_id`` must come from the
+        # result itself (not enumerate): on interrupt the result list can be
+        # dense while chunk ids are not, and misnumbered ids would corrupt the
+        # resume merge.
         successful = [
             SuccessfulChunkInfo(
-                chunk_id=i,
+                chunk_id=sr.chunk_id,
                 formatted_content=sr.formatted,
             )
-            for i, sr in enumerate(sorted_results)
+            for sr in sorted_results
             if sr.success
         ]
         checkpoint_path = self._save_checkpoint(
@@ -311,6 +315,22 @@ class BodyFormatter(ChunkedLLMJob):
                 ),
             )
 
+    def _make_interrupted_result(self, chunk: TextChunk) -> _ChunkResult:
+        """Build a failed result for a chunk abandoned by an interrupt."""
+        template = self.prompt_template
+        return _ChunkResult(
+            chunk_id=chunk.chunk_id,
+            success=False,
+            original=chunk.content,
+            failed_info=FailedChunkInfo(
+                chunk_id=chunk.chunk_id,
+                content=chunk.content,
+                prompt_template=template or "",
+                error="interrupted by user (Ctrl-C); chunk was not processed",
+                retry_count=0,
+            ),
+        )
+
     def _process_chunk(self, chunk: TextChunk, template: str) -> tuple[int, str, RequestMetadata]:
         """Process a single chunk via LLM API (no retries).
 
@@ -329,10 +349,9 @@ class BodyFormatter(ChunkedLLMJob):
         assert result.metadata is not None
         return chunk.chunk_id, result.content.rstrip(), result.metadata
 
-    # Chunk types produced by artificial contiguous cuts (hard splits). Between
-    # two such chunks an empty separator means "cut mid-content": rejoin
-    # verbatim, not with a blank line.
-    _HARD_SPLIT_TYPES = frozenset({"character_split", "hard_token_split"})
+    # Chunk types produced by artificial contiguous cuts (hard splits) live in
+    # ``text_splitter.HARD_SPLIT_TYPES`` (shared with the translation
+    # exporters); the position-aware joiner is ``text_splitter.join_chunks_position_aware``.
 
     @staticmethod
     def _join_chunks_position_aware(
@@ -341,47 +360,8 @@ class BodyFormatter(ChunkedLLMJob):
         original_text: str,
         types: list[str] | None = None,
     ) -> str | None:
-        """Join formatted chunks using separators recovered from the original text.
-
-        Position-aware reassembly (P3.4, review §4.4.4): the splitter records
-        each chunk's ``start_pos``/``end_pos`` in the original document, so the
-        exact original inter-chunk whitespace (single newline between list
-        items, blank lines, etc.) can be restored instead of forcing ``\\n\\n``
-        everywhere. Between two hard-split chunks (contiguous artificial cut)
-        an empty separator rejoins verbatim.
-
-        Returns ``None`` when the spans do not describe a clean ordered
-        partition of *original_text* (caller falls back to ``_join_chunks``).
-        """
-        if not parts:
-            return ""
-        if len(parts) != len(spans):
-            return None
-        if types is not None and len(types) != len(parts):
-            return None
-        result = parts[0]
-        for i in range(1, len(parts)):
-            prev_end, cur_start = spans[i - 1][1], spans[i][0]
-            if not (0 <= prev_end <= cur_start <= len(original_text)):
-                return None
-            sep = original_text[prev_end:cur_start]
-            if sep.strip():
-                # Non-whitespace between two chunks: positions are not a clean
-                # partition; do not guess.
-                return None
-            if sep == "":
-                both_hard = (
-                    types is not None
-                    and types[i - 1] in BodyFormatter._HARD_SPLIT_TYPES
-                    and types[i] in BodyFormatter._HARD_SPLIT_TYPES
-                )
-                if both_hard:
-                    # Artificial contiguous cut: rejoin verbatim, no stripping.
-                    result = result + parts[i]
-                    continue
-                sep = "\n\n"
-            result = result.rstrip("\n") + sep + parts[i].lstrip("\n")
-        return result
+        """Delegate to the shared position-aware joiner (kept for call sites)."""
+        return join_chunks_position_aware(parts, spans, original_text, types)
 
     @staticmethod
     def _join_chunks(chunks: list[str]) -> str:
@@ -428,6 +408,9 @@ class BodyFormatter(ChunkedLLMJob):
             BodyFormatResult with complete formatted text
         """
         checkpoint = FormatCheckpoint.load(checkpoint_path)
+        # Gate every resume entry point (not just FormatService): a source
+        # file changed after the checkpoint was written must never be spliced.
+        verify_source_integrity(checkpoint)
         logger.info(
             f"[BodyFormat] Resuming from checkpoint: {checkpoint_path}, "
             f"failed_chunks={len(checkpoint.failed_chunks)}, "
@@ -453,14 +436,18 @@ class BodyFormatter(ChunkedLLMJob):
         failed_chunks_inputs = [
             TextChunk(content=fc.content, chunk_id=fc.chunk_id) for fc in checkpoint.failed_chunks
         ]
-        retry_results = formatter._retry_failed_units(
-            checkpoint,
+        logger.info(
+            f"[BodyFormat] Retrying {len(failed_chunks_inputs)} checkpointed chunk(s): "
+            f"successful={len(checkpoint.successful_chunks)}"
+        )
+        retry_results, _ = formatter._run_units(
             failed_chunks_inputs,
             formatter._process_chunk_worker,
             is_failed=lambda r: not r.success,
             error_message=lambda r: r.failed_info.error or "",
             retry_count_from_result=lambda r: r.retry_count,
             order_key=lambda r: r.chunk_id,
+            make_interrupted_result=formatter._make_interrupted_result,
         )
         failed_by_id = {f.chunk_id: f for f in checkpoint.failed_chunks}
         for res in retry_results:
@@ -500,19 +487,10 @@ class BodyFormatter(ChunkedLLMJob):
         if formatted_text is None:
             formatted_text = cls._join_chunks(final_chunks)
 
-        # H5: reattach the carved frontmatter. Pre-v3 checkpoints don't carry
-        # it — re-extract from the source file when that is still available.
+        # H5: reattach the carved frontmatter. Checkpoints since v3 carry it;
+        # the empty case means the source had none, so there is nothing to
+        # reattach (the CLI refuses pre-v4 checkpoints entirely).
         frontmatter = checkpoint.frontmatter
-        if not frontmatter and checkpoint.source_file:
-            src = Path(checkpoint.source_file)
-            if src.is_file():
-                try:
-                    source_text = src.read_text(encoding="utf-8")
-                except OSError:
-                    source_text = ""
-                fm_range = MarkdownStructure.parse(source_text).frontmatter_range
-                if fm_range is not None:
-                    frontmatter = source_text[fm_range[0] : fm_range[1]]
         if frontmatter:
             formatted_text = frontmatter + formatted_text
 

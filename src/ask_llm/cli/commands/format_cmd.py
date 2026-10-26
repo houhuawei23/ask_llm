@@ -7,15 +7,13 @@ from typing import Annotated
 
 import typer
 
+from ask_llm.cli.common import paid_command_prelude
 from ask_llm.cli.errors import cli_errors
-from ask_llm.config.cli_session import (
-    gate_api_key_or_exit,
-    load_cli_session,
-    preflight_or_exit,
-    resolve_and_prepare,
-)
+from ask_llm.config.cli_session import preflight_or_exit
+from ask_llm.core.constants import MAX_CONCURRENCY
 from ask_llm.core.processor import RequestProcessor
 from ask_llm.services.format_service import (
+    FormatOptions,
     FormatService,
     run_format,
 )
@@ -23,6 +21,7 @@ from ask_llm.utils.console import console
 from ask_llm.utils.engine_facade import create_engine_adapter
 from ask_llm.utils.md_path_discovery import discover_markdown_files
 from ask_llm.utils.path_resolver import OutputTargetError, validate_multi_input_output
+from ask_llm.utils.pricing import format_cost_estimate
 
 
 def _default_file_workers() -> int:
@@ -170,6 +169,7 @@ def format_cmd(
             "--workers",
             "-j",
             min=1,
+            max=MAX_CONCURRENCY,
             help="并行处理文件数（多文件/目录批处理时生效；默认随 CPU 调整）",
         ),
     ] = None,
@@ -213,6 +213,14 @@ def format_cmd(
             help="跳过运行前 API 预检(亦可用 general.preflight_check 配置)",
         ),
     ] = False,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run",
+            "-n",
+            help="估算 chunk/请求数与 token，不调用 API（E3/2.25）",
+        ),
+    ] = False,
 ) -> None:
     """
     使用 LLM 格式化 Markdown 文档。
@@ -243,16 +251,53 @@ def format_cmd(
             console.print_error(f"不支持的格式化类型: {type_}。请使用 title 或 body。")
             raise typer.Exit(1)
 
-        # Load config and resolve provider/model first so that --resume respects
-        # --config, --provider, --model, and --temperature.
-        load_result, config_manager = load_cli_session(config_path)
-        _final_provider, final_model = resolve_and_prepare(
-            config_manager,
-            cli_provider=provider,
-            cli_model=model,
+        # Single paid-command preamble: load + resolve + gate. E3/2.25: the
+        # zero-network dry-run must not require a key, so the gate is skipped
+        # for --dry-run (parity with paper/ask).
+        prelude = paid_command_prelude(
+            config_path,
+            provider=provider,
+            model=model,
             temperature=temperature,
+            skip_api_key_check=dry_run,
         )
-        gate_api_key_or_exit(config_manager, _final_provider)
+        load_result = prelude.load_result
+        config_manager = prelude.config_manager
+        final_provider = prelude.provider
+        final_model = prelude.model
+        pricing_map = prelude.pricing_map
+        pricing_source = prelude.pricing_source
+
+        if dry_run:
+            from ask_llm.services.dry_run import estimate_format_run
+
+            resolved_paths = discover_markdown_files(
+                files, recursive=recursive, max_depth=max_depth
+            )
+            if not resolved_paths:
+                console.print_error("未找到可格式化的 Markdown 文件")
+                raise typer.Exit(1)
+            if type_lower == "title":
+                fh_config = load_result.unified_config.format_heading
+                _prompt_resolved = prompt_file or fh_config.default_prompt_file
+                _batch_size = heading_batch_size or fh_config.batch_size
+            else:
+                fb_config = load_result.unified_config.format_body
+                _prompt_resolved = prompt_file or fb_config.default_prompt_file
+                _batch_size = heading_batch_size or 160
+            dry_report = estimate_format_run(
+                [str(p) for p in resolved_paths],
+                final_model,
+                final_provider,
+                format_type=type_lower,
+                max_chunk_tokens=body_max_chunk_tokens
+                or load_result.unified_config.format_body.max_chunk_tokens,
+                heading_batch_size=_batch_size,
+                pricing_map=pricing_map,
+            )
+            for line in dry_report.render(pricing_source=pricing_source):
+                console.print(line)
+            raise typer.Exit(0)
 
         # 便宜的本地校验先行:路径/通配写错时不应先付出预检的网络等待
         # (乃至交互询问),才被告知没有可格式化的文件。
@@ -266,7 +311,7 @@ def format_cmd(
         # 运行前 API 预检(resume 重跑失败 chunk 同样受益)。
         preflight_or_exit(
             config_manager,
-            [(_final_provider, final_model)],
+            [(final_provider, final_model)],
             command="format",
             skip=no_preflight,
         )
@@ -279,11 +324,31 @@ def format_cmd(
 
         # Handle --resume mode after config and processor are ready
         if resume:
+            # E8/2.25: the checkpoint carries the source file; explicit FILES
+            # are ignored — say so instead of silently swallowing them.
+            if files:
+                console.print_warning(
+                    f"--resume ignores positional file argument(s): {', '.join(map(str, files))}. "
+                    "The source file comes from the checkpoint."
+                )
+            if type_lower == "title":
+                fh_config = load_result.unified_config.format_heading
+                prompt_resolved = prompt_file or fh_config.default_prompt_file
+            else:
+                fb_config = load_result.unified_config.format_body
+                prompt_resolved = prompt_file or fb_config.default_prompt_file
             outcome = format_service.resume_from_checkpoint(
                 resume,
                 output=output,
                 inplace=inplace,
                 force=force,
+                # M7/2.25: digest against the *current* run's options so a
+                # resume under a different model/type/prompt refuses instead
+                # of silently retrying failed chunks with new settings.
+                current_model=final_model,
+                current_prompt_file=prompt_resolved,
+                current_max_chunk_tokens=body_max_chunk_tokens,
+                current_format_type=type_lower,
             )
             # 2.7: map remaining failures to a non-zero exit code, consistent
             # with the fresh-run policy (any failed file/chunk ⇒ exit 1).
@@ -310,23 +375,38 @@ def format_cmd(
 
         run_stats = run_format(
             resolved_files,
-            format_type=type_lower,
             processor=processor,
-            model=final_model,
-            prompt_file_resolved=prompt_resolved,
-            heading_batch_size=heading_batch_size,
-            heading_concurrency=heading_concurrency,
-            body_max_chunk_tokens=body_max_chunk_tokens,
-            body_concurrency=body_concurrency,
-            output=output,
-            inplace=inplace,
-            force=force,
+            options=FormatOptions(
+                format_type=type_lower,
+                model=final_model,
+                prompt_file_resolved=prompt_resolved,
+                heading_batch_size=heading_batch_size,
+                heading_concurrency=heading_concurrency,
+                body_max_chunk_tokens=body_max_chunk_tokens,
+                body_concurrency=body_concurrency,
+                output=output,
+                inplace=inplace,
+                force=force,
+                retries=retries,
+                retry_delay=retry_delay,
+                retry_delay_max=retry_delay_max,
+            ),
             max_workers=file_workers,
-            retries=retries,
-            retry_delay=retry_delay,
-            retry_delay_max=retry_delay_max,
         )
         # H2: the CLI owns the exit code — any failed file means exit 1 so
         # scripts/CI don't see half-failed format runs as green.
         if run_stats.failed_count:
             raise typer.Exit(1)
+
+        # Cost parity with batch/trans/paper: format runs print usage too.
+        if run_stats.total_input_tokens or run_stats.total_output_tokens:
+            console.print(
+                format_cost_estimate(
+                    final_provider,
+                    final_model,
+                    run_stats.total_input_tokens,
+                    run_stats.total_output_tokens,
+                    prelude.pricing_map,
+                    pricing_source=prelude.pricing_source,
+                )
+            )

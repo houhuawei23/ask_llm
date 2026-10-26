@@ -6,11 +6,25 @@ from typing import Any, NamedTuple, Protocol
 from ask_llm.core.models import ProviderConfig
 
 
+class TokenUsage(NamedTuple):
+    """Provider-reported token accounting (absent on streaming paths)."""
+
+    input_tokens: int
+    output_tokens: int
+    cache_hit_tokens: int | None = None
+
+
 class ReasoningChunk(NamedTuple):
-    """A streaming chunk that carries both content and reasoning tokens."""
+    """A streaming chunk that carries both content and reasoning tokens.
+
+    ``usage`` carries the provider-reported accounting for non-streaming
+    responses (``None`` for stream deltas, where usage is not reported);
+    consumers must treat it as optional and fall back to local estimates.
+    """
 
     content: str
     reasoning: str
+    usage: TokenUsage | None = None
 
 
 class LLMProviderProtocol(Protocol):

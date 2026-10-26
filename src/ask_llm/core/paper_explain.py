@@ -18,7 +18,7 @@ from ask_llm.core.paper_explain_pipeline import (
     resolve_job_key_to_prompt_key,
     slugify_output_stem,
 )
-from ask_llm.utils.prompt_resolver import resolve_prompt_file
+from ask_llm.utils.prompt_resolver import expand_prompt, resolve_prompt_file
 
 
 def _pipeline_or_builtin(
@@ -147,6 +147,25 @@ def _parse_markdown_heading_blocks(text: str) -> list[tuple[str, str]]:
     return [(h, b) for h, b in _split_by_h2(text, keep_leading=False) if b and h]
 
 
+def _leading_preamble(text: str) -> str:
+    """Return the lines before the first unprotected ``##`` (P0).
+
+    Single-file papers commonly carry title/authors/abstract above the first
+    section heading. Sections-mode previously dropped those lines entirely;
+    the bundle now folds them into ``meta_text`` so the meta job covers them.
+    """
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    structure = MarkdownStructure.parse(normalized)
+    lines: list[str] = []
+    offset = 0
+    for line in normalized.splitlines():
+        if (not structure.is_protected(offset)) and _H2_SECTION_LINE_RE.match(line):
+            break
+        lines.append(line)
+        offset += len(line) + 1
+    return "\n".join(lines).strip()
+
+
 def split_markdown_ordered(
     text: str, pipeline: PaperExplainPipelineConfig | None = None
 ) -> tuple[dict[str, str], list[str], dict[str, str]]:
@@ -194,11 +213,12 @@ def _exclude_name(name: str) -> bool:
     lower = name.lower()
     if not lower.endswith(".md"):
         return True
-    if "_trans.md" in lower or lower.endswith("_trans.md"):
-        return True
-    if "-references.md" in lower or lower.endswith("-references.md"):
-        return True
-    return bool("-appendix.md" in lower or "-appendices.md" in lower)
+    return bool(
+        "_trans.md" in lower
+        or "-references.md" in lower
+        or "-appendix.md" in lower
+        or "-appendices.md" in lower
+    )
 
 
 def _pick_main_md(directory: Path) -> Path:
@@ -365,9 +385,17 @@ def build_bundle_from_file(
     extra_keys = [k for k in section_order if k.startswith("extra:")]
     if extra_keys:
         logger.info(f"Non-standard headings → generic prompt: {extra_keys[:12]}")
+    meta_text = (
+        f"Single-file input: {md_path.name}\n\n(title inferred from first heading or filename)"
+    )
+    preamble = _leading_preamble(text)
+    if preamble:
+        # P0: keep the pre-first-## content (title/authors/abstract) reachable
+        # from sections mode instead of silently dropping it.
+        meta_text = f"{meta_text}\n\n## 论文前置部分（首个小节之前）\n\n{preamble}"
     return PaperBundle(
         paper_title=title,
-        meta_text=f"Single-file input: {md_path.name}\n\n(title inferred from first heading or filename)",
+        meta_text=meta_text,
         sections=sections,
         full_text=text,
         source_description=str(md_path),
@@ -521,14 +549,19 @@ def format_prompt(
     content: str,
     section_heading: str | None = None,
 ) -> str:
-    """Fill template placeholders: title, section_name, section_heading, content."""
+    """Fill template placeholders: title, section_name, section_heading, content.
+
+    ``{content}`` is expanded through the shared ``expand_prompt`` semantics
+    (P2 unification): replace when present, otherwise append — a template
+    missing the placeholder can no longer silently drop the paper content.
+    """
     sh = section_heading if section_heading is not None else section_name
-    return (
+    partial = (
         template.replace("{paper_title}", paper_title)
         .replace("{section_name}", section_name)
         .replace("{section_heading}", sh)
-        .replace("{content}", content)
     )
+    return expand_prompt(partial, content)
 
 
 def section_display_name(
@@ -764,7 +797,10 @@ def explain_output_filename(
         return f"{index}-{section_base}-{section_stem}.explain.md"
     if key.startswith("appendices:h2:"):
         slug = key.split(":", 2)[2]
-        return f"d-appendices-{slug}.explain.md"
+        # L9/2.25: keep the numeric prefix — every other job type carries the
+        # document-order index, and appendix filenames breaking that ordering
+        # scrambled sorted listings and resume-by-index checks.
+        return f"{index}-d-appendices-{slug}.explain.md"
     if key.startswith("extra:"):
         slug = key.split(":", 1)[1]
         return f"{index}-{slug}.explain.md"

@@ -14,19 +14,20 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from loguru import logger
-
 from ask_llm.config.manager import ConfigManager
 from ask_llm.config.unified_config import BatchConfig as UnifiedBatchConfig
+from ask_llm.config.unified_config import UnifiedConfig
 from ask_llm.core.batch_models import BatchResult, BatchStatistics, BatchTask, ModelConfig
 from ask_llm.core.command_runner import compute_checkpoint_digest, run_with_checkpoint
-from ask_llm.core.execution_report import ExecutionReport, build_report_from_batch_results
-from ask_llm.core.models import AppConfig
+from ask_llm.core.execution_report import (
+    ExecutionReport,
+    build_report_from_batch_results,
+    export_execution_report,
+)
 from ask_llm.utils.api_key_gate import ensure_resolved_provider_keys
 from ask_llm.utils.batch_exporter import BatchResultExporter
 from ask_llm.utils.batch_loader import BatchConfigLoader
 from ask_llm.utils.console import console
-from ask_llm.utils.fallback_chain import build_fallback_chain
 from ask_llm.utils.interactive_config import InteractiveConfigHelper
 from ask_llm.utils.preflight import check_provider_pair
 from ask_llm.utils.pricing import format_cost_estimate
@@ -44,7 +45,6 @@ class BatchRunResult:
     skipped_models: list[str]
     original_tasks: list[BatchTask]
     batch_mode: str
-    batch_config: dict[str, Any]
     config_file: str
     report: ExecutionReport | None = None
 
@@ -123,11 +123,10 @@ def _default_batch_checkpoint_path(config_file: str) -> str:
 
 def run_batch_from_config(
     config_file: str,
-    app_config: AppConfig,
+    unified_config: UnifiedConfig,
     config_manager: ConfigManager,
     batch_config_unified: Any,
     *,
-    output_format: str,
     threads: int,
     retries: int,
     retry_delay: float,
@@ -135,17 +134,15 @@ def run_batch_from_config(
     skip_api_key_check: bool = False,
     verbose: bool = False,
     resume_checkpoint_path: str | None = None,
-    use_fallback: bool = True,
     skip_validation: bool = False,
 ) -> BatchRunResult:
     """Load a batch YAML config, validate models, and execute all tasks.
 
     Args:
         config_file: Path to the batch YAML configuration file.
-        app_config: Loaded application config (providers, etc.).
+        unified_config: The unified configuration (providers, etc.).
         config_manager: Active config manager for provider/model overrides.
         batch_config_unified: ``batch`` section from the unified config.
-        output_format: Desired output format (used only for validation logging here).
         threads: Max concurrent workers.
         retries: Max retries per failed task.
         retry_delay: Initial retry delay.
@@ -155,7 +152,6 @@ def run_batch_from_config(
         skip_validation: Skip the model/connection validation stage entirely
             (plan 5.6) — every configured provider/model runs unvalidated;
             failures surface per task at execution time.
-        use_fallback: Whether to enable fallback to alternate providers/models.
 
     Returns:
         BatchRunResult with all results, statistics and metadata for export.
@@ -163,8 +159,6 @@ def run_batch_from_config(
     Raises:
         ValueError: If no providers validate.
     """
-    logger.debug(f"Batch output format: {output_format}")
-
     # Load batch configuration
     console.print_info(f"Loading batch configuration from: {config_file}")
     batch_config = BatchConfigLoader.load(config_file)
@@ -216,7 +210,6 @@ def run_batch_from_config(
     task_id_counter = 0
 
     for model_config in validation.validated:
-        fallback_configs = build_fallback_chain(app_config, model_config) if use_fallback else []
         for original_task in tasks:
             global_task = BatchTask(
                 task_id=task_id_counter,
@@ -224,7 +217,6 @@ def run_batch_from_config(
                 content=original_task.content,
                 output_filename=original_task.output_filename,
                 model_settings=model_config,
-                fallback_model_configs=fallback_configs,
             )
             global_tasks.append(global_task)
             task_id_counter += 1
@@ -264,7 +256,6 @@ def run_batch_from_config(
         validation,
         tasks=tasks,
         batch_mode=batch_mode,
-        batch_config=batch_config,
         config_file=config_file,
         checkpoint_path=checkpoint_path,
     )
@@ -276,7 +267,6 @@ def _build_run_result(
     *,
     tasks: list[BatchTask],
     batch_mode: str,
-    batch_config: dict[str, Any],
     config_file: str,
     checkpoint_path: str,
 ) -> BatchRunResult:
@@ -294,7 +284,6 @@ def _build_run_result(
         skipped_models=validation.skipped,
         original_tasks=tasks,
         batch_mode=batch_mode,
-        batch_config=batch_config,
         config_file=config_file,
         report=report,
     )
@@ -479,7 +468,7 @@ class BatchService:
             output_dir = str(config_file_path.parent / self.batch_cfg.batch_output_dir)
 
         exported_files = BatchResultExporter.export_split_files(
-            deduped_results, output_dir, self.run_result.batch_mode, force=force
+            deduped_results, output_dir, force=force
         )
         console.print()
         console.print_success(f"Results exported to {len(exported_files)} files in: {output_dir}")
@@ -534,17 +523,5 @@ class BatchService:
         return BatchExportResult(exported_paths=[exported_file], export_mode="single")
 
     def export_report(self, report_path: str | None) -> str | None:
-        """Export the execution report to ``report_path`` if one is available.
-
-        Args:
-            report_path: Destination path for the JSON report.
-
-        Returns:
-            The exported path, or ``None`` if no report was generated or no path
-            was requested.
-        """
-        if not report_path or self.run_result.report is None:
-            return None
-        self.run_result.report.to_json_file(report_path)
-        console.print_info(f"Execution report saved to: {report_path}")
-        return report_path
+        """Export the execution report to ``report_path`` if one is available."""
+        return export_execution_report(self.run_result.report, report_path)

@@ -19,6 +19,7 @@ from ask_llm.core.batch_models import (
     BatchTask,
     ModelConfig,
     TaskStatus,
+    estimate_batch_task_tokens,
 )
 from ask_llm.core.concurrent import BoundedRetryRunner, RunMetrics
 from ask_llm.core.constants import (
@@ -27,20 +28,14 @@ from ask_llm.core.constants import (
     OUTPUT_TOKEN_MULTIPLIERS,
     TaskKind,
 )
+from ask_llm.core.error_keywords import classify_error_message
 from ask_llm.core.progress_presenter import NullProgressPresenter, ProgressPresenter
 from ask_llm.core.protocols import LLMProviderProtocol
-from ask_llm.core.provider_manager import ProviderManager
+from ask_llm.core.provider_manager import build_provider_cache
 from ask_llm.core.task_executor import TaskExecutor
-from ask_llm.core.telemetry import (
-    LogContext,
-    bind_context,
-    classify_error,
-    should_fallback_for_error,
-)
+from ask_llm.core.telemetry import LogContext, bind_context
 from ask_llm.utils.preflight import shorten_message
-from ask_llm.utils.prompt_resolver import expand_prompt
 from ask_llm.utils.rate_limiter import get_global_rate_limiter
-from ask_llm.utils.token_counter import TokenCounter
 
 # Retry-warning log lines carry a bounded reason snippet so one provider's
 # HTML error dump cannot flood the console.
@@ -61,21 +56,19 @@ def estimate_output_tokens(task_kind: str, input_tokens: int) -> int:
     if input_tokens <= 0:
         return DEFAULT_MIN_OUTPUT_TOKENS
 
-    # Try to match task_kind to TaskKind enum
     try:
         kind = TaskKind(task_kind)
-        multiplier = OUTPUT_TOKEN_MULTIPLIERS.get(kind, OUTPUT_TOKEN_MULTIPLIERS[TaskKind.BATCH])
     except ValueError:
         # Unknown task kind, use default batch multiplier
-        multiplier = OUTPUT_TOKEN_MULTIPLIERS[TaskKind.BATCH]
+        kind = TaskKind.BATCH
+    multiplier = OUTPUT_TOKEN_MULTIPLIERS.get(kind, OUTPUT_TOKEN_MULTIPLIERS[TaskKind.BATCH])
 
     return int(input_tokens * multiplier)
 
 
-def rate_limit_config_from(config_manager: ConfigManager) -> RateLimitConfig | None:
+def rate_limit_config_from(config_manager: ConfigManager) -> RateLimitConfig:
     """Extract the rate-limit section from the config manager's unified config."""
-    unified = config_manager.unified_config
-    return unified.rate_limits if unified else None
+    return config_manager.unified_config.rate_limits
 
 
 class GlobalBatchProcessor:
@@ -111,8 +104,14 @@ class GlobalBatchProcessor:
         self.retry_delay = retry_delay
         self.retry_delay_max = retry_delay_max
         self.rate_limit_config = rate_limit_config
+        # Configure (and own) the process limiter here — the single point that
+        # knows the rate_limit_config — and hand it to the executor explicitly.
+        self._rate_limiter = get_global_rate_limiter(rate_limit_config)
         self._task_executor = TaskExecutor(
-            verbose=verbose, stream_api=stream_api, max_retries=max_retries
+            verbose=verbose,
+            stream_api=stream_api,
+            rate_limiter=self._rate_limiter,
+            max_retries=max_retries,
         )
         self.last_metrics: RunMetrics | None = None
 
@@ -121,16 +120,6 @@ class GlobalBatchProcessor:
         # Delegates to the executor; the translators inspect this to detect
         # a batch-wide authentication failure across parallel workers.
         return self._task_executor.auth_error_logged
-
-    def _effective_max_workers(self, tasks: list[BatchTask]) -> int:
-        """Total worker slots across all (provider, model) lanes (audit 3.3).
-
-        Sum of the per-lane caps — each lane is bounded by its own burst limit
-        instead of every lane inheriting the tightest burst in the batch.
-        Retained as a summary for callers/tests; scheduling uses
-        :meth:`_build_lanes`.
-        """
-        return sum(workers for workers, _ in self._build_lanes(tasks).values()) or self.max_workers
 
     def _build_lanes(self, tasks: list[BatchTask]) -> dict[str, tuple[int, list[BatchTask]]]:
         """Partition tasks into per-(provider, model) lanes (audit 3.3 / M6).
@@ -141,7 +130,7 @@ class GlobalBatchProcessor:
         low-burst provider in a mixed batch drag every other provider down to
         its limit (and a single-provider batch to the same effective cap).
         """
-        limiter = get_global_rate_limiter(self.rate_limit_config)
+        limiter = self._rate_limiter
         grouped: dict[str, list[BatchTask]] = {}
         lane_bounds: dict[str, tuple[str, str]] = {}
         for task in tasks:
@@ -175,31 +164,23 @@ class GlobalBatchProcessor:
         input_tokens: int | None = None,
         attempt_history_by_task: dict[int, list[AttemptRecord]] | None = None,
     ) -> BatchResult:
-        """Process one escalation step of a task: attempt exactly ONE config.
+        """Attempt exactly one provider/model execution of a task.
 
-        Shared-budget escalation (ARCHITECTURE_REVIEW.md B1 / P1.1): the
-        fallback chain and the retry budget are a *single* escalation of at most
-        ``max_retries + 1`` attempts. Attempt ``retry_count`` uses
-        ``configs[min(retry_count, len(configs) - 1)]`` — a transient failure
-        advances to the next config (or re-tries the last one when the chain is
-        shorter than the budget); a terminal failure (auth, content policy, …)
-        stops at once. The :class:`BoundedRetryRunner` drives ``retry_count`` and
-        the backoff heap; the worker itself never re-walks the chain, so the
-        number of API calls per task is bounded by the retry budget instead of
-        multiplying by the chain length.
+        Retry semantics live entirely in the :class:`BoundedRetryRunner`: it
+        drives ``retry_count`` and the backoff heap, and consults
+        ``is_retryable_error`` on the failure message so terminal errors
+        (auth, content policy, billing, ...) are never retried. The worker
+        itself is stateless between calls.
 
-        ``attempt_history_by_task`` threads the flat attempt records across runner
-        retries (the worker is stateless between calls). May be ``None`` for an
-        isolated single-step call.
+        ``attempt_history_by_task`` threads the flat attempt records across
+        runner retries. May be ``None`` for an isolated call.
 
         Returns:
-            Batch result for this step (success, transient failure, or terminal
-            failure with ``retry_count`` saturated to ``max_retries``).
+            Batch result for this attempt (success or failure).
         """
         if not task.model_settings:
             raise ValueError("Task must have model_settings for global batch processing")
 
-        configs = [task.model_settings, *task.fallback_model_configs]
         # Flat attempt records (not BatchResults) — keeps the object graph acyclic
         # by construction, so no manual cycle-guard slicing is needed. See B7.
         history: list[AttemptRecord] = (
@@ -208,10 +189,9 @@ class GlobalBatchProcessor:
             else []
         )
 
-        model_config = configs[min(retry_count, len(configs) - 1)]
         result = self._task_executor.try_run_with_config(
             task,
-            model_config,
+            task.model_settings,
             provider_cache,
             retry_count,
             progress,
@@ -223,18 +203,6 @@ class GlobalBatchProcessor:
         # History holds the *preceding* attempts; the current step's own record
         # (always the last element) is excluded from the result's attempt_history.
         result.attempt_history = history[:-1]
-
-        if result.status == TaskStatus.SUCCESS:
-            return result
-
-        # Terminal error: a different provider/model won't help. Stop escalating
-        # by saturating retry_count so the runner declines to schedule again.
-        if result.error_category and not should_fallback_for_error(result.error_category):
-            bind_context(LogContext(task_id=task.task_id, phase="global_batch")).warning(
-                f"Stopping escalation at attempt {retry_count + 1}: "
-                f"terminal error category '{result.error_category.value}'"
-            )
-            result.retry_count = self.max_retries
         return result
 
     def process_global_tasks(
@@ -262,25 +230,17 @@ class GlobalBatchProcessor:
             if tasks and tasks[0].model_settings
             else DEFAULT_BATCH_FALLBACK_MODEL
         )
-        # M11: tokenize each task's full prompt exactly once. Sorting and the
-        # progress-meta build used to expand+encode the whole batch twice.
-        task_estimates: list[tuple[BatchTask, int]] = [
-            (
-                task,
-                int(
-                    TokenCounter.estimate_tokens(
-                        expand_prompt(task.prompt, task.content),
-                        (task.model_settings.model if task.model_settings else default_model),
-                    )["token_count"]
-                ),
-            )
-            for task in tasks
-        ]
+        # M11/M5: tokenize each task's full prompt exactly once via the shared
+        # estimator. Sorting and the progress-meta build used to expand+encode
+        # the whole batch twice.
+        task_estimates: list[tuple[BatchTask, int]] = estimate_batch_task_tokens(
+            tasks, default_model
+        )
         task_estimates.sort(key=lambda pair: pair[1], reverse=True)
         pending_tasks = [task for task, _ in task_estimates]
 
         # Pre-build provider cache to avoid per-task adapter creation and ConfigManager mutation
-        provider_cache = ProviderManager(config_manager).build_provider_cache(pending_tasks)
+        provider_cache = build_provider_cache(pending_tasks, config_manager)
 
         # Audit 3.3 (M6): per-(provider, model) lanes. Each lane runs its own
         # bounded pool sized by its own burst limit, so a tight provider no
@@ -357,7 +317,7 @@ class GlobalBatchProcessor:
 
         def _on_worker_exception(task: BatchTask, exc: BaseException) -> BatchResult:
             error_msg = f"Unexpected error: {exc!s}"
-            category = classify_error(error_msg)
+            category = classify_error_message(error_msg)
             bind_context(LogContext(task_id=task.task_id, phase="global_batch")).bind(
                 error_category=category.value
             ).error(f"Unexpected error processing task: {exc}")
@@ -378,7 +338,8 @@ class GlobalBatchProcessor:
         def _make_interrupted_result(task: BatchTask) -> BatchResult:
             # Audit 3.2: an explicit failure record for every task the
             # interrupt abandoned, so summaries/reports/checkpoint all see
-            # it (resume re-runs it via mark_all_failed_for_retry).
+            # it (resume re-runs it because it is absent from
+            # completed_task_ids).
             return BatchResult(
                 task_id=task.task_id,
                 prompt=task.prompt,
@@ -388,7 +349,7 @@ class GlobalBatchProcessor:
                 or ModelConfig(provider="unknown", model="unknown"),
                 status=TaskStatus.FAILED,
                 error="Interrupted (Ctrl-C) before completion",
-                error_category=classify_error("interrupted"),
+                error_category=classify_error_message("interrupted"),
             )
 
         lane_results: list[BatchResult] = []
@@ -403,6 +364,10 @@ class GlobalBatchProcessor:
                 retry_delay=self.retry_delay,
                 retry_delay_max=self.retry_delay_max,
                 stop_event=stop_event,
+                # Single SIGINT owner: the outer handler installed above (main
+                # thread) signals ``stop_event``; the runner must not install
+                # its own handler or a second Ctrl-C would need three presses.
+                install_sigint_handler=False,
             )
 
             def _worker(task: BatchTask, retry_count: int) -> BatchResult:
@@ -444,9 +409,9 @@ class GlobalBatchProcessor:
 
         try:
             if len(lanes) == 1:
-                # Single lane: run inline (no extra thread, SIGINT via the
-                # runner's own main-thread handler is irrelevant — the shared
-                # stop_event path above already covers it).
+                # Single lane: run inline on the calling (main) thread — the
+                # shared stop_event above is the only stop channel (the runner
+                # installs no SIGINT handler of its own).
                 _workers, only_tasks = next(iter(lanes.values()))
                 _run_lane(only_tasks, _workers)
             else:

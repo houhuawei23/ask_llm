@@ -97,12 +97,15 @@ def test_from_initial_context_uses_resolved_model_for_call():
 
 def test_from_initial_context_rolls_back_user_message_on_failure():
     """Plan 5.4: a failed initial reply KEEPS the seeded context in history
-    (previously the generic rollback silently dropped it)."""
+    (previously the generic rollback silently dropped it). M14/2.25: the
+    re-added message is the templated content the seed used."""
     provider = FakeProvider(error=RuntimeError("boom"))
 
     session = ChatSession.from_initial_context(provider, model="m1", initial_context="ctx")
 
-    assert [m.content for m in session.history.messages] == ["ctx"]
+    assert [m.content for m in session.history.messages] == [
+        "Please process the following text:\n\nctx"
+    ]
 
 
 class TestAudit46ShellMetachar:
@@ -119,6 +122,25 @@ class TestAudit46ShellMetachar:
         assert ChatSession._find_unquoted_metachar('grep "a|b" file.txt') is None
         assert ChatSession._find_unquoted_metachar("echo 'it; ok'") is None
         assert ChatSession._find_unquoted_metachar("plain command --flag") is None
+
+    def test_rejected_command_not_recorded_for_repeat(self):
+        """M16/2.25: `!!` must not repeat a command that was just rejected
+        (e.g. for metacharacters) — _last_shell_cmd records only validated
+        commands."""
+        from unittest.mock import MagicMock, patch
+
+        provider = FakeProvider()
+        session = ChatSession.from_initial_context(provider, model="m1")
+
+        with patch("ask_llm.core.chat.subprocess.run") as run:
+            session._handle_shell_command("echo bad | pipe")  # rejected
+            assert session._last_shell_cmd is None
+            session._handle_shell_command("echo good")  # accepted
+            assert session._last_shell_cmd == "echo good"
+            session._handle_shell_command("!")  # repeat trigger: runs "echo good"
+            executed = [c.args[0] for c in run.call_args_list]
+        assert executed[-1] == ["echo", "good"]
+        assert ["echo", "bad", "|", "pipe"] not in executed
 
     def test_pipe_command_rejected_not_argv_split(self):
         """'echo hi | grep hi' must not run with | as an argv literal."""
@@ -229,4 +251,5 @@ class TestAudit54SessionEnhancements:
 
         roles = [m.role for m in session.history.messages]
         assert roles == [MessageRole.USER]
-        assert session.history.messages[0].content == "the seeded context"
+        # M14/2.25: re-added with the same templating the seed applied.
+        assert session.history.messages[0].content.endswith("the seeded context")

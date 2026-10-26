@@ -144,6 +144,7 @@ def test_process_to_file_uses_processor(service, mock_processor):
         model="gpt-4",
         system_prompt=None,
         return_reasoning=True,
+        max_tokens=None,
     )
 
 
@@ -321,3 +322,41 @@ class TestValidateInputSource:
         f.write_text("body", encoding="utf-8")
         content, is_file = service.load_content("~/notes.md", show_progress=False)
         assert content == "body" and is_file
+
+
+def test_output_content_appends_captured_reasoning(service, mock_processor):
+    """E2/2.25: reasoning captured with --include-reasoning must reach file
+    output, not only the console."""
+    metadata = RequestMetadata(
+        provider="openai",
+        model="gpt-4",
+        temperature=0.7,
+        input_words=1,
+        input_tokens=1,
+        output_words=1,
+        output_tokens=1,
+        latency=0.1,
+    )
+    mock_processor.process_with_metadata.return_value = ProcessingResult(
+        content="answer",
+        metadata=metadata,
+        reasoning="thought hard",
+    )
+
+    result = service.process_to_file("hello", return_reasoning=True)
+
+    assert result.output_content.startswith("answer")
+    assert "## Reasoning" in result.output_content
+    assert "thought hard" in result.output_content
+
+
+def test_max_tokens_is_threaded_to_processor(service, mock_processor):
+    """E1/2.25: ask --max-tokens reaches process_with_metadata."""
+    mock_processor.process_with_metadata.return_value = ProcessingResult(
+        content="ok",
+        metadata=None,
+        reasoning=None,
+    )
+    service.process("hello", max_tokens=256)
+    kwargs = mock_processor.process_with_metadata.call_args.kwargs
+    assert kwargs["max_tokens"] == 256

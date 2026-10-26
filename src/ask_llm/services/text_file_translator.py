@@ -18,11 +18,10 @@ from pathlib import Path
 from loguru import logger
 
 from ask_llm.config.manager import ConfigManager
-from ask_llm.core.batch_models import BatchResult, BatchTask, TaskStatus
+from ask_llm.core.batch_models import BatchResult, BatchTask, ModelConfig, TaskStatus
+from ask_llm.core.binary_splitter import create_markdown_splitter
 from ask_llm.core.command_runner import compute_checkpoint_digest, run_with_checkpoint
-from ask_llm.core.markdown_token_splitter import MarkdownTokenSplitter
-from ask_llm.core.models import AppConfig
-from ask_llm.core.text_splitter import TextChunk, TextSplitter
+from ask_llm.core.text_splitter import TextChunk, detect_file_type
 from ask_llm.core.translator import Translator
 from ask_llm.services.translation_options import (
     TranslationJobResult,
@@ -31,7 +30,6 @@ from ask_llm.services.translation_options import (
 )
 from ask_llm.utils.chunk_balance import plain_text_chunks_by_tokens, rebalance_translation_chunks
 from ask_llm.utils.console import console
-from ask_llm.utils.fallback_chain import model_config_with_fallback
 from ask_llm.utils.file_handler import FileHandler
 from ask_llm.utils.path_resolver import resolve_translation_output_path
 from ask_llm.utils.pricing import format_cost_estimate
@@ -50,6 +48,9 @@ class TextTranslationJob:
     chunks: list[TextChunk]
     tasks: list[BatchTask]
     output_path: str
+    # Full source text the chunk spans refer to; enables lossless,
+    # position-aware reassembly at export time.
+    original_text: str = ""
 
 
 class TextFileTranslator:
@@ -63,14 +64,12 @@ class TextFileTranslator:
         model: str,
         pricing_map: PricingMap | None = None,
         pricing_source: Path | None = None,
-        app_config: AppConfig | None = None,
     ) -> None:
         self.config_manager = config_manager
         self.provider = provider
         self.model = model
         self.pricing_map = pricing_map or {}
         self.pricing_source = pricing_source
-        self.app_config = app_config
 
     def prepare(
         self,
@@ -87,7 +86,7 @@ class TextFileTranslator:
         console.print()
         console.print(f"[bold]Preparing: {file_path}[/bold]")
 
-        file_type = TextSplitter.detect_file_type(file_path)
+        file_type = detect_file_type(file_path)
         if file_type not in ("markdown", "text"):
             console.print_warning(
                 f"Unsupported file type: {Path(file_path).suffix}. "
@@ -121,7 +120,7 @@ class TextFileTranslator:
         )
 
         if file_type == "markdown":
-            chunks = MarkdownTokenSplitter(
+            chunks = create_markdown_splitter(
                 self.model, options.max_chunk_tokens, prompt_overhead_tokens=prompt_overhead
             ).split(content)
         else:
@@ -149,18 +148,14 @@ class TextFileTranslator:
         else:
             console.print_info(f"Split into {len(chunks)} chunk(s)")
 
-        model_config, fallback_configs = model_config_with_fallback(
-            self.provider,
-            self.model,
+        model_config = ModelConfig(
+            provider=self.provider,
+            model=self.model,
             temperature=options.temperature,
             max_tokens=options.max_output_tokens,
-            app_config=self.app_config,
-            use_fallback=options.use_fallback,
         )
 
         tasks = translator.create_translation_tasks(chunks, model_config)
-        for task in tasks:
-            task.fallback_model_configs = fallback_configs
         output_path = self.resolve_output_path(
             file_path, output=output, output_is_dir=output_is_dir, suffix=effective_suffix
         )
@@ -171,6 +166,7 @@ class TextFileTranslator:
             chunks=chunks,
             tasks=tasks,
             output_path=output_path,
+            original_text=content,
         )
 
     @staticmethod
@@ -244,6 +240,7 @@ class TextFileTranslator:
                 options.preserve_format,
                 options.include_original,
                 force=force,
+                resume=bool(options.resume),
                 retries=0,
             )
             job_result.results = results
@@ -283,6 +280,7 @@ class TextFileTranslator:
             options.preserve_format,
             options.include_original,
             force=force,
+            resume=bool(options.resume),
             retries=retry_count,
         )
         job_result.results = results
@@ -296,6 +294,7 @@ class TextFileTranslator:
         include_original: bool,
         *,
         force: bool,
+        resume: bool = False,
         retries: int = 0,
     ) -> TranslationJobResult:
         """Export translated chunks for a single text/markdown file."""
@@ -322,6 +321,7 @@ class TextFileTranslator:
             results=results,
             preserve_format=preserve_format,
             include_original=include_original,
+            original_text=job.original_text or None,
         )
 
         output_ext = Path(job.output_path).suffix.lower()
@@ -333,7 +333,10 @@ class TextFileTranslator:
 
         try:
             output_file = Path(job.output_path)
-            if output_file.exists() and not force:
+            # H1/2.25: a resumed run legitimately overwrites the prior (partial)
+            # export — the pre-spend check already exempts resume, and the export
+            # gate must too, or the run pays to finish chunks and then dies here.
+            if output_file.exists() and not force and not resume:
                 raise FileExistsError(
                     f"Output file already exists: {job.output_path}. Use --force to overwrite."
                 )
@@ -344,6 +347,12 @@ class TextFileTranslator:
             console.print(f"  Successful: {successful_chunks}/{len(results)}")
             if failed_count > 0:
                 console.print_warning(f"  Failed: {failed_count}/{len(results)}")
+                if resume:
+                    console.print_info(
+                        "Resumed export with failed chunks (originals kept for failed "
+                        "chunks). Re-run with --resume after fixing the provider to "
+                        "retry only the failures."
+                    )
 
             total_in = sum(r.metadata.input_tokens for r in results if r.metadata)
             total_out = sum(r.metadata.output_tokens for r in results if r.metadata)

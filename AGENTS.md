@@ -10,7 +10,7 @@
 - **Pydantic** - Data validation and serialization
 - **Rich** - Beautiful console output
 - **Loguru** - Powerful logging
-- **llm-api-engine** - External LLM engine dependency
+- **litellm** - LLM adapter backend (first-party adapter in `core/provider_adapter.py`)
 
 ## Project Structure
 
@@ -25,30 +25,27 @@ ask_llm/
 │   │   ├── common.py         # Shared CLI helpers
 │   │   └── errors.py         # CLI error mapping (cli_errors context manager, raise_unexpected_cli_error)
 │   ├── core/                 # Core business logic
-│   │   ├── models.py                  # Pydantic data models (ProviderConfig/SecretStr, AppConfig, RequestMetadata)
+│   │   ├── models.py                  # Pydantic data models (ProviderConfig/SecretStr, RequestMetadata)
 │   │   ├── processor.py               # RequestProcessor (prompt format + LLM call)
 │   │   ├── chat.py                    # Interactive chat session (from_initial_context bootstrap)
 │   │   ├── batch_models.py            # BatchTask, BatchResult, AttemptRecord, BatchStatistics, TaskStatus
-│   │   ├── batch_processor.py         # GlobalBatchProcessor (thin orchestrator: escalation + pool sizing)
+│   │   ├── batch_processor.py         # GlobalBatchProcessor (thin orchestrator: retry gating + lane pool sizing)
 │   │   ├── task_executor.py           # Single-config attempt: rate-limit + adapter + stream + metadata
 │   │   ├── stream_collector.py        # Streaming + token collection (pure)
 │   │   ├── progress_presenter.py      # Per-worker Rich progress bars
 │   │   ├── provider_manager.py        # Build provider adapter cache for a batch
-│   │   ├── global_batch_runner.py     # run_global_batch_tasks entry point
 │   │   ├── command_runner.py          # run_with_checkpoint (shared checkpoint lifecycle for batch/trans)
-│   │   ├── concurrent.py              # BoundedRetryRunner (single-queue scheduler + retry heap + SIGINT)
-│   │   ├── retry_policy.py            # RetryPolicy / DEFAULT_RETRY_POLICY (transient-error classification)
+│   │   ├── concurrent.py              # BoundedRetryRunner (single-queue scheduler + retry heap + SIGINT; owns the retryable gate)
 │   │   ├── checkpoint.py              # Generic atomic checkpoint base (tmp + os.replace)
 │   │   ├── batch_checkpoint.py        # Concrete checkpoint for batch/translation tasks
-│   │   ├── telemetry.py               # LogContext, bind_context, classify_error, should_fallback_for_error
-│   │   ├── execution_report.py        # Structured execution reports (AttemptRecord projection)
-│   │   ├── error_keywords.py          # Single (keyword -> category, transient) rule table
+│   │   ├── telemetry.py               # LogContext, bind_context (error classification lives in error_keywords)
+│   │   ├── execution_report.py        # Structured execution reports + shared export_execution_report (--report)
+│   │   ├── error_keywords.py          # Single authority: (keyword -> category, transient) rule table
 │   │   ├── response_parser.py         # unwrap_translation_payload (JSON / LaTeX-escape repair)
 │   │   ├── translator.py              # Translation prompt assembly
-│   │   ├── text_splitter.py           # TextChunk + base splitter (thin after P3.2)
+│   │   ├── text_splitter.py           # TextChunk + detect_file_type + shared position-aware chunk joiner
 │   │   ├── markdown_structure.py      # Single-pass parser: fences, frontmatter, heading spans
-│   │   ├── binary_splitter.py         # Budget-pluggable splitter (TokenBudget: safety factor + prompt_overhead)
-│   │   ├── markdown_token_splitter.py # Thin compat wrapper over BinarySplitter
+│   │   ├── binary_splitter.py         # BinarySplitter + TokenBudget (safety factor, prompt_overhead, hard split)
 │   │   ├── chunked_llm_job.py         # Shared orchestration base for Heading/Body formatters
 │   │   ├── md_heading_formatter.py    # Heading format pipeline
 │   │   ├── md_body_formatter.py       # Body format pipeline (frontmatter carve + position-aware reassembly)
@@ -57,7 +54,7 @@ ask_llm/
 │   │   ├── paper_explain.py           # Paper explanation pipeline
 │   │   ├── paper_explain_pipeline.py  # Paper pipeline domain model + YAML loader (moved from config/ in P2.6)
 │   │   ├── protocols.py               # LLMProviderProtocol
-│   │   └── constants.py               # APPROX_TOKEN_SAFETY_FACTOR, TaskKind, defaults
+│   │   └── constants.py               # APPROX_TOKEN_SAFETY_FACTOR, TaskKind, MAX_CONCURRENCY, defaults
 │   ├── services/            # Use-case / orchestration services
 │   │   ├── ask_service.py              # Single-request incl. streaming iter_stream (0 typer, returns dataclass)
 │   │   ├── batch_service.py            # Batch orchestration (run_batch_from_config + BatchService print/export)
@@ -77,9 +74,8 @@ ask_llm/
 │   │   ├── manager.py                  # ConfigManager (provider/model overrides)
 │   │   └── cli_session.py              # CLI bootstrap (resolve_and_prepare, gate_api_key_or_exit, bootstrap_command)
 │   └── utils/              # Utility modules
-│       ├── engine_facade.py            # SINGLE llm_engine import point (create_engine_adapter, EngineConfigView)
+│       ├── engine_facade.py            # facade over the litellm-backed adapter (create_engine_adapter, load_engine_providers_config)
 │       ├── provider_cache.py           # ProviderAdapterCache (process-wide LRU)
-│       ├── fallback_chain.py           # build_fallback_chain + model_config_with_fallback (P4.6b)
 │       ├── model_limits.py             # DeepSeek max_tokens caps + ModelLimits (renamed from provider_specs, P4.6b)
 │       ├── api_key_gate.py             # Pure key checks + UnresolvedAPIKeyError (interactive gate lives in cli_session)
 │       ├── rate_limiter.py             # GlobalRateLimiter (per-(provider,model) token bucket)
@@ -243,8 +239,7 @@ pre-commit run --all-files
 | rich | Console output | >=13.0.0 |
 | pydantic | Data validation | >=2.0.0 |
 | loguru | Logging | >=0.7.0 |
-| openai | OpenAI API client | >=1.0.0 |
-| llm-api-engine | External LLM engine | >=0.1.2 |
+| litellm | LLM adapter backend | >=1.63.0,<2.0.0 |
 | tiktoken | Token counting | >=0.5.0 |
 | tqdm | Progress bars | >=4.65.0 |
 | pyyaml | YAML support | >=6.0.0 |
@@ -302,13 +297,14 @@ ask-llm format doc.md --type body --resume doc.md.body_checkpoint.json
 
 ### Provider Pattern
 
-The project uses `llm-api-engine` as the LLM provider abstraction:
+Provider adapters are built by the facade over the first-party litellm-backed
+adapter (`core/provider_adapter.py`):
 
 ```python
-from llm_engine import create_provider_adapter
+from ask_llm.utils.engine_facade import create_engine_adapter
 
-provider = create_provider_adapter(provider_config, default_model="gpt-4")
-response = provider.call(messages=[...])
+provider = create_engine_adapter(provider_config, default_model="gpt-4")
+response = provider.call(messages=[...])  # flat str / ReasoningChunk / stream
 ```
 
 ### Config Management
@@ -330,8 +326,13 @@ manager.apply_overrides(model="gpt-4", temperature=0.5)
 CLI commands are thin adapters. Heavy workflows (ask, batch, format, translation, paper explain)
 are orchestrated by modules under `ask_llm.services.*`, which receive a prepared
 `ConfigManager` / `RequestProcessor` and return structured results for the CLI to print/export.
-Services must not call `typer.Exit`; they raise `ValueError`, `FileNotFoundError`, or
-`RuntimeError` and let the CLI convert to user-facing messages and exit codes.
+
+**Convention (v2.26 decision): services MAY print progress and summaries via
+`ask_llm.utils.console`** — this is a CLI application, not a library. The hard rules that
+remain: services must not import `typer`/`click`, must not call `typer.Exit`, and must
+return a structured result the CLI translates into an exit code. Services raise
+`ValueError`, `FileNotFoundError`, or `RuntimeError` and let the CLI convert to
+user-facing messages and exit codes.
 
 ```python
 from ask_llm.config.cli_session import (
@@ -476,7 +477,9 @@ adapter = ProviderAdapterCache.get(provider_config, default_model="gpt-4")
 
 ### Adding a New Provider
 
-Providers are handled externally by `llm-api-engine`. Update configuration in `providers.yml`.
+Requests are routed through litellm model strings (`deepseek/...`, `openai/...`,
+`anthropic/...`) by `ask_llm.core.provider_adapter`; add the provider entry to
+`providers.yml`.
 
 ### Adding New Models
 
@@ -500,4 +503,6 @@ Providers are handled externally by `llm-api-engine`. Update configuration in `p
   2.22.0 correctness & dead-code sweep with assistance from **ZCode** (agent) and **GLM-5.3** (model). \
   2.23.0 full-audit repair (3C+10H+~20M), test-chain backfill and repo hygiene with assistance from **Claude Code** (agent). \
   2.24.0 six-phase deep audit (security, paid-work protection, retry/concurrency, parsing/cost/export, dry-run & config & chat enhancements) with assistance from **Claude Code** (agent). \
-  2.25.0 API preflight gate + retry visibility (shared utils/preflight.py, interactive continue/exit gate, retry-aware progress labels, resume hints) with assistance from **Claude Code** (agent).
+  2.25.0 API preflight gate + retry visibility (shared utils/preflight.py, interactive continue/exit gate, retry-aware progress labels, resume hints) with assistance from **Claude Code** (agent). \
+  2.26.0 architecture-refactor execution (fallback stack deletion, 10 correctness fixes, four-pipeline unification, lossless translation rejoin, dead-code sweep) with assistance from **GLM-5.3-Flash** (agent, OpenCode). \
+  2.27.0 litellm migration (llm-api-engine removal, per-call HTTP handler, real token usage) with assistance from **GLM-5.3-Flash** (agent, OpenCode).

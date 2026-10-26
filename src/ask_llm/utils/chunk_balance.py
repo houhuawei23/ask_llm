@@ -4,13 +4,11 @@ from __future__ import annotations
 
 from loguru import logger
 
-from ask_llm.core.binary_splitter import BinarySplitter, TokenBudget
+from ask_llm.core.binary_splitter import BinarySplitter, TokenBudget, locate_pieces
 from ask_llm.core.text_splitter import TextChunk
 
-_Meta = dict
 
-
-def _merge_meta(a: _Meta, b: _Meta) -> _Meta:
+def _merge_meta(a: dict, b: dict) -> dict:
     """Union of two chunk metadata dicts preserving BOTH sides (audit 4.3).
 
     ``{**a, **b}`` let the right side silently overwrite shared keys — merging
@@ -35,25 +33,6 @@ def _merge_meta(a: _Meta, b: _Meta) -> _Meta:
     return out
 
 
-def _locate_pieces(source: str, pieces: list[str]) -> list[tuple[int, int]]:
-    """Map each piece to ``(start, length)`` within *source* (audit 4.3).
-
-    Uses a monotonic find-cursor; a piece that can't be located verbatim (the
-    splitter strips or synthesizes content) falls back to the whole source
-    span rather than reporting a made-up offset.
-    """
-    spans: list[tuple[int, int]] = []
-    cursor = 0
-    for part in pieces:
-        pos = source.find(part, cursor) if part else -1
-        if pos != -1:
-            cursor = pos + len(part)
-            spans.append((pos, len(part)))
-        else:
-            spans.append((0, len(source)))
-    return spans
-
-
 def _split_by_token_budget(
     text: str, model: str, max_tokens: int, prompt_overhead: int = 0
 ) -> list[str]:
@@ -75,11 +54,11 @@ def _split_by_token_budget(
 
 
 def _merge_adjacent_greedy(
-    items: list[tuple[str, _Meta, int, int]],
+    items: list[tuple[str, dict, int, int]],
     model: str,
     max_tokens: int,
     prompt_overhead: int = 0,
-) -> list[tuple[str, _Meta, int, int]]:
+) -> list[tuple[str, dict, int, int]]:
     """Merge adjacent translation bodies left-to-right while the combined body fits the budget.
 
     Chunks are merged as raw markdown/text only; the translation prompt is applied later per
@@ -94,7 +73,7 @@ def _merge_adjacent_greedy(
     if not items:
         return []
     budget = TokenBudget(model=model, max_tokens=max_tokens, prompt_overhead=prompt_overhead)
-    merged: list[tuple[str, _Meta, int, int]] = []
+    merged: list[tuple[str, dict, int, int]] = []
     buf_s, buf_m, buf_start, buf_end = items[0]
     sep = "\n\n"
     for nxt_s, nxt_m, nxt_start, nxt_end in items[1:]:
@@ -123,7 +102,7 @@ def plain_text_chunks_by_tokens(
     prefix = text.find(stripped) if stripped else 0
     out: list[TextChunk] = []
     for i, (content, (rel_start, rel_len)) in enumerate(
-        zip(parts, _locate_pieces(stripped, parts), strict=False)
+        zip(parts, locate_pieces(stripped, parts), strict=False)
     ):
         out.append(
             TextChunk(
@@ -163,13 +142,13 @@ def rebalance_translation_chunks(
     if not enabled or not chunks:
         return chunks
 
-    pieces: list[tuple[str, _Meta, int, int]] = []
+    pieces: list[tuple[str, dict, int, int]] = []
     for c in sorted(chunks, key=lambda x: x.chunk_id):
         base_meta = dict(c.metadata)
         parts = _split_by_token_budget(c.content, model, max_chunk_tokens, prompt_overhead)
         stripped = c.content.strip()
         prefix = c.content.find(stripped) if stripped else 0
-        for part, (rel_start, rel_len) in zip(parts, _locate_pieces(stripped, parts), strict=False):
+        for part, (rel_start, rel_len) in zip(parts, locate_pieces(stripped, parts), strict=False):
             pieces.append(
                 (
                     part,

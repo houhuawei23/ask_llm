@@ -31,6 +31,21 @@ def _try_parse_json_with_latex_escapes(raw: str, brace: int) -> dict | None:
         return None
     blob = raw[brace : last + 1]
 
+    def _escaped(s: str, idx: int) -> bool:
+        """True when s[idx] is preceded by an odd number of backslashes.
+
+        M4/2.25: the old single-char check (``blob[i-1] != "\\\\"``) treated
+        ``\\\\"`` — an escaped backslash followed by a real closing quote — as
+        an escaped quote, so the string boundary was missed and every
+        escaping decision downstream was wrong.
+        """
+        n = 0
+        j = idx - 1
+        while j >= 0 and s[j] == "\\":
+            n += 1
+            j -= 1
+        return n % 2 == 1
+
     # Valid single-char JSON escapes after backslash
     _valid_escape_chars = set('"\\bfnrt/')
     _control_replace = {
@@ -46,7 +61,7 @@ def _try_parse_json_with_latex_escapes(raw: str, brace: int) -> dict | None:
         ch = blob[i]
 
         # Track string boundaries (respect already-escaped quotes)
-        if ch == '"' and (i == 0 or blob[i - 1] != "\\"):
+        if ch == '"' and not _escaped(blob, i):
             in_string = not in_string
             fixed_parts.append(ch)
             i += 1
@@ -72,9 +87,11 @@ def _try_parse_json_with_latex_escapes(raw: str, brace: int) -> dict | None:
                 # so JSON sees \\m which decodes to \m
                 fixed_parts.append("\\\\")
                 i += 1
-        elif in_string and ch in _control_replace:
-            # Literal control character inside string — replace with JSON escape
-            fixed_parts.append(_control_replace[ch])
+        elif in_string and (ch in _control_replace or ord(ch) < 0x20):
+            # Literal control character inside string — replace with its JSON
+            # escape (M4/2.25: any C0 control, not just \n\r\t, breaks
+            # json.loads).
+            fixed_parts.append(_control_replace.get(ch) or f"\\u{ord(ch):04x}")
             i += 1
         else:
             fixed_parts.append(ch)
@@ -89,6 +106,13 @@ def _try_parse_json_with_latex_escapes(raw: str, brace: int) -> dict | None:
         pass
 
     return None
+
+
+# Keys a JSON translation envelope may use (see unwrap_translation_payload).
+# The first two are unambiguous envelope markers; the rest are weak signals
+# (arbitrary JSON documents frequently contain "text"/"content"/"result" keys).
+_ENVELOPE_STRONG_KEYS = ("translation", "translated_text")
+_PAYLOAD_KEYS = (*_ENVELOPE_STRONG_KEYS, "content", "text", "result")
 
 
 def unwrap_translation_payload(text: str) -> str:
@@ -159,8 +183,24 @@ def unwrap_translation_payload(text: str) -> str:
         obj = _try_parse_json_with_latex_escapes(raw, brace)
 
     if isinstance(obj, dict):
-        for key in ("translation", "translated_text", "content", "text", "result"):
-            val = obj.get(key)
-            if isinstance(val, str) and val.strip():
-                return val.strip()
+        # P0: only unwrap when the object actually *is* a translation
+        # envelope. A translated JSON *document* (e.g. the user asked to
+        # translate a config file) routinely contains keys like
+        # "text"/"content" among its own fields — compressing the whole
+        # document to one key's value silently destroyed the rest.
+        # Envelope test: an unambiguous key ("translation" / "translated_text")
+        # is present, or the object has exactly one weak wrapper key
+        # ({"text": ...} alone). Two weak keys ("text" + "result") look exactly
+        # like a small translated document, so they are NOT unwrapped.
+        is_envelope = any(k in _ENVELOPE_STRONG_KEYS for k in obj) or (
+            len(obj) == 1 and next(iter(obj)) in _PAYLOAD_KEYS
+        )
+        if is_envelope:
+            best = ""
+            for key in _PAYLOAD_KEYS:
+                val = obj.get(key)
+                if isinstance(val, str) and len(val.strip()) > len(best):
+                    best = val.strip()
+            if best:
+                return best
     return original

@@ -7,8 +7,9 @@
 # Search order for default_config.yml:
 #   --config > ./default_config.yml > ~/.config/ask_llm/ > /etc/ask_llm/ > package built-in
 #
-# Search order for providers.yml:
-#   ASK_LLM_PROVIDERS_YML > ./providers.yml > package root > ~/.config/ask_llm/
+# Search order for providers.yml (L11/2.25 — cwd removed for credential
+# safety in 2.23):
+#   ASK_LLM_PROVIDERS_YML > ~/.config/ask_llm/ > package built-in
 
 # === 1. General/Global Defaults ===
 general:
@@ -29,7 +30,7 @@ translation:
   retries: 3
   balance_translation_chunks: true   # split/merge by tiktoken so parallel requests are similar cost
   max_chunk_tokens: 10000            # target max body tokens per chunk after rebalance
-  max_output_tokens: 20000           # completion cap per chunk (avoid truncation vs llm_engine default 2000)
+  max_output_tokens: 20000           # completion cap per chunk (avoid truncation vs old engine default 2000)
   preserve_format: true
   include_original: false
   temperature: null             # null uses provider default
@@ -75,7 +76,7 @@ format_heading:
 format_body:
   default_prompt_file: "@prompts/md-body-format.md"
   max_chunk_tokens: 2400
-  max_output_tokens: 8192          # completion cap per chunk; covers reasoning models (llm_engine default 2000 truncates reasoning_content → empty output)
+  max_output_tokens: 8192          # completion cap per chunk; covers reasoning models (old engine default 2000 truncates reasoning_content → empty output)
   concurrency: 32
   retries: 3
   retry_delay: 1.0

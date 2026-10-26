@@ -21,19 +21,18 @@ from rich.progress import Progress, TaskID
 
 from ask_llm.config.context import get_config_or_none
 from ask_llm.core.batch_models import BatchResult, BatchTask, ModelConfig, TaskStatus
+from ask_llm.core.error_keywords import (
+    ErrorCategory,
+    classify_error_message,
+    is_retryable_error,
+)
 from ask_llm.core.models import RequestMetadata
 from ask_llm.core.processor import RequestProcessor
 from ask_llm.core.protocols import LLMProviderProtocol
-from ask_llm.core.retry_policy import DEFAULT_RETRY_POLICY
 from ask_llm.core.stream_collector import stream_and_collect
-from ask_llm.core.telemetry import (
-    ErrorCategory,
-    LogContext,
-    bind_context,
-    classify_error,
-)
+from ask_llm.core.telemetry import LogContext, bind_context
 from ask_llm.utils.preflight import shorten_message
-from ask_llm.utils.rate_limiter import get_global_rate_limiter
+from ask_llm.utils.rate_limiter import GlobalRateLimiter, get_global_rate_limiter
 from ask_llm.utils.token_counter import TokenCounter
 
 # One-line failure reason bound for progress-bar labels.
@@ -75,7 +74,7 @@ def _update_global_task_progress_failed(
     """Mark a global task as failed in the progress bar (no-op if no progress).
 
     A failure that still has retry budget and is retryable under the same
-    :class:`RetryPolicy` the runner gates retries with is labeled retry-pending
+    :func:`is_retryable_error` gate the runner uses is labeled retry-pending
     (``↻ 第k/N次失败, 将重试``) rather than a dead ``✗ Failed`` — during the
     backoff window the old label made a healthy retry loop look like the run
     had died. The predicate MUST mirror the runner's actual gate (keyword
@@ -87,7 +86,7 @@ def _update_global_task_progress_failed(
     if not (progress and progress_task_id is not None):
         return
     reason = shorten_message(error_msg or category.value, max_chars=_FAILED_REASON_CHARS)
-    retry_pending = retry_count < max_retries and DEFAULT_RETRY_POLICY.is_retryable(error_msg)
+    retry_pending = retry_count < max_retries and is_retryable_error(error_msg or "")
     if retry_pending:
         description = (
             f"{model_key} Task {task_id} ({progress_tokens} tokens): "
@@ -102,15 +101,33 @@ class TaskExecutor:
     """Execute a single provider/model attempt for a batch task."""
 
     def __init__(
-        self, *, verbose: bool = False, stream_api: bool = True, max_retries: int = 3
+        self,
+        *,
+        verbose: bool = False,
+        stream_api: bool = True,
+        rate_limiter: GlobalRateLimiter | None = None,
+        max_retries: int = 3,
     ) -> None:
         self.verbose = verbose
         self.stream_api = stream_api
+        # Explicit injection (P0): the executor used to call
+        # get_global_rate_limiter() bare, silently depending on
+        # GlobalBatchProcessor configuring the singleton first. Whatever runs
+        # this executor must hand it the configured limiter.
+        self.rate_limiter = rate_limiter
+        # Retry budget mirrored from the runner so progress labels can tell a
+        # pending retry from a terminal failure (2.25).
         self.max_retries = max(0, max_retries)
         self._auth_error_lock = threading.Lock()
         # M3: dedupe per provider/model — a single executor-level flag let the
         # first failing provider silence every *other* provider's auth errors.
         self._auth_error_logged_keys: set[str] = set()
+
+    def _get_limiter(self) -> GlobalRateLimiter:
+        """Return the injected limiter, falling back to the process singleton."""
+        if self.rate_limiter is not None:
+            return self.rate_limiter
+        return get_global_rate_limiter()
 
     @property
     def auth_error_logged(self) -> bool:
@@ -126,7 +143,7 @@ class TaskExecutor:
     ) -> None:
         """Log task failure; collapse duplicate authentication errors from parallel workers."""
         if category is None:
-            category = classify_error(error_msg)
+            category = classify_error_message(error_msg)
         ctx = LogContext(task_id=task_id, phase="global_batch")
         bound = bind_context(ctx).bind(model_key=model_key, error_category=category.value)
         if category == ErrorCategory.AUTHENTICATION:
@@ -413,7 +430,7 @@ class TaskExecutor:
         progress_tokens = f"body≈{body_tokens} input≈{display_input_tokens}"
 
         try:
-            limiter = get_global_rate_limiter()
+            limiter = self._get_limiter()
             acquire_timeout = limiter.acquire_timeout(model_config.provider, model_config.model)
             acquired = limiter.acquire(
                 model_config.provider,
@@ -493,7 +510,7 @@ class TaskExecutor:
 
         except Exception as e:
             error_msg = str(e)
-            category = classify_error(error_msg)
+            category = classify_error_message(error_msg)
             self.log_task_failure(task.task_id, model_key, error_msg, category)
 
             if self.verbose:

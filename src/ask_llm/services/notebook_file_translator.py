@@ -11,7 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from ask_llm.config.manager import ConfigManager
-from ask_llm.core.models import AppConfig
+from ask_llm.core.batch_models import ModelConfig
 from ask_llm.core.translator import Translator
 from ask_llm.services.translation_options import (
     TranslationJobResult,
@@ -19,8 +19,7 @@ from ask_llm.services.translation_options import (
     failed_job_result,
 )
 from ask_llm.utils.console import console
-from ask_llm.utils.fallback_chain import model_config_with_fallback
-from ask_llm.utils.notebook_translator import NotebookTranslator
+from ask_llm.utils.notebook_translator import NotebookAuthError, NotebookTranslator
 from ask_llm.utils.path_resolver import resolve_translation_output_path
 from ask_llm.utils.pricing import format_cost_estimate
 
@@ -38,14 +37,12 @@ class NotebookFileTranslator:
         model: str,
         pricing_map: PricingMap | None = None,
         pricing_source: Path | None = None,
-        app_config: AppConfig | None = None,
     ) -> None:
         self.config_manager = config_manager
         self.provider = provider
         self.model = model
         self.pricing_map = pricing_map or {}
         self.pricing_source = pricing_source
-        self.app_config = app_config
 
     def translate(
         self,
@@ -55,6 +52,7 @@ class NotebookFileTranslator:
         output: str | None,
         output_is_dir: bool,
         effective_suffix: str,
+        glossary_pairs: list[tuple[str, str]],
         force: bool,
         stream: bool,
         stream_api: bool,
@@ -68,7 +66,7 @@ class NotebookFileTranslator:
         )
 
         output_file = Path(output_path)
-        if output_file.exists() and not force:
+        if output_file.exists() and not force and not options.resume:
             console.print_error(
                 f"Output file already exists: {output_path}. Use --force to overwrite."
             )
@@ -80,21 +78,19 @@ class NotebookFileTranslator:
             style=options.style,
             custom_prompt_template=None,
             prompt_file=options.prompt_file,
+            glossary_pairs=glossary_pairs,
         )
 
-        model_config, fallback_configs = model_config_with_fallback(
-            self.provider,
-            self.model,
+        model_config = ModelConfig(
+            provider=self.provider,
+            model=self.model,
             temperature=options.temperature,
             max_tokens=options.max_output_tokens,
-            app_config=self.app_config,
-            use_fallback=options.use_fallback,
         )
 
         notebook_translator = NotebookTranslator(
             translator=translator,
             model_config=model_config,
-            fallback_configs=fallback_configs,
         )
 
         try:
@@ -108,12 +104,13 @@ class NotebookFileTranslator:
                 balance_chunks=options.balance_translation_chunks,
                 max_chunk_tokens=options.max_chunk_tokens,
                 stream_api=stream_api,
+                resume=bool(
+                    options.resume and Path(f"{output_path}.trans_checkpoint.json").exists()
+                ),
             )
-        except RuntimeError as e:
-            if "API authentication failed" in str(e):
-                console.print_error(str(e))
-                return failed_job_result(file_path, output_path, str(e))
-            raise
+        except NotebookAuthError as e:
+            console.print_error(str(e))
+            return failed_job_result(file_path, output_path, str(e))
 
         total = successful + failed
         console.print_success(f"Translation saved to: {output_path}")

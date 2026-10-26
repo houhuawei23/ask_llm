@@ -51,6 +51,12 @@ class BatchCheckpoint(BaseCheckpoint[BatchTask, BatchResult]):
         return result.task_id
 
     def result_to_task(self, result: BatchResult) -> BatchTask:
+        # Audit-only projection (see BaseCheckpoint.failed_tasks): resume does
+        # NOT read it (resume filters by completed_task_ids against the
+        # current task list). BatchResult does not carry the prompt/content of
+        # task_kind, so the record reflects the final attempted config with
+        # BatchTask defaults for the rest — good enough for diagnostics, and
+        # no consumer can mistake it for a re-runnable task.
         return BatchTask(
             task_id=result.task_id,
             prompt=result.prompt,
@@ -67,7 +73,7 @@ class BatchCheckpoint(BaseCheckpoint[BatchTask, BatchResult]):
             command=data["command"],
             created_at=data.get("created_at", ""),
             config_digest=data.get("config_digest", ""),
-            completed_task_ids=list(data.get("completed_task_ids", [])),
+            completed_task_ids=set(data.get("completed_task_ids", [])),
             failed_tasks=[BatchTask.model_validate(t) for t in data.get("failed_tasks", [])],
             successful_results=[
                 BatchResult.model_validate(r) for r in data.get("successful_results", [])

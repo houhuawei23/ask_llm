@@ -45,7 +45,9 @@ def stream_and_collect(
     Returns:
         ``(response, reasoning, output_token_count, latency_seconds)``.
     """
-    start_time = time.time()
+    # L4/2.25: perf_counter for durations — time.time() steps with NTP/DST
+    # and can distort measured latency.
+    start_time = time.perf_counter()
     response_parts: list[str] = []
     reasoning_parts: list[str] = []
     output_token_count = 0
@@ -68,7 +70,17 @@ def stream_and_collect(
                 else:
                     output_token_count += TokenCounter.count_words(chunk.reasoning)
         else:
-            text_chunk = chunk if isinstance(chunk, str) else str(chunk)
+            if isinstance(chunk, ReasoningChunk):
+                # Provider emitted a reasoning pair although reasoning was not
+                # requested: keep the content, never the object repr.
+                text_chunk = chunk.content
+            elif isinstance(chunk, str):
+                text_chunk = chunk
+            else:
+                raise TypeError(
+                    f"Unexpected stream chunk type {type(chunk).__name__!r}; "
+                    "refusing to write its repr into the response"
+                )
             response_parts.append(text_chunk)
             if encoding is not None:
                 output_token_count += len(encoding.encode(text_chunk))
@@ -91,5 +103,5 @@ def stream_and_collect(
 
     response = "".join(response_parts).strip()
     reasoning = "".join(reasoning_parts).strip() if reasoning_parts else None
-    latency = time.time() - start_time
+    latency = time.perf_counter() - start_time
     return response, reasoning, output_token_count, latency

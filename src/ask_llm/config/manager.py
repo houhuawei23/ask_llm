@@ -5,29 +5,34 @@ from typing import Any
 from loguru import logger
 
 from ask_llm.config.unified_config import UnifiedConfig
-from ask_llm.core.models import AppConfig, ProviderConfig
+from ask_llm.core.models import ProviderConfig
 
 
 class ConfigManager:
     """Manage application configuration with CLI overrides."""
 
-    def __init__(self, config: AppConfig, unified_config: UnifiedConfig | None = None):
+    def __init__(self, unified_config: UnifiedConfig):
         """
-        Initialize with base configuration.
+        Initialize with the unified configuration (single config object).
 
         Args:
-            config: Base application configuration
-            unified_config: Unified (non-provider) configuration sections. Optional for
-                backward compatibility; callers that need rate limits or unified
-                sections should always pass it (load_cli_session does).
+            unified_config: The validated UnifiedConfig (providers + behavior
+                sections). There is no second config object: providers and
+                rate limits / sections come from the same instance.
         """
-        self._base_config = config
-        self._unified_config = unified_config
-        self._current_provider = config.default_provider
-        if self._current_provider not in config.providers:
+        self._base_config = unified_config
+        self._current_provider = unified_config.default_provider
+        if not unified_config.providers:
+            # M17/2.25: an empty provider table used to raise a bare
+            # StopIteration from the fallback below — obscure and unactionable.
+            raise ValueError(
+                "No providers configured. Add at least one provider to "
+                "providers.yml or default_config.yml, or run 'ask-llm config init'."
+            )
+        if self._current_provider not in unified_config.providers:
             # Fail fast with a clear fallback instead of surfacing a confusing
             # "Provider '...' not found" on the first get_provider_config() call.
-            fallback = next(iter(config.providers))
+            fallback = next(iter(unified_config.providers))
             logger.warning(
                 f"Default provider '{self._current_provider}' not found in configured "
                 f"providers; falling back to '{fallback}'"
@@ -47,14 +52,9 @@ class ConfigManager:
         self._override_sources: dict[str, str] = {}
 
     @property
-    def config(self) -> AppConfig:
-        """Get base configuration."""
+    def unified_config(self) -> UnifiedConfig:
+        """Get the unified configuration (the single config object)."""
         return self._base_config
-
-    @property
-    def unified_config(self) -> UnifiedConfig | None:
-        """Get the unified (non-provider) configuration, if attached."""
-        return self._unified_config
 
     @property
     def current_provider_name(self) -> str:
@@ -96,9 +96,18 @@ class ConfigManager:
         name = provider_name or self._current_provider
         base = self._base_config.get_provider_config(name)
 
-        # Create a copy with this provider's overrides only
+        # No overrides (hot path): hand out the base config as-is — a
+        # model_dump → model_validate round-trip would re-run field validators
+        # and re-log an "empty API key" warning on every call for key-less
+        # providers (e.g. ollama).
+        overrides = self._overrides.get(name)
+        if not overrides:
+            return base
+
+        # With overrides, rebuild through validation so plain strings (e.g. an
+        # api_key override) are coerced to the declared field types (SecretStr).
         config_dict = base.model_dump()
-        config_dict.update(self._overrides.get(name, {}))
+        config_dict.update(overrides)
 
         return ProviderConfig.model_validate(config_dict)
 
@@ -172,7 +181,7 @@ class ConfigManager:
 
         Priority:
             1. Provider's own models[0] (which is its default_model set during config load)
-            2. Global default_model from AppConfig
+            2. Global default_model from UnifiedConfig
             3. Raise error if neither is available
 
         Args:

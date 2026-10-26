@@ -23,21 +23,18 @@ from ask_llm.config.env import _apply_env_overrides, resolve_env_vars
 from ask_llm.config.merge import _deep_merge, record_leaves
 from ask_llm.config.providers_catalog import _load_providers_yml
 from ask_llm.config.unified_config import UnifiedConfig
-from ask_llm.core.models import AppConfig
 from ask_llm.utils.engine_facade import load_engine_providers_config
 
 
 class LoadResult:
-    """Result of loading default_config.yml, containing both provider and unified config."""
+    """Result of loading default_config.yml (the unified config) + metadata."""
 
     def __init__(
         self,
-        app_config: AppConfig,
         unified_config: UnifiedConfig,
         config_path: Path,
         provenance: dict[str, str] | None = None,
     ):
-        self.app_config = app_config
         self.unified_config = unified_config
         self.config_path = config_path
         # Per-leaf dotted key -> source label (file path or "env:<VAR>") naming
@@ -75,6 +72,13 @@ class ConfigLoader:
                     data = {}
                 resolved = resolve_env_vars(data)
                 if not isinstance(resolved, dict):
+                    # M17/2.25: a list/scalar YAML root used to be silently
+                    # coerced to {} — the whole user config layer vanished
+                    # with no hint. Warn loudly instead.
+                    logger.warning(
+                        f"Config file {path} does not contain a YAML mapping "
+                        f"(got {type(resolved).__name__}); its contents were ignored."
+                    )
                     resolved = {}
                 return resolved
         except yaml.YAMLError as e:
@@ -96,7 +100,7 @@ class ConfigLoader:
             config_path: Path to configuration file. If None, searches default paths.
 
         Returns:
-            LoadResult with app_config and unified_config
+            LoadResult with the unified config and metadata
 
         Raises:
             FileNotFoundError: If config file not found
@@ -187,11 +191,14 @@ class ConfigLoader:
                 "and providers.base_url in your config"
             ) from e
 
-        app_config = cls._app_config_from_unified(unified_config)
+        if not unified_config.providers:
+            raise ValueError(
+                "No providers configured. Add at least one provider to "
+                "providers.yml or default_config.yml, or run 'ask-llm config init'."
+            )
 
         logger.info(f"Configuration loaded successfully from: {user_path}")
         return LoadResult(
-            app_config=app_config,
             unified_config=unified_config,
             config_path=user_path,
             provenance=provenance,
@@ -258,7 +265,7 @@ class ConfigLoader:
 
             base_url = provider_config.get("base_url", "")
             if not base_url:
-                # Engine catalog fallback (via the engine facade seam, P4.6).
+                # providers.yml catalog fallback (via the engine facade seam, P4.6).
                 providers_config = load_engine_providers_config()
                 if name in providers_config.get("providers", {}):
                     base_url = providers_config["providers"][name].get("base_url", "")
@@ -266,7 +273,7 @@ class ConfigLoader:
             if not base_url:
                 raise ValueError(
                     f"Provider '{name}' has no base_url configured and it cannot be resolved "
-                    f"from llm_engine. Please set base_url for provider '{name}' in your config."
+                    f"from providers.yml. Please set base_url for provider '{name}' in your config."
                 )
 
             converted_config = {
@@ -293,15 +300,8 @@ class ConfigLoader:
                     model_names.insert(0, provider_default_model)
 
                 converted_config["models"] = model_names
-
-                if not default_model and provider_default_model:
-                    default_model = provider_default_model
-                elif not default_model and model_names:
-                    default_model = model_names[0]
             elif provider_default_model:
                 converted_config["models"] = [provider_default_model]
-                if not default_model:
-                    default_model = provider_default_model
             else:
                 converted_config["models"] = []
 
@@ -318,6 +318,15 @@ class ConfigLoader:
                 converted_config["timeout"] = provider_config["timeout"]
 
             converted_providers[name] = converted_config
+
+        # M18/2.25: the global default_model now derives from the *default
+        # provider*, not whichever provider dict iteration happened to visit
+        # first (an `ollama` user with no explicit default_model used to get
+        # a deepseek model name as the last-resort fallback).
+        if not default_model and default_provider:
+            dp_models = converted_providers.get(default_provider, {}).get("models") or []
+            if dp_models:
+                default_model = dp_models[0]
 
         return {
             "default_provider": default_provider,
@@ -349,20 +358,3 @@ class ConfigLoader:
                 f"Config section(s) {', '.join(present_deprecated)} are no longer used "
                 "and will be removed in a future release; ignoring them."
             )
-
-    @classmethod
-    def _app_config_from_unified(cls, unified_config: UnifiedConfig) -> AppConfig:
-        """Derive the provider-facing AppConfig view from a validated UnifiedConfig."""
-        providers = unified_config.providers
-        if not providers:
-            raise ValueError("At least one provider must be configured")
-        default_provider = unified_config.default_provider
-        if not default_provider:
-            default_provider = next(iter(providers.keys()))
-            logger.warning(f"No default_provider specified, using: {default_provider}")
-
-        return AppConfig(
-            default_provider=default_provider,
-            default_model=unified_config.default_model,
-            providers=providers,
-        )

@@ -1,5 +1,6 @@
 """Interactive configuration helper for batch processing."""
 
+import getpass
 import os
 import re
 import shutil
@@ -169,9 +170,10 @@ def apply_interactive_key(config_manager: ConfigManager, provider_name: str, key
 
     Does three things, all required for the key to actually take effect:
     records the ConfigManager override for *this* provider, syncs the
-    conventional env var so llm-engine's providers.yml ``${VAR}`` resolution
-    matches, and invalidates cached provider adapters built from the old/empty
-    key (cli_session's gate did this; interactive_config previously didn't, so
+    conventional env var — a documented engine contract: llm-engine resolves
+    ``${VAR}`` placeholders in providers.yml from ``os.environ`` — and
+    invalidates cached provider adapters built from the old/empty key
+    (cli_session's gate did this; interactive_config previously didn't, so
     batch flows could keep calling with a stale empty-key adapter).
     """
     config_manager.apply_overrides(api_key=key)
@@ -311,9 +313,9 @@ class InteractiveConfigHelper:
                 apply_interactive_key(self.config_manager, provider_name, env_key)
                 provider_config = self.config_manager.get_provider_config(provider_name)
             else:
-                # Prompt user for API key (kept in a str variable: the outer
-                # ``api_key`` holds the ProviderConfig SecretStr field)
-                entered_key = console.input(f"Enter API key for {provider_name}: ").strip()
+                # Prompt user for API key via getpass so the secret is never
+                # echoed into the terminal (same standard as cli_session).
+                entered_key = getpass.getpass(f"Enter API key for {provider_name}: ").strip()
 
                 if not entered_key:
                     raise ValueError(f"API key is required for provider '{provider_name}'")
