@@ -137,49 +137,48 @@ class TestConfigLoader:
             os.environ.pop("ASK_LLM_TRANSLATION_THREADS", None)
 
 
+def _load_shipped_config(tmp_path, monkeypatch) -> UnifiedConfig:
+    """Load the shipped default_config.yml, isolated from the developer's catalog.
+
+    ``ConfigLoader.load`` merges the *runtime* providers.yml (env override >
+    ``~/.config/ask_llm/`` > packaged copy). A local catalog therefore shadows
+    the shipped one, so a test asserting the shipped provider set must isolate
+    both the env override and ``HOME`` — otherwise it fails on every machine
+    whose own catalog was trimmed (e.g. deepseek only) while passing on CI.
+    """
+    monkeypatch.delenv("ASK_LLM_PROVIDERS_YML", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    return ConfigLoader.load(ConfigLoader._get_package_config_path()).unified_config
+
+
 class TestKimiProviderConfig:
-    """Test Kimi provider configuration."""
+    """The shipped providers.yml must keep the kimi-code provider entry."""
 
-    def test_kimi_provider_in_default_config(self):
-        """Test that kimi provider is defined in default config."""
-        from ask_llm.config.loader import ConfigLoader
+    def test_kimi_provider_in_default_config(self, tmp_path, monkeypatch):
+        """kimi-code is defined in the packaged config with its real endpoint."""
+        config = _load_shipped_config(tmp_path, monkeypatch)
 
-        pkg_path = ConfigLoader._get_package_config_path()
-        load_result = ConfigLoader.load(pkg_path)
-        config = load_result.unified_config
-
-        # Check kimi (Kimi Code) provider exists
         assert "kimi-code" in config.providers, "kimi-code provider should be in default config"
 
         kimi_config = config.providers["kimi-code"]
 
-        # Check required fields
         assert kimi_config.api_provider == "kimi-code"
         assert kimi_config.api_base == "https://api.kimi.com/coding/v1"
         assert "kimi-k2-0711-preview" in kimi_config.models
 
-    def test_kimi_provider_config_structure(self):
-        """Test kimi provider config has correct structure."""
-        from ask_llm.config.loader import ConfigLoader
-
-        pkg_path = ConfigLoader._get_package_config_path()
-        load_result = ConfigLoader.load(pkg_path)
-        config = load_result.unified_config
+    def test_kimi_provider_config_structure(self, tmp_path, monkeypatch):
+        """kimi-code keeps its sampling/timeout structure."""
+        config = _load_shipped_config(tmp_path, monkeypatch)
 
         kimi_config = config.providers["kimi-code"]
 
-        # Validate ProviderConfig structure
         assert isinstance(kimi_config, ProviderConfig)
         assert kimi_config.api_temperature == 0.7
         assert kimi_config.timeout == 120.0
 
-    def test_kimi_provider_models(self):
-        """Test kimi provider has expected models."""
-        from ask_llm.config.loader import ConfigLoader
-
-        pkg_path = ConfigLoader._get_package_config_path()
-        load_result = ConfigLoader.load(pkg_path)
-        config = load_result.unified_config
+    def test_kimi_provider_models(self, tmp_path, monkeypatch):
+        """kimi-code advertises every shipped model."""
+        config = _load_shipped_config(tmp_path, monkeypatch)
 
         kimi_config = config.providers["kimi-code"]
         expected_models = [
