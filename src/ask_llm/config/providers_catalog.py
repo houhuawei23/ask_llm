@@ -153,6 +153,23 @@ def load_first_providers_yml(
     return None, None
 
 
+def resolved_runtime_providers_yml() -> Path | None:
+    """Path of the providers.yml that is actually used as *runtime* config.
+
+    Single accessor for "which catalog did ask_llm settle on", so consumers that
+    need to hand a concrete path to a third party (``llm_engine``) read the same
+    file ask_llm validated instead of re-running their own, possibly
+    cwd-relative, search. Only :func:`runtime_providers_yml_paths` is consulted
+    (cwd/repo-root copies stay excluded, per that function's contract).
+
+    Returns:
+        Absolute path of the first usable runtime catalog, or ``None`` when no
+        candidate exists / parses into a non-empty ``providers`` mapping.
+    """
+    _data, source = load_first_providers_yml(paths=runtime_providers_yml_paths())
+    return source
+
+
 def _load_providers_yml() -> tuple[dict[str, Any], Path | None]:
     """
     Load provider runtime config (base_url/api_key/models) for API calls.

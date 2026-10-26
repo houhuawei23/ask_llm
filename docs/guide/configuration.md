@@ -48,6 +48,34 @@ providers:
 
 Use `${VAR_NAME}` syntax to reference environment variables so API keys are not stored in plain text.
 
+## Provider Runtime Catalog (`providers.yml`)
+
+Provider runtime settings (base URL, API key, model list) and per-model metadata
+(`reasoning`, `token_per_character`, `functions.json_output`) are read from
+`providers.yml`, searched in this order:
+
+- `$ASK_LLM_PROVIDERS_YML`
+- `~/.config/ask_llm/providers.yml`
+- packaged copy (`ask_llm/config/providers.yml`)
+
+The working directory is deliberately **not** on this list, and the per-model
+metadata handed to the LLM engine is resolved from the same file, so `ask-llm`
+behaves identically no matter which directory it is launched from.
+
+Mark thinking models with `reasoning: false` when the translation/format
+pipelines use them. Without it, a thinking model can spend 30-170s streaming
+`reasoning_content` before any translatable content appears, which looks like a
+hang (and can exhaust `max_tokens` before the body is produced).
+
+```yaml
+providers:
+  deepseek:
+    models:
+      - name: deepseek-v4-flash
+        reasoning: false   # disable CoT for translation/format pipelines
+        context_length: 1_000_000
+```
+
 ## Environment Variables
 
 Supported `ASK_LLM_*` variables include:

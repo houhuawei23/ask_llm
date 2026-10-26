@@ -1,5 +1,31 @@
 # Changelog
 
+## 2.25.1 (unreleased)
+
+修复"在仓库目录外运行 `ask-llm trans` 就卡死、在仓库目录内却正常"的问题：根因不在
+翻译逻辑，而在 `llm_engine` 按**当前工作目录**查找 `providers.yml`。在仓库目录内运行时
+`./providers.yml` 恰好存在，`reasoning: false` 生效（DeepSeek thinking 模型收到
+`thinking: {"type": "disabled"}`，正文 2 秒内开始流式返回）；换到别的目录后该文件
+找不到，逐模型元数据（`reasoning` / `token_per_character` / `functions.json_output`）
+全部静默丢失，thinking 保持开启，模型先吐 30–170s+ 的 `reasoning_content`。翻译/格式化
+流水线不消费 reasoning，进度条便停在 "Processing... 0%" 看似死锁（极端情况还会烧光
+`max_tokens`、返回空正文）。
+
+### Fixed
+
+- **模型元数据不再随工作目录漂移**：新增
+  `engine_facade.bind_engine_providers_yml()`，在创建 provider adapter 之前把
+  `llm_engine.config_loader.load_providers_config` 的默认路径固定为 ask_llm 已解析的
+  **运行时** providers.yml（`ASK_LLM_PROVIDERS_YML` > `~/.config/ask_llm/providers.yml`
+  > 打包副本；cwd 从不参与）。显式传 `config_path` 的调用不受影响；绑定幂等，找不到
+  运行时目录时退回引擎原有搜索并打印 WARNING。`ask` / `chat` / `format` / `paper` /
+  `trans` 与预检走同一个 adapter 入口，因此一并修复。
+- **`config.providers_catalog.resolved_runtime_providers_yml()`**：暴露"最终生效的
+  运行时 providers.yml 路径"，作为上述绑定与诊断的单一来源。
+- 回归测试：`tests/unit/test_engine_catalog_binding.py`（cwd 中放一份相冲突的
+  providers.yml，断言引擎仍读到运行时目录的 `reasoning: false`，且请求 payload 带上
+  `thinking: disabled`）。
+
 ## 2.25.0 (2026-10-15)
 
 API 预检 + 重试全程可见：修复"单个 chunk 撞上 503 后进度条冻结数分钟、看似

@@ -9,6 +9,7 @@ from ask_llm.config.providers_catalog import (
     _candidate_providers_yml_paths,
     _load_providers_yml,
     load_first_providers_yml,
+    resolved_runtime_providers_yml,
     runtime_providers_yml_paths,
 )
 
@@ -162,6 +163,40 @@ class TestRuntimeProviderPaths:
         _write_providers_yml(tmp_path / "providers.yml")
         _data, source = load_first_providers_yml()
         assert source == (tmp_path / "providers.yml").resolve()
+
+
+class TestResolvedRuntimeProvidersYml:
+    """Single accessor for "which catalog did we settle on" (engine binding)."""
+
+    def test_returns_the_runtime_catalog_path(self, tmp_path, monkeypatch):
+        env_yml = tmp_path / "env" / "providers.yml"
+        _write_providers_yml(env_yml)
+        monkeypatch.setenv("ASK_LLM_PROVIDERS_YML", str(env_yml))
+
+        assert resolved_runtime_providers_yml() == env_yml.resolve()
+
+    def test_uses_the_runtime_candidate_over_a_cwd_copy(self, tmp_path, monkeypatch):
+        """Runtime resolution must stay cwd-independent (see audit 1.2)."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("ASK_LLM_PROVIDERS_YML", raising=False)
+        _write_providers_yml(tmp_path / "providers.yml")  # cwd copy, not a candidate
+        runtime_yml = tmp_path / "user" / "providers.yml"
+        _write_providers_yml(runtime_yml)
+        monkeypatch.setattr(
+            providers_catalog, "runtime_providers_yml_paths", lambda: [runtime_yml]
+        )
+
+        assert resolved_runtime_providers_yml() == runtime_yml.resolve()
+
+    def test_returns_none_when_nothing_resolves(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("ASK_LLM_PROVIDERS_YML", raising=False)
+        monkeypatch.setattr(
+            providers_catalog,
+            "runtime_providers_yml_paths",
+            lambda: [tmp_path / "missing" / "providers.yml"],
+        )
+
+        assert resolved_runtime_providers_yml() is None
 
 
 class TestMemoizedParse:
