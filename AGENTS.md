@@ -492,6 +492,9 @@ Requests are routed through litellm model strings (`deepseek/...`, `openai/...`,
 - **Do not** commit API keys - use environment variables or `.env` files
 - **Do not** modify files outside the working directory
 - Run pre-commit hooks before committing: `pre-commit run --all-files`
+- Enable the repository's tracked git hooks once per clone:
+  `git config core.hooksPath .githooks` (secret-scanning pre-commit — gitleaks
+  when installed, regex fallback otherwise)
 - The project uses modern Python packaging with `pyproject.toml`
 - All CLI output should go through `console` utility for consistent formatting
 

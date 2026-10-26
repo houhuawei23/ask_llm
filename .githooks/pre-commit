@@ -1,0 +1,94 @@
+#!/usr/bin/env sh
+set -eu
+
+# Secret leak prevention hook:
+# 1) Prefer gitleaks when available.
+# 2) Fallback to regex scanning staged file contents.
+
+if command -v gitleaks >/dev/null 2>&1; then
+  if ! gitleaks protect --staged --redact --verbose >/dev/null 2>&1; then
+    echo "[pre-commit] Potential secrets detected by gitleaks. Commit blocked."
+    gitleaks protect --staged --redact || true
+    exit 1
+  fi
+  exit 0
+fi
+
+python3 - <<'PYCODE'
+import re
+import subprocess
+import sys
+
+try:
+    files = subprocess.check_output(
+        ["git", "diff", "--cached", "--name-only", "--diff-filter=ACMR"],
+        text=True,
+    ).splitlines()
+except subprocess.CalledProcessError:
+    sys.exit(0)
+
+if not files:
+    sys.exit(0)
+
+SKIP_SUFFIXES = (
+    ".md", ".txt", ".rst", ".adoc",
+    ".lock", "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
+)
+
+PATTERNS = [
+    (re.compile(r"AKIA[0-9A-Z]{16}"), "AWS Access Key ID"),
+    (re.compile(r"ASIA[0-9A-Z]{16}"), "AWS STS Access Key ID"),
+    (re.compile(r"AIza[0-9A-Za-z_-]{35}"), "Google API Key"),
+    (re.compile(r"xox[baprs]-[0-9A-Za-z-]{10,}"), "Slack Token"),
+    (re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}"), "GitHub Token"),
+    (re.compile(r"(?i)-----BEGIN (?:RSA|DSA|EC|OPENSSH|PGP) PRIVATE KEY-----"), "Private Key"),
+    # Generic assignment: single-line only ([ \t]*). \s* would cross newlines and
+    # flag YAML section headers like ``token:`` followed by an indented key name.
+    (re.compile(r"(?i)(?:api[_-]?key|secret|token|password|passwd)[ \t]*[:=][ \t]*[A-Za-z0-9_./+=-]{12,}"), "Generic Secret Assignment"),
+]
+
+ALLOW_HINTS = (
+    "example", "sample", "dummy", "test", "placeholder", "xxxx", "changeme"
+)
+
+findings = []
+
+# Non-literal RHS shapes for the generic pattern: attribute chains
+# (``provider_config.api_key``) and calls (``console.input(...)``) are code,
+# not secrets. Vendor-specific patterns (AKIA..., ghp_..., keys) still fire.
+_NON_LITERAL_RHS = re.compile(r"^[A-Za-z_]\w*(?:\.\w+)+$|^[A-Za-z_]\w*\s*\(")
+
+for path in files:
+    if path.lower().endswith(SKIP_SUFFIXES):
+        continue
+    try:
+        raw = subprocess.check_output(["git", "show", f":{path}"], stderr=subprocess.DEVNULL)
+    except subprocess.CalledProcessError:
+        continue
+    if b"\x00" in raw:
+        continue
+
+    text = raw.decode("utf-8", errors="ignore")
+    for regex, label in PATTERNS:
+        for m in regex.finditer(text):
+            val = m.group(0)
+            if any(h in val.lower() for h in ALLOW_HINTS):
+                continue
+            if label == "Generic Secret Assignment" and _NON_LITERAL_RHS.match(
+                val.split("=", 1)[-1].split(":", 1)[-1].strip()
+            ):
+                continue
+            line_no = text.count("\n", 0, m.start()) + 1
+            findings.append((path, line_no, label, val[:120]))
+
+if findings:
+    print("[pre-commit] Potential secrets detected. Commit blocked.")
+    for path, line_no, label, snippet in findings[:30]:
+        print(f"  - {path}:{line_no} [{label}] -> {snippet}")
+    if len(findings) > 30:
+        print(f"  ... and {len(findings) - 30} more findings")
+    print("\nIf this is a false positive, replace with placeholders or move to env vars/secrets manager.")
+    sys.exit(1)
+
+sys.exit(0)
+PYCODE
